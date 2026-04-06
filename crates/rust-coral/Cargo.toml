@@ -1,0 +1,11 @@
+[package]
+name = "rust-coral"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Education Science (Coral) protocol library"
+
+[dependencies]
+btleplug = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+uuid = "1"
+futures = "0.3"

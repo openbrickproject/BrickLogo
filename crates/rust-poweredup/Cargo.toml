@@ -1,0 +1,7 @@
+[package]
+name = "rust-poweredup"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Powered UP protocol library"
+
+[dependencies]

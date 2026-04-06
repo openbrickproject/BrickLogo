@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "crates/bricklogo",
+    "crates/bricklogo-lang",
+    "crates/bricklogo-hal",
+    "crates/bricklogo-tui",
+    "crates/rust-poweredup",
+    "crates/rust-coral",
+    "crates/rust-wedo",
+    "crates/rust-controllab",
+]
+resolver = "2"

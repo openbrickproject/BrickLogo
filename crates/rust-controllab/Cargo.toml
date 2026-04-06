@@ -1,0 +1,8 @@
+[package]
+name = "rust-controllab"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO DACTA Control Lab protocol library"
+
+[dependencies]
+serialport = "4"

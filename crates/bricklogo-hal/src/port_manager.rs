@@ -1,0 +1,581 @@
+use std::collections::HashMap;
+use bricklogo_lang::value::LogoValue;
+use crate::adapter::{HardwareAdapter, PortDirection};
+
+#[derive(Debug, Clone)]
+pub struct OutputPortState {
+    pub direction: PortDirection,
+    pub power: u8, // 0-8
+    pub is_running: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SentState {
+    direction: PortDirection,
+    power: u8,
+    is_running: bool,
+}
+
+#[derive(Debug, Clone)]
+struct QualifiedPort {
+    device_name: String,
+    port: String,
+}
+
+struct DeviceEntry {
+    adapter: Box<dyn HardwareAdapter>,
+    port_states: HashMap<String, OutputPortState>,
+    last_sent: HashMap<String, SentState>,
+}
+
+pub struct PortManager {
+    devices: HashMap<String, DeviceEntry>,
+    active_device: Option<String>,
+    selected_outputs: Vec<QualifiedPort>,
+    selected_inputs: Vec<QualifiedPort>,
+    flash_timers: HashMap<String, bool>, // simplified — real impl would use threads
+}
+
+fn power_to_percent(level: u8) -> u8 {
+    ((level.min(8) as u16 * 100) / 8) as u8
+}
+
+impl PortManager {
+    pub fn new() -> Self {
+        PortManager {
+            devices: HashMap::new(),
+            active_device: None,
+            selected_outputs: Vec::new(),
+            selected_inputs: Vec::new(),
+            flash_timers: HashMap::new(),
+        }
+    }
+
+    pub fn add_device(&mut self, name: &str, adapter: Box<dyn HardwareAdapter>) {
+        let mut port_states = HashMap::new();
+        for port in adapter.output_ports() {
+            port_states.insert(port.clone(), OutputPortState {
+                direction: PortDirection::Even,
+                power: 4,
+                is_running: false,
+            });
+        }
+        self.devices.insert(name.to_string(), DeviceEntry {
+            adapter,
+            port_states,
+            last_sent: HashMap::new(),
+        });
+        if self.devices.len() == 1 {
+            self.active_device = Some(name.to_string());
+        }
+    }
+
+    pub fn remove_device(&mut self, name: &str) {
+        if let Some(mut entry) = self.devices.remove(name) {
+            if entry.adapter.connected() {
+                entry.adapter.disconnect();
+            }
+        }
+        self.selected_outputs.retain(|p| p.device_name != name);
+        self.selected_inputs.retain(|p| p.device_name != name);
+        if self.active_device.as_deref() == Some(name) {
+            self.active_device = self.devices.keys().next().cloned();
+        }
+    }
+
+    pub fn remove_all(&mut self) {
+        let names: Vec<String> = self.devices.keys().cloned().collect();
+        for name in names {
+            if let Some(mut entry) = self.devices.remove(&name) {
+                if entry.adapter.connected() {
+                    entry.adapter.disconnect();
+                }
+            }
+        }
+        self.active_device = None;
+        self.selected_outputs.clear();
+        self.selected_inputs.clear();
+        self.flash_timers.clear();
+    }
+
+    pub fn set_active_device(&mut self, name: &str) -> Result<(), String> {
+        if !self.devices.contains_key(name) {
+            return Err(format!("No device named \"{}\"", name));
+        }
+        self.active_device = Some(name.to_string());
+        Ok(())
+    }
+
+    pub fn get_active_device_name(&self) -> Option<&str> {
+        self.active_device.as_deref()
+    }
+
+    pub fn get_connected_device_names(&self) -> Vec<String> {
+        self.devices.iter()
+            .filter(|(_, e)| e.adapter.connected())
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    fn resolve_port(&self, port_str: &str) -> Result<QualifiedPort, String> {
+        if let Some(dot_idx) = port_str.find('.') {
+            let device_name = &port_str[..dot_idx];
+            let port = &port_str[dot_idx + 1..];
+            if !self.devices.contains_key(device_name) {
+                return Err(format!("No device named \"{}\"", device_name));
+            }
+            Ok(QualifiedPort { device_name: device_name.to_string(), port: port.to_string() })
+        } else {
+            let device = self.active_device.as_ref()
+                .ok_or_else(|| "No device connected".to_string())?;
+            Ok(QualifiedPort { device_name: device.clone(), port: port_str.to_string() })
+        }
+    }
+
+    fn get_state(&mut self, qp: &QualifiedPort) -> &mut OutputPortState {
+        let entry = self.devices.get_mut(&qp.device_name).unwrap();
+        entry.port_states.entry(qp.port.clone()).or_insert(OutputPortState {
+            direction: PortDirection::Even,
+            power: 4,
+            is_running: false,
+        })
+    }
+
+    fn sync_port(&mut self, qp: &QualifiedPort) -> Result<(), String> {
+        let entry = self.devices.get_mut(&qp.device_name)
+            .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+        let state = entry.port_states.get(&qp.port).cloned()
+            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
+
+        let desired = SentState {
+            direction: state.direction,
+            power: state.power,
+            is_running: state.is_running,
+        };
+
+        if let Some(last) = entry.last_sent.get(&qp.port) {
+            if last.is_running == desired.is_running
+                && last.direction == desired.direction
+                && last.power == desired.power
+            {
+                return Ok(());
+            }
+        }
+
+        if desired.is_running {
+            entry.adapter.start_port(&qp.port, desired.direction, power_to_percent(desired.power))?;
+        } else if entry.last_sent.get(&qp.port).map(|l| l.is_running).unwrap_or(false) {
+            entry.adapter.stop_port(&qp.port)?;
+        }
+
+        entry.last_sent.insert(qp.port.clone(), desired);
+        Ok(())
+    }
+
+    fn cancel_flash(&mut self, qp: &QualifiedPort) {
+        let key = format!("{}:{}", qp.device_name, qp.port);
+        if self.flash_timers.remove(&key).is_some() {
+            if let Some(entry) = self.devices.get_mut(&qp.device_name) {
+                if entry.adapter.connected() {
+                    let _ = entry.adapter.stop_port(&qp.port);
+                }
+            }
+        }
+    }
+
+    // ── TC Logo port commands ─────────────────────
+
+    pub fn talk_to(&mut self, ports: &[String]) -> Result<(), String> {
+        let mut resolved = Vec::new();
+        for p in ports {
+            resolved.push(self.resolve_port(p)?);
+        }
+        self.selected_outputs = resolved;
+        // Ensure port states exist
+        for qp in &self.selected_outputs {
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.port_states.entry(qp.port.clone()).or_insert(OutputPortState {
+                direction: PortDirection::Even,
+                power: 4,
+                is_running: false,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn listen_to(&mut self, ports: &[String]) -> Result<(), String> {
+        let mut resolved = Vec::new();
+        for p in ports {
+            resolved.push(self.resolve_port(p)?);
+        }
+        self.selected_inputs = resolved;
+        Ok(())
+    }
+
+    pub fn set_even(&mut self) {
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.get_state(qp).direction = PortDirection::Even;
+            let _ = self.sync_port(qp);
+        }
+    }
+
+    pub fn set_odd(&mut self) {
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.get_state(qp).direction = PortDirection::Odd;
+            let _ = self.sync_port(qp);
+        }
+    }
+
+    pub fn reverse_direction(&mut self) {
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            let state = self.get_state(qp);
+            state.direction = state.direction.toggle();
+            let _ = self.sync_port(qp);
+        }
+    }
+
+    pub fn set_power(&mut self, level: u8) {
+        let clamped = level.min(8);
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            let state = self.get_state(qp);
+            state.power = clamped;
+            if clamped == 0 { state.is_running = false; }
+            let _ = self.sync_port(qp);
+        }
+    }
+
+    pub fn on(&mut self) -> Result<(), String> {
+        // Validate all first
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            self.get_state(qp).is_running = true;
+            self.sync_port(qp)?;
+        }
+        Ok(())
+    }
+
+    pub fn off(&mut self) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            self.get_state(qp).is_running = false;
+            self.sync_port(qp)?;
+        }
+        Ok(())
+    }
+
+    pub fn on_for(&mut self, tenths: u32) -> Result<(), String> {
+        // Validate all first
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+        }
+        // Run all ports — in Rust without async, we do them sequentially
+        // TODO: use threads for parallel execution
+        for qp in &ports {
+            let state = self.get_state(qp).clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.run_port_for_time(&qp.port, state.direction, power_to_percent(state.power), tenths)?;
+        }
+        for qp in &ports {
+            self.get_state(qp).is_running = false;
+        }
+        Ok(())
+    }
+
+    pub fn rotate(&mut self, degrees: i32) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            let state = self.get_state(qp).clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.rotate_port_by_degrees(&qp.port, state.direction, power_to_percent(state.power), degrees)?;
+        }
+        Ok(())
+    }
+
+    pub fn rotate_to(&mut self, position: i32) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            let state = self.get_state(qp).clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.rotate_port_to_position(&qp.port, state.direction, power_to_percent(state.power), position)?;
+        }
+        Ok(())
+    }
+
+    pub fn reset_zero(&mut self) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.reset_port_zero(&qp.port)?;
+        }
+        Ok(())
+    }
+
+    pub fn rotate_to_home(&mut self) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            let state = self.get_state(qp).clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.rotate_to_home(&qp.port, state.direction, power_to_percent(state.power))?;
+        }
+        Ok(())
+    }
+
+    pub fn flash(&mut self, _on_tenths: u32, _off_tenths: u32) -> Result<(), String> {
+        for qp in &self.selected_outputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
+        for qp in &ports {
+            self.cancel_flash(qp);
+            let key = format!("{}:{}", qp.device_name, qp.port);
+            let state = self.get_state(qp).clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            entry.adapter.start_port(&qp.port, state.direction, power_to_percent(state.power))?;
+            self.flash_timers.insert(key, true);
+            // TODO: actual flash timer using threads
+            // For now, just start the port — flash cycling needs async/threading
+        }
+        Ok(())
+    }
+
+    pub fn all_off(&mut self) {
+        // Cancel all flash timers
+        self.flash_timers.clear();
+
+        let names: Vec<String> = self.devices.keys().cloned().collect();
+        for name in &names {
+            let entry = self.devices.get_mut(name).unwrap();
+            if !entry.adapter.connected() { continue; }
+            let ports: Vec<String> = entry.port_states.keys().cloned().collect();
+            for port in &ports {
+                let state = entry.port_states.get_mut(port).unwrap();
+                state.is_running = false;
+                state.direction = PortDirection::Even;
+                state.power = 8;
+                entry.last_sent.remove(port);
+                let _ = entry.adapter.stop_port(port);
+            }
+        }
+    }
+
+    // ── Sensor commands ───────────────────────────
+
+    pub fn read_sensor(&mut self, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
+        if self.selected_inputs.is_empty() {
+            return Err("No sensor port selected (use listento)".to_string());
+        }
+
+        // Validate all first
+        for qp in &self.selected_inputs.clone() {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            if !entry.adapter.connected() {
+                return Err(format!("Device \"{}\" is not connected", qp.device_name));
+            }
+            entry.adapter.validate_sensor_port(&qp.port, mode)?;
+        }
+
+        // Single port: return value directly
+        if self.selected_inputs.len() == 1 {
+            let qp = self.selected_inputs[0].clone();
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            return entry.adapter.read_sensor(&qp.port, mode);
+        }
+
+        // Multiple ports: return list
+        let ports = self.selected_inputs.clone();
+        let mut results = Vec::new();
+        for qp in &ports {
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
+            let val = entry.adapter.read_sensor(&qp.port, mode)?;
+            results.push(val.unwrap_or(LogoValue::Word("false".to_string())));
+        }
+        Ok(Some(LogoValue::List(results)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockAdapter {
+        ports: Vec<String>,
+        connected: bool,
+        start_calls: Vec<(String, PortDirection, u8)>,
+        stop_calls: Vec<String>,
+    }
+
+    impl MockAdapter {
+        fn new(ports: &[&str]) -> Self {
+            MockAdapter {
+                ports: ports.iter().map(|s| s.to_string()).collect(),
+                connected: true,
+                start_calls: Vec::new(),
+                stop_calls: Vec::new(),
+            }
+        }
+    }
+
+    impl HardwareAdapter for MockAdapter {
+        fn display_name(&self) -> &str { "Mock" }
+        fn output_ports(&self) -> &[String] { &self.ports }
+        fn input_ports(&self) -> &[String] { &[] }
+        fn connected(&self) -> bool { self.connected }
+        fn connect(&mut self) -> Result<(), String> { Ok(()) }
+        fn disconnect(&mut self) { self.connected = false; }
+        fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+        fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+        fn start_port(&mut self, port: &str, dir: PortDirection, power: u8) -> Result<(), String> {
+            self.start_calls.push((port.to_string(), dir, power));
+            Ok(())
+        }
+        fn stop_port(&mut self, port: &str) -> Result<(), String> {
+            self.stop_calls.push(port.to_string());
+            Ok(())
+        }
+        fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+        fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+        fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+        fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+        fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+        fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    }
+
+    #[test]
+    fn test_first_device_becomes_active() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+        assert_eq!(pm.get_active_device_name(), Some("bot"));
+    }
+
+    #[test]
+    fn test_second_device_not_active() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
+        pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+        assert_eq!(pm.get_active_device_name(), Some("bot1"));
+    }
+
+    #[test]
+    fn test_use_switches_active() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
+        pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+        pm.set_active_device("bot2").unwrap();
+        assert_eq!(pm.get_active_device_name(), Some("bot2"));
+    }
+
+    #[test]
+    fn test_remove_device_fallback() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
+        pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+        pm.remove_device("bot1");
+        assert!(pm.get_active_device_name().is_some());
+    }
+
+    #[test]
+    fn test_talk_to() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+        pm.talk_to(&["a".to_string()]).unwrap();
+    }
+
+    #[test]
+    fn test_talk_to_qualified() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+        pm.talk_to(&["bot.a".to_string()]).unwrap();
+    }
+
+    #[test]
+    fn test_on_off() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+        pm.talk_to(&["a".to_string(), "b".to_string()]).unwrap();
+        pm.on().unwrap();
+        pm.off().unwrap();
+    }
+
+    #[test]
+    fn test_set_power() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
+        pm.talk_to(&["a".to_string()]).unwrap();
+        pm.set_power(8);
+        pm.on().unwrap();
+    }
+
+    #[test]
+    fn test_all_off() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+        pm.talk_to(&["a".to_string(), "b".to_string()]).unwrap();
+        pm.on().unwrap();
+        pm.all_off();
+    }
+
+    #[test]
+    fn test_read_sensor_no_port() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
+        assert!(pm.read_sensor(None).is_err());
+    }
+
+    #[test]
+    fn test_remove_all() {
+        let mut pm = PortManager::new();
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
+        pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+        pm.remove_all();
+        assert!(pm.get_active_device_name().is_none());
+        assert!(pm.get_connected_device_names().is_empty());
+    }
+}

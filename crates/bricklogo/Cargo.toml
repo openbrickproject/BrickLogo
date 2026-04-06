@@ -1,0 +1,16 @@
+[package]
+name = "bricklogo"
+version = "0.1.0"
+edition = "2024"
+description = "A modern LEGO TC Logo REPL"
+
+[dependencies]
+bricklogo-lang = { path = "../bricklogo-lang" }
+bricklogo-hal = { path = "../bricklogo-hal" }
+bricklogo-tui = { path = "../bricklogo-tui" }
+rust-poweredup = { path = "../rust-poweredup" }
+rust-coral = { path = "../rust-coral" }
+rust-wedo = { path = "../rust-wedo" }
+rust-controllab = { path = "../rust-controllab" }
+crossterm = "0.28"
+ratatui = "0.29"

@@ -1,0 +1,11 @@
+[package]
+name = "bricklogo-hal"
+version = "0.1.0"
+edition = "2024"
+description = "Hardware abstraction layer for BrickLogo"
+
+[dependencies]
+bricklogo-lang = { path = "../bricklogo-lang" }
+rust-wedo = { path = "../rust-wedo" }
+rust-controllab = { path = "../rust-controllab" }
+rust-coral = { path = "../rust-coral" }
