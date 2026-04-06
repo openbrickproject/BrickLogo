@@ -43,15 +43,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7), // header
+            Constraint::Length(8), // header + blank line
             Constraint::Length(1), // status bar
+            Constraint::Length(1), // blank line
             Constraint::Min(1),   // repl
         ])
         .split(inner);
 
     draw_header(frame, chunks[0]);
     draw_status_bar(frame, app, chunks[1]);
-    draw_repl(frame, app, chunks[2]);
+    draw_repl(frame, app, chunks[3]);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect) {
@@ -63,7 +64,7 @@ fn draw_header(frame: &mut Frame, area: Rect) {
         lines.push(Line::from(Span::styled(line, Style::default().fg(PINK).add_modifier(Modifier::BOLD))));
     }
     lines.push(Line::from(Span::styled(
-        "A modern LEGO TC Logo REPL, by the Open Brick Project",
+        "A modern LEGO/Logo REPL, by the Open Brick Project",
         Style::default().fg(Color::DarkGray),
     )));
 

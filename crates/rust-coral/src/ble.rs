@@ -22,6 +22,7 @@ pub struct CoralBle {
     peripheral: Option<Peripheral>,
     runtime: tokio::runtime::Runtime,
     stop_flag: Option<Arc<AtomicBool>>,
+    notification_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
 }
 
 impl CoralBle {
@@ -32,6 +33,7 @@ impl CoralBle {
             peripheral: None,
             runtime,
             stop_flag: None,
+            notification_rx: None,
         }
     }
 
@@ -118,6 +120,20 @@ impl CoralBle {
                     p.subscribe(notify_char).await.map_err(|e| format!("Subscribe failed: {}", e))
                 })?;
 
+                // Spawn background task to forward notifications to a channel
+                let (tx, rx) = std::sync::mpsc::channel();
+                let p_clone = p.clone();
+                self.runtime.spawn(async move {
+                    if let Ok(mut stream) = p_clone.notifications().await {
+                        while let Some(notif) = stream.next().await {
+                            if tx.send(notif.value).is_err() {
+                                break; // receiver dropped
+                            }
+                        }
+                    }
+                });
+                self.notification_rx = Some(rx);
+
                 self.peripheral = Some(p.clone());
                 self.coral.on_connected(kind);
 
@@ -141,6 +157,7 @@ impl CoralBle {
             let _ = self.runtime.block_on(peripheral.disconnect());
         }
         self.peripheral = None;
+        self.notification_rx = None;
         self.coral.on_disconnected();
     }
 
@@ -150,60 +167,46 @@ impl CoralBle {
         self.send_to(peripheral, data)
     }
 
-    /// Send a command and wait for a matching response.
-    pub fn request(&self, data: &[u8]) -> Result<(), String> {
-        let peripheral = self.peripheral.as_ref().ok_or("Not connected")?;
+    /// Send a command and wait for a response notification.
+    pub fn request(&mut self, data: &[u8]) -> Result<(), String> {
+        if self.peripheral.is_none() { return Err("Not connected".to_string()); }
 
         // Send the command
-        self.send_to(peripheral, data)?;
+        self.send(data)?;
 
-        // Wait for response with timeout
-        self.runtime.block_on(async {
-            let mut notification_stream = peripheral.notifications().await
-                .map_err(|e| format!("Notification stream failed: {}", e))?;
-
-            let result = tokio::time::timeout(Duration::from_secs(30), async {
-                while let Some(notif) = notification_stream.next().await {
-                    if !notif.value.is_empty() {
-                        return Ok(());
+        // Wait for a response by polling the persistent notification channel
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        if let Some(ref rx) = self.notification_rx {
+            loop {
+                if std::time::Instant::now() > deadline {
+                    return Err("Request timed out".to_string());
+                }
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(data) => {
+                        self.coral.process_notification(&data);
+                        if !data.is_empty() {
+                            return Ok(());
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err("Notification stream ended".to_string());
                     }
                 }
-                Err("Notification stream ended".to_string())
-            }).await;
-
-            match result {
-                Ok(inner) => inner,
-                Err(_) => Err("Request timed out".to_string()),
             }
-        })
+        } else {
+            Err("No notification stream".to_string())
+        }
     }
 
     /// Poll for notifications and update the Coral protocol state.
     pub fn poll(&mut self) -> Result<(), String> {
-        let peripheral = match self.peripheral.as_ref() {
-            Some(p) => p.clone(),
-            None => return Ok(()),
-        };
-
-        let notifications: Vec<Vec<u8>> = self.runtime.block_on(async {
-            let mut notification_stream = peripheral.notifications().await
-                .map_err(|e| format!("Notification stream failed: {}", e))?;
-
-            let mut collected = Vec::new();
-            // Non-blocking: try to read any pending notifications
-            loop {
-                match tokio::time::timeout(Duration::from_millis(1), notification_stream.next()).await {
-                    Ok(Some(notif)) => collected.push(notif.value),
-                    _ => break,
-                }
+        if let Some(ref rx) = self.notification_rx {
+            // Drain all pending notifications
+            while let Ok(data) = rx.try_recv() {
+                self.coral.process_notification(&data);
             }
-            Ok::<_, String>(collected)
-        })?;
-
-        for data in notifications {
-            self.coral.process_notification(&data);
         }
-
         Ok(())
     }
 
