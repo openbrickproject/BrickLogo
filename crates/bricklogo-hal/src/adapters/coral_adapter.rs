@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use bricklogo_lang::value::LogoValue;
@@ -18,13 +19,14 @@ fn motor_bits_for_port(port: &str) -> Result<u8, String> {
     match port {
         "a" => Ok(MotorBits::Left as u8),
         "b" => Ok(MotorBits::Right as u8),
-        _ => Err(format!("Unknown port \"{}\"", port)),
+        _ => Err(format!("Unknown motor port \"{}\"", port)),
     }
 }
 
 pub struct CoralAdapter {
     ble: CoralBle,
     output_ports: Vec<String>,
+    port_modes: HashMap<String, Vec<String>>,
     display_name: String,
 }
 
@@ -33,6 +35,7 @@ impl CoralAdapter {
         CoralAdapter {
             ble: CoralBle::new(),
             output_ports: Vec::new(),
+            port_modes: HashMap::new(),
             display_name: "LEGO Education Science".to_string(),
         }
     }
@@ -53,11 +56,38 @@ impl HardwareAdapter for CoralAdapter {
 
         if let Some(kind) = self.ble.coral.device_kind() {
             self.display_name = kind.display_name().to_string();
-            self.output_ports = match kind {
-                CoralDeviceKind::DoubleMotor => vec!["a".to_string(), "b".to_string()],
-                CoralDeviceKind::SingleMotor => vec!["a".to_string()],
-                _ => Vec::new(),
-            };
+            self.port_modes.clear();
+
+            match kind {
+                CoralDeviceKind::DoubleMotor => {
+                    self.output_ports = vec!["a".to_string(), "b".to_string()];
+                    self.port_modes.insert("a".into(), vec!["rotate".into(), "angle".into(), "speed".into()]);
+                    self.port_modes.insert("b".into(), vec!["rotate".into(), "angle".into(), "speed".into()]);
+                    self.port_modes.insert("tilt".into(), vec!["tilt".into()]);
+                    self.port_modes.insert("gyro".into(), vec!["gyro".into()]);
+                    self.port_modes.insert("accel".into(), vec!["accel".into()]);
+                    self.port_modes.insert("yaw".into(), vec!["yaw".into()]);
+                }
+                CoralDeviceKind::SingleMotor => {
+                    self.output_ports = vec!["a".to_string()];
+                    self.port_modes.insert("a".into(), vec!["rotate".into(), "angle".into(), "speed".into()]);
+                    self.port_modes.insert("tilt".into(), vec!["tilt".into()]);
+                    self.port_modes.insert("gyro".into(), vec!["gyro".into()]);
+                    self.port_modes.insert("accel".into(), vec!["accel".into()]);
+                    self.port_modes.insert("yaw".into(), vec!["yaw".into()]);
+                }
+                CoralDeviceKind::ColorSensor => {
+                    self.output_ports = Vec::new();
+                    self.port_modes.insert("color".into(), vec!["color".into()]);
+                    self.port_modes.insert("reflect".into(), vec!["reflect".into()]);
+                    self.port_modes.insert("rgb".into(), vec!["rgb".into()]);
+                }
+                CoralDeviceKind::Controller => {
+                    self.output_ports = Vec::new();
+                    self.port_modes.insert("button".into(), vec!["button".into(), "touch".into()]);
+                    self.port_modes.insert("joystick".into(), vec!["joystick".into()]);
+                }
+            }
         }
         Ok(())
     }
@@ -74,8 +104,14 @@ impl HardwareAdapter for CoralAdapter {
         }
     }
 
-    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> {
-        // TODO: per-port mode validation
+    fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
+        let valid_modes = self.port_modes.get(port)
+            .ok_or_else(|| format!("Unknown sensor port \"{}\"", port))?;
+        if let Some(m) = mode {
+            if !valid_modes.iter().any(|v| v == m) {
+                return Err(format!("Port \"{}\" does not support mode \"{}\"", port, m));
+            }
+        }
         Ok(())
     }
 
@@ -157,13 +193,16 @@ impl HardwareAdapter for CoralAdapter {
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
         let _ = self.ble.poll();
 
+        // Default to first valid mode for this port
+        let valid_modes = self.port_modes.get(port);
+        let default_mode = valid_modes.and_then(|v| v.first().map(|s| s.as_str())).unwrap_or("rotate");
+        let effective_mode = mode.unwrap_or(default_mode);
+
         let motor_bit_mask: Option<u8> = match port {
             "a" => Some(MotorBits::Left as u8),
             "b" => Some(MotorBits::Right as u8),
             _ => None,
         };
-
-        let effective_mode = mode.unwrap_or("rotate");
 
         match effective_mode {
             "color" => {
