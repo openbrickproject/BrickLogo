@@ -101,6 +101,13 @@ impl App {
     pub fn tick(&mut self) -> bool {
         let mut changed = self.drain_output_buffer();
 
+        // Sync connected device names from port manager
+        let devices = self.port_manager.lock().unwrap().get_connected_device_names();
+        if devices != self.connected_devices {
+            self.connected_devices = devices;
+            changed = true;
+        }
+
         if let Some(ref rx) = self.eval_result_rx {
             match rx.try_recv() {
                 Ok((evaluator, result)) => {
