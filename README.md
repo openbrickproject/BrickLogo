@@ -1,5 +1,7 @@
 # BrickLogo - A modern LEGO/Logo REPL
 
+![BrickLogo screenshot](assets/screenshots/v0.1.0.png)
+
 BrickLogo brings the classic LEGO computer-control model into a modern workspace. It is a terminal Logo environment that can talk to LEGO motors, hubs, and sensors across several generations of hardware, while keeping the direct, command-driven feel of LEGO TC Logo and Control Lab.
 
 This repository contains the BrickLogo application, the Logo language runtime, a hardware abstraction layer, and the lower-level protocols used to speak to supported devices.
