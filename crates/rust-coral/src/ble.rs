@@ -167,36 +167,113 @@ impl CoralBle {
         self.send_to(peripheral, data)
     }
 
-    /// Send a command and wait for a response notification.
+    /// Send a command and wait for its result message.
+    /// The expected result has message ID = command_id + 1.
+    /// For motor commands, also matches on motor_bit_mask (byte 1 of the command).
     pub fn request(&mut self, data: &[u8]) -> Result<(), String> {
-        if self.peripheral.is_none() { return Err("Not connected".to_string()); }
+        use crate::protocol::IncomingMessage;
 
-        // Send the command
+        if self.peripheral.is_none() { return Err("Not connected".to_string()); }
+        if data.is_empty() { return Err("Empty command".to_string()); }
+
+        let command_id = data[0];
+        // Motor commands have motor_bit_mask as byte 1
+        let motor_bit_mask: Option<u8> = if data.len() >= 2 {
+            Some(data[1])
+        } else {
+            None
+        };
+
         self.send(data)?;
 
-        // Wait for a response by polling the persistent notification channel
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        if let Some(ref rx) = self.notification_rx {
-            loop {
-                if std::time::Instant::now() > deadline {
-                    return Err("Request timed out".to_string());
-                }
-                match rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(data) => {
-                        self.coral.process_notification(&data);
-                        if !data.is_empty() {
+        let rx = self.notification_rx.as_ref().ok_or("No notification stream")?;
+
+        loop {
+            if std::time::Instant::now() > deadline {
+                return Err("Request timed out".to_string());
+            }
+            if self.is_stop_requested() {
+                return Err("Cancelled".to_string());
+            }
+
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(raw) => {
+                    let msg = self.coral.process_notification(&raw);
+                    match msg {
+                        Some(IncomingMessage::MotorResult { command_id: cmd, motor_bit_mask: mask, .. })
+                            if cmd == command_id && motor_bit_mask.map_or(true, |m| m == mask) =>
+                        {
                             return Ok(());
                         }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        return Err("Notification stream ended".to_string());
+                        Some(IncomingMessage::StatusResult { command_id: cmd, .. })
+                            if cmd == command_id =>
+                        {
+                            return Ok(());
+                        }
+                        _ => {
+                            // Not our result — sensor notification or different command's result.
+                            // Keep looping.
+                        }
                     }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("Notification stream ended".to_string());
+                }
             }
-        } else {
-            Err("No notification stream".to_string())
         }
+    }
+
+    /// Send multiple commands and wait for all their result messages.
+    /// Each entry is (command_id, motor_bit_mask, encoded_command).
+    pub fn request_all(&mut self, commands: &[(u8, u8, Vec<u8>)]) -> Result<(), String> {
+        use crate::protocol::IncomingMessage;
+
+        if self.peripheral.is_none() { return Err("Not connected".to_string()); }
+
+        // Send all commands
+        for (_, _, data) in commands {
+            self.send(data)?;
+        }
+
+        // Track which (command_id, motor_bit_mask) pairs we're still waiting for
+        let mut pending: Vec<(u8, u8)> = commands.iter()
+            .map(|(cmd_id, mask, _)| (*cmd_id, *mask))
+            .collect();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let rx = self.notification_rx.as_ref().ok_or("No notification stream")?;
+
+        while !pending.is_empty() {
+            if std::time::Instant::now() > deadline {
+                return Err("Request timed out".to_string());
+            }
+            if self.is_stop_requested() {
+                return Err("Cancelled".to_string());
+            }
+
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(raw) => {
+                    let msg = self.coral.process_notification(&raw);
+                    match msg {
+                        Some(IncomingMessage::MotorResult { command_id, motor_bit_mask, .. }) => {
+                            pending.retain(|&(cmd, mask)| !(cmd == command_id && mask == motor_bit_mask));
+                        }
+                        Some(IncomingMessage::StatusResult { command_id, .. }) => {
+                            pending.retain(|&(cmd, _)| cmd != command_id);
+                        }
+                        _ => {}
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("Notification stream ended".to_string());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Poll for notifications and update the Coral protocol state.

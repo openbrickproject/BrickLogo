@@ -11,10 +11,15 @@ use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use std::sync::Mutex;
 
 /// Config for device connections.
+#[derive(serde::Deserialize, Default)]
 pub struct BrickLogoConfig {
+    #[serde(default)]
     pub controllab: Vec<String>,
+    #[serde(default)]
     pub wedo: Vec<String>,
+    #[serde(default)]
     pub pup: Vec<String>,
+    #[serde(default)]
     pub science: Vec<String>,
 }
 
@@ -23,46 +28,12 @@ impl BrickLogoConfig {
         let config_path = std::path::Path::new("bricklogo.config.json");
         if config_path.exists() {
             if let Ok(content) = std::fs::read_to_string(config_path) {
-                return Self::parse(&content);
+                if let Ok(config) = serde_json::from_str(&content) {
+                    return config;
+                }
             }
         }
         Self::default()
-    }
-
-    fn parse(json: &str) -> Self {
-        // Simple JSON parsing for arrays of strings
-        fn extract_array(json: &str, key: &str) -> Vec<String> {
-            let search = format!("\"{}\"", key);
-            if let Some(start) = json.find(&search) {
-                if let Some(bracket_start) = json[start..].find('[') {
-                    let arr_start = start + bracket_start + 1;
-                    if let Some(bracket_end) = json[arr_start..].find(']') {
-                        let arr = &json[arr_start..arr_start + bracket_end];
-                        return arr.split(',')
-                            .map(|s| s.trim().trim_matches('"').to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    }
-                }
-            }
-            Vec::new()
-        }
-
-        BrickLogoConfig {
-            controllab: extract_array(json, "controllab"),
-            wedo: extract_array(json, "wedo"),
-            pup: extract_array(json, "pup"),
-            science: extract_array(json, "science"),
-        }
-    }
-
-    fn default() -> Self {
-        BrickLogoConfig {
-            controllab: Vec::new(),
-            wedo: Vec::new(),
-            pup: Vec::new(),
-            science: Vec::new(),
-        }
     }
 }
 
@@ -342,7 +313,7 @@ pub fn register_hardware_primitives(
         func: Box::new(move |args, _| {
             let on_time = args[0].as_number()? as u32;
             let off_time = args[1].as_number()? as u32;
-            pm_ref.lock().unwrap().flash(on_time, off_time).map_err(|e| LogoError::Runtime(e))?;
+            pm_ref.lock().unwrap().flash(on_time, off_time, pm_ref.clone()).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
     });

@@ -3,4 +3,4 @@ pub mod protocol;
 pub mod controllab;
 
 pub use constants::{ControlLabState, SensorType, TouchEvent};
-pub use controllab::{ControlLab, ControlLabSensorPayload, TouchSensorPayload, TemperatureSensorPayload, LightSensorPayload, RotationSensorPayload};
+pub use controllab::{ControlLabSensorPayload, TouchSensorPayload, TemperatureSensorPayload, LightSensorPayload, RotationSensorPayload};

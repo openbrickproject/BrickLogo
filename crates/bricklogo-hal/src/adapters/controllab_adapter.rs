@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Instant;
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use rust_controllab::protocol::get_output_port_mask;
-use rust_controllab::controllab::ControlLab;
-use rust_controllab::constants::SensorType;
-use rust_controllab::ControlLabSensorPayload;
+use crate::driver::{self, DeviceSlot};
+use rust_controllab::protocol::{get_output_port_mask, encode_output_power, encode_keep_alive};
+use rust_controllab::controllab::{self, ControlLabSensorPayload, process_sensor_data};
+use rust_controllab::constants::*;
 
 const OUTPUT_PORTS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h"];
 const INPUT_PORTS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -17,30 +20,122 @@ const SENSOR_MODE_MAP: &[(&str, SensorType)] = &[
 ];
 
 fn to_signed_power(direction: PortDirection, power: u8) -> i8 {
-    // Map 0-100% back to 0-8 for Control Lab's native range
-    let native = ((power as u16 * 8) / 100).min(8) as i8;
+    let native = ((power as u16 * 8 + 50) / 100).min(8) as i8;
     match direction {
         PortDirection::Even => native,
         PortDirection::Odd => -native,
     }
 }
 
+// ── Driver slot for Control Lab ─────────────────
+
+#[derive(Debug, Clone)]
+enum ControlLabCommand {
+    Power { mask: u8, power: i8 },
+}
+
+/// Shared state between the adapter and the driver slot.
+pub struct ControlLabShared {
+    pub sensor_types: [SensorType; INPUT_PORT_COUNT],
+    pub rotation_values: [i32; INPUT_PORT_COUNT],
+    pub last_payloads: HashMap<String, ControlLabSensorPayload>,
+}
+
+impl ControlLabShared {
+    fn new() -> Self {
+        ControlLabShared {
+            sensor_types: [SensorType::Unknown; INPUT_PORT_COUNT],
+            rotation_values: [0; INPUT_PORT_COUNT],
+            last_payloads: HashMap::new(),
+        }
+    }
+}
+
+struct ControlLabSlot {
+    port: Box<dyn serialport::SerialPort>,
+    rx: mpsc::Receiver<ControlLabCommand>,
+    shared: Arc<Mutex<ControlLabShared>>,
+    read_buffer: Vec<u8>,
+    last_write: Instant,
+    alive: bool,
+}
+
+impl DeviceSlot for ControlLabSlot {
+    fn tick(&mut self) {
+        // ── Read sensor data ──────────────────
+        let mut buf = [0u8; 256];
+        match self.port.read(&mut buf) {
+            Ok(n) if n > 0 => self.read_buffer.extend_from_slice(&buf[..n]),
+            _ => {}
+        }
+
+        {
+            let shared = &mut *self.shared.lock().unwrap();
+            process_sensor_data(
+                &mut self.read_buffer,
+                &shared.sensor_types,
+                &mut shared.rotation_values,
+                &mut shared.last_payloads,
+            );
+        }
+
+        // ── Drain command queue and batch ─────
+        let mut power_groups: HashMap<i8, u8> = HashMap::new();
+        while let Ok(cmd) = self.rx.try_recv() {
+            match cmd {
+                ControlLabCommand::Power { mask, power } => {
+                    *power_groups.entry(power).or_insert(0) |= mask;
+                }
+            }
+        }
+
+        if !power_groups.is_empty() {
+            for (power, mask) in &power_groups {
+                let encoded = encode_output_power(*mask, *power);
+                let _ = self.port.write_all(&encoded);
+            }
+            let _ = self.port.flush();
+            self.last_write = Instant::now();
+        }
+
+        // ── Keep-alive ───────────────────────
+        if self.last_write.elapsed() >= std::time::Duration::from_millis(KEEP_ALIVE_INTERVAL_MS) {
+            let ka = encode_keep_alive();
+            let _ = self.port.write_all(&ka);
+            let _ = self.port.flush();
+            self.last_write = Instant::now();
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        self.alive
+    }
+}
+
+// ── Adapter ─────────────────────────────────────
+
 pub struct ControlLabAdapter {
-    hub: ControlLab,
+    tx: Option<mpsc::Sender<ControlLabCommand>>,
+    shared: Arc<Mutex<ControlLabShared>>,
+    slot_id: Option<usize>,
     display_name: String,
     output_ports: Vec<String>,
     input_ports: Vec<String>,
     sensor_types: HashMap<usize, SensorType>,
+    serial_path: String,
 }
 
 impl ControlLabAdapter {
     pub fn new(serial_path: &str) -> Self {
         ControlLabAdapter {
-            hub: ControlLab::new(serial_path),
+            tx: None,
+            shared: Arc::new(Mutex::new(ControlLabShared::new())),
+            slot_id: None,
             display_name: "LEGO Control Lab".to_string(),
             output_ports: OUTPUT_PORTS.iter().map(|s| s.to_string()).collect(),
             input_ports: INPUT_PORTS.iter().map(|s| s.to_string()).collect(),
             sensor_types: HashMap::new(),
+            serial_path: serial_path.to_string(),
         }
     }
 }
@@ -49,14 +144,35 @@ impl HardwareAdapter for ControlLabAdapter {
     fn display_name(&self) -> &str { &self.display_name }
     fn output_ports(&self) -> &[String] { &self.output_ports }
     fn input_ports(&self) -> &[String] { &self.input_ports }
-    fn connected(&self) -> bool { self.hub.is_connected() }
+    fn connected(&self) -> bool { self.tx.is_some() }
 
     fn connect(&mut self) -> Result<(), String> {
-        self.hub.connect()
+        let port = controllab::connect(&self.serial_path, DEFAULT_BAUD_RATE)?;
+
+        let (tx, rx) = mpsc::channel();
+        let shared = Arc::new(Mutex::new(ControlLabShared::new()));
+
+        let slot = ControlLabSlot {
+            port,
+            rx,
+            shared: shared.clone(),
+            read_buffer: Vec::new(),
+            last_write: Instant::now(),
+            alive: true,
+        };
+
+        let slot_id = driver::register(Box::new(slot));
+        self.tx = Some(tx);
+        self.shared = shared;
+        self.slot_id = Some(slot_id);
+        Ok(())
     }
 
     fn disconnect(&mut self) {
-        self.hub.disconnect();
+        if let Some(id) = self.slot_id.take() {
+            driver::deregister(id);
+        }
+        self.tx = None;
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
@@ -78,11 +194,20 @@ impl HardwareAdapter for ControlLabAdapter {
     }
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
-        self.hub.set_power(&port.to_uppercase(), to_signed_power(direction, power))
+        let mask = get_output_port_mask(&port.to_uppercase())
+            .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+        let signed = to_signed_power(direction, power);
+        self.tx.as_ref().ok_or("Not connected")?
+            .send(ControlLabCommand::Power { mask, power: signed })
+            .map_err(|_| "Send failed".to_string())
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
-        self.hub.set_power(&port.to_uppercase(), 0)
+        let mask = get_output_port_mask(&port.to_uppercase())
+            .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+        self.tx.as_ref().ok_or("Not connected")?
+            .send(ControlLabCommand::Power { mask, power: 0 })
+            .map_err(|_| "Send failed".to_string())
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
@@ -113,31 +238,43 @@ impl HardwareAdapter for ControlLabAdapter {
             return Err(format!("Unknown sensor port \"{}\"", port));
         }
 
-        // Poll for fresh data
-        let _ = self.hub.poll();
-
         // Set sensor type if mode specified and changed
         if let Some(m) = mode {
             if m != "raw" {
                 if let Some((_, sensor_type)) = SENSOR_MODE_MAP.iter().find(|(name, _)| *name == m) {
                     if self.sensor_types.get(&input_port) != Some(sensor_type) {
-                        self.hub.set_sensor_type(input_port, *sensor_type);
+                        let mut shared = self.shared.lock().unwrap();
+                        shared.sensor_types[input_port - 1] = *sensor_type;
+                        shared.rotation_values[input_port - 1] = 0;
                         self.sensor_types.insert(input_port, *sensor_type);
                     }
                 }
             }
         }
 
-        let payload = self.hub.read(input_port);
+        let shared = self.shared.lock().unwrap();
+        let sensor_type = shared.sensor_types[input_port - 1];
+        let kind = match sensor_type {
+            SensorType::Touch => "touch",
+            SensorType::Temperature => "temperature",
+            SensorType::Light => "light",
+            SensorType::Rotation => "rotation",
+            SensorType::Unknown => {
+                if mode == Some("touch") { return Ok(Some(LogoValue::Word("false".to_string()))); }
+                return Ok(Some(LogoValue::Number(0.0)));
+            }
+        };
+        let key = format!("{}:{}", kind, input_port);
+
+        let payload = shared.last_payloads.get(&key);
         if payload.is_none() {
-            // No reading yet — return sensible default
             if mode == Some("touch") { return Ok(Some(LogoValue::Word("false".to_string()))); }
             return Ok(Some(LogoValue::Number(0.0)));
         }
 
         let payload = payload.unwrap();
         if mode == Some("raw") {
-            return match &payload {
+            return match payload {
                 ControlLabSensorPayload::Touch(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
                 ControlLabSensorPayload::Temperature(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
                 ControlLabSensorPayload::Light(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
@@ -153,31 +290,34 @@ impl HardwareAdapter for ControlLabAdapter {
         }
     }
 
-    // ── Batch overrides (combined bitmask for same-power ports) ──
+    // ── Batch overrides ─────────────────────────
 
     fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
-        // Group by signed power, combine masks
+        let tx = self.tx.as_ref().ok_or("Not connected")?;
         let mut groups: HashMap<i8, u8> = HashMap::new();
         for cmd in commands {
             let power = to_signed_power(cmd.direction, cmd.power);
-            let mask = get_output_port_mask(cmd.port)
+            let mask = get_output_port_mask(&cmd.port.to_uppercase())
                 .ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
             *groups.entry(power).or_insert(0) |= mask;
         }
         for (power, mask) in groups {
-            self.hub.set_power_masked(mask, power)?;
+            tx.send(ControlLabCommand::Power { mask, power })
+                .map_err(|_| "Send failed".to_string())?;
         }
         Ok(())
     }
 
     fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        let tx = self.tx.as_ref().ok_or("Not connected")?;
         let mut combined_mask: u8 = 0;
         for port in ports {
-            let mask = get_output_port_mask(port)
+            let mask = get_output_port_mask(&port.to_uppercase())
                 .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
             combined_mask |= mask;
         }
-        self.hub.set_power_masked(combined_mask, 0)
+        tx.send(ControlLabCommand::Power { mask: combined_mask, power: 0 })
+            .map_err(|_| "Send failed".to_string())
     }
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {

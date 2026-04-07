@@ -7,7 +7,7 @@ use crate::protocol::*;
 /// hidapi's IOKit backend can SIGTRAP on macOS Sequoia when no HID device
 /// is present, so we check via ioreg before touching hidapi.
 #[cfg(target_os = "macos")]
-fn wedo_usb_present() -> bool {
+pub fn wedo_usb_present() -> bool {
     std::process::Command::new("ioreg")
         .args(["-r", "-c", "IOUSBHostDevice", "-l"])
         .output()
@@ -20,7 +20,7 @@ fn wedo_usb_present() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn wedo_usb_present() -> bool {
+pub fn wedo_usb_present() -> bool {
     true // Only macOS needs the pre-flight; other platforms go straight to hidapi
 }
 

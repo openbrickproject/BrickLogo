@@ -2,7 +2,7 @@
 name = "bricklogo"
 version = "0.1.0"
 edition = "2024"
-description = "A modern LEGO TC Logo REPL"
+description = "A modern LEGO/Logo REPL"
 
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }

@@ -66,19 +66,17 @@ impl Coral {
         });
     }
 
-    /// Process incoming BLE notification data.
-    /// Returns the decoded sensor payloads.
-    pub fn process_notification(&mut self, data: &[u8]) -> Vec<DeviceSensorPayload> {
-        if let Some((id, payloads)) = decode_incoming(data) {
-            if id == 60 { // DeviceNotification
-                for payload in &payloads {
-                    let key = payload.cache_key();
-                    self.last_payloads.insert(key, payload.clone());
-                }
-                return payloads;
+    /// Process incoming BLE data. Caches sensor payloads from notifications.
+    /// Returns the parsed message for the caller to inspect.
+    pub fn process_notification(&mut self, data: &[u8]) -> Option<IncomingMessage> {
+        let msg = decode_incoming(data)?;
+        if let IncomingMessage::Notification(ref payloads) = msg {
+            for payload in payloads {
+                let key = payload.cache_key();
+                self.last_payloads.insert(key, payload.clone());
             }
         }
-        Vec::new()
+        Some(msg)
     }
 
     /// Read the last cached payload for an event type.
@@ -189,8 +187,8 @@ mod tests {
         data.push(25i8 as u8); // speed
         data.extend_from_slice(&360i32.to_le_bytes()); // position
 
-        let payloads = coral.process_notification(&data);
-        assert_eq!(payloads.len(), 1);
+        let msg = coral.process_notification(&data);
+        assert!(matches!(msg, Some(IncomingMessage::Notification(ref p)) if p.len() == 1));
 
         // Check cached
         let cached = coral.read_motor(1);
@@ -211,8 +209,8 @@ mod tests {
         data.push(4); // DEVICE_MSG_BUTTON
         data.push(1); // pressed
 
-        let payloads = coral.process_notification(&data);
-        assert_eq!(payloads.len(), 1);
+        let msg = coral.process_notification(&data);
+        assert!(matches!(msg, Some(IncomingMessage::Notification(ref p)) if p.len() == 1));
 
         let cached = coral.read("button");
         assert!(cached.is_some());

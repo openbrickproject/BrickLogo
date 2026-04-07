@@ -414,9 +414,39 @@ pub fn decode_device_data(data: &[u8]) -> Vec<DeviceSensorPayload> {
     events
 }
 
-/// Decode a full incoming BLE notification.
-/// Returns the message type ID and the decoded device data (if notification).
-pub fn decode_incoming(data: &[u8]) -> Option<(u8, Vec<DeviceSensorPayload>)> {
+/// A decoded incoming message from the device.
+#[derive(Debug, Clone)]
+pub enum IncomingMessage {
+    /// Device notification containing sensor payloads (id 60).
+    Notification(Vec<DeviceSensorPayload>),
+    /// Motor command result with motor_bit_mask and status.
+    MotorResult { command_id: u8, motor_bit_mask: u8, status: u8 },
+    /// Status-only result (light, sound, movement, IMU commands).
+    StatusResult { command_id: u8, status: u8 },
+    /// Other message (info response, notification ack, etc.).
+    Other { id: u8 },
+}
+
+impl IncomingMessage {
+    /// Map a result message ID back to the command that produced it.
+    /// Motor and status results have ID = command_id + 1.
+    pub fn command_id(&self) -> Option<u8> {
+        match self {
+            IncomingMessage::MotorResult { command_id, .. } => Some(*command_id),
+            IncomingMessage::StatusResult { command_id, .. } => Some(*command_id),
+            _ => None,
+        }
+    }
+}
+
+// Motor result IDs (command_id + 1 for each motor command)
+const MOTOR_RESULT_IDS: &[u8] = &[121, 123, 125, 127, 129, 131, 133, 139, 141, 143, 145];
+
+// Status-only result IDs
+const STATUS_ONLY_RESULT_IDS: &[u8] = &[111, 113, 115, 151, 153, 155, 157, 159, 161, 169, 171, 173, 175, 177, 191, 193];
+
+/// Decode a full incoming BLE message.
+pub fn decode_incoming(data: &[u8]) -> Option<IncomingMessage> {
     if data.is_empty() { return None; }
     let mut reader = BufferReader::new(data);
     let id = reader.read_u8();
@@ -424,26 +454,23 @@ pub fn decode_incoming(data: &[u8]) -> Option<(u8, Vec<DeviceSensorPayload>)> {
     if id == 60 { // DeviceNotification
         let _reserved = reader.read_u16();
         let device_data = decode_device_data(reader.read_remaining());
-        return Some((id, device_data));
+        return Some(IncomingMessage::Notification(device_data));
     }
 
-    // Motor status results (have motorBitMask + status)
-    let motor_result_ids: &[u8] = &[121, 123, 125, 127, 129, 131, 133, 139, 141, 143, 145];
-    if motor_result_ids.contains(&id) {
-        let _motor_bit_mask = reader.read_u8();
-        let _status = reader.read_u8();
-        return Some((id, Vec::new()));
+    if MOTOR_RESULT_IDS.contains(&id) {
+        let motor_bit_mask = reader.read_u8();
+        let status = reader.read_u8();
+        // command_id is result_id - 1
+        return Some(IncomingMessage::MotorResult { command_id: id - 1, motor_bit_mask, status });
     }
 
-    // Status-only results
-    let status_only_ids: &[u8] = &[111, 113, 115, 151, 153, 155, 157, 159, 161, 169, 171, 173, 175, 177, 191, 193];
-    if status_only_ids.contains(&id) {
-        let _status = reader.read_u8();
-        return Some((id, Vec::new()));
+    if STATUS_ONLY_RESULT_IDS.contains(&id) {
+        let status = reader.read_u8();
+        return Some(IncomingMessage::StatusResult { command_id: id - 1, status });
     }
 
     // Info response, device notification response, etc.
-    Some((id, Vec::new()))
+    Some(IncomingMessage::Other { id })
 }
 
 #[cfg(test)]

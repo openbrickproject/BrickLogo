@@ -9,3 +9,5 @@ bricklogo-lang = { path = "../bricklogo-lang" }
 bricklogo-hal = { path = "../bricklogo-hal" }
 ratatui = "0.29"
 crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

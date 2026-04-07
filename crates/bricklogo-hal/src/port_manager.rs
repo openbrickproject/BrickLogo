@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 
@@ -33,7 +34,7 @@ pub struct PortManager {
     active_device: Option<String>,
     selected_outputs: Vec<QualifiedPort>,
     selected_inputs: Vec<QualifiedPort>,
-    flash_timers: HashMap<String, bool>, // simplified — real impl would use threads
+    flash_timers: HashMap<String, Arc<AtomicBool>>,
 }
 
 fn power_to_percent(level: u8) -> u8 {
@@ -95,6 +96,9 @@ impl PortManager {
         self.active_device = None;
         self.selected_outputs.clear();
         self.selected_inputs.clear();
+        for flag in self.flash_timers.values() {
+            flag.store(true, Ordering::Relaxed);
+        }
         self.flash_timers.clear();
     }
 
@@ -212,7 +216,8 @@ impl PortManager {
 
     fn cancel_flash(&mut self, qp: &QualifiedPort) {
         let key = format!("{}:{}", qp.device_name, qp.port);
-        if self.flash_timers.remove(&key).is_some() {
+        if let Some(flag) = self.flash_timers.remove(&key) {
+            flag.store(true, Ordering::Relaxed);
             if let Some(entry) = self.devices.get_mut(&qp.device_name) {
                 if entry.adapter.connected() {
                     let _ = entry.adapter.stop_port(&qp.port);
@@ -421,7 +426,7 @@ impl PortManager {
         Ok(())
     }
 
-    pub fn flash(&mut self, _on_tenths: u32, _off_tenths: u32) -> Result<(), String> {
+    pub fn flash(&mut self, on_tenths: u32, off_tenths: u32, pm: Arc<Mutex<PortManager>>) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
             let entry = self.devices.get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
@@ -432,17 +437,51 @@ impl PortManager {
             self.cancel_flash(qp);
             let key = format!("{}:{}", qp.device_name, qp.port);
             let state = self.get_state(qp).clone();
+
+            // Start the port immediately
             let entry = self.devices.get_mut(&qp.device_name).unwrap();
             entry.adapter.start_port(&qp.port, state.direction, power_to_percent(state.power))?;
-            self.flash_timers.insert(key, true);
-            // TODO: actual flash timer using threads
-            // For now, just start the port — flash cycling needs async/threading
+
+            // Spawn cycling thread
+            let cancelled = Arc::new(AtomicBool::new(false));
+            self.flash_timers.insert(key.clone(), cancelled.clone());
+
+            let pm = pm.clone();
+            let device_name = qp.device_name.clone();
+            let port = qp.port.clone();
+            let on_ms = on_tenths as u64 * 100;
+            let off_ms = off_tenths as u64 * 100;
+
+            std::thread::spawn(move || {
+                let mut is_on = true;
+                loop {
+                    let delay = if is_on { on_ms } else { off_ms };
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+
+                    if cancelled.load(Ordering::Relaxed) { return; }
+
+                    let Ok(mut pm) = pm.lock() else { return; };
+                    let Some(entry) = pm.devices.get_mut(&device_name) else { return; };
+                    if !entry.adapter.connected() { return; }
+
+                    if is_on {
+                        let _ = entry.adapter.stop_port(&port);
+                    } else {
+                        let state = entry.port_states.get(&port).cloned()
+                            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
+                        let _ = entry.adapter.start_port(&port, state.direction, power_to_percent(state.power));
+                    }
+                    is_on = !is_on;
+                }
+            });
         }
         Ok(())
     }
 
     pub fn all_off(&mut self) {
-        // Cancel all flash timers
+        for flag in self.flash_timers.values() {
+            flag.store(true, Ordering::Relaxed);
+        }
         self.flash_timers.clear();
 
         let names: Vec<String> = self.devices.keys().cloned().collect();

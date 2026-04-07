@@ -5,7 +5,7 @@ use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use rust_coral::ble::CoralBle;
 use rust_coral::constants::*;
-use rust_coral::protocol::DeviceSensorPayload;
+use rust_coral::protocol::{DeviceSensorPayload, MessageType};
 
 fn map_direction(direction: PortDirection, port: &str) -> MotorDirection {
     // Left motor (port "a") is physically mirrored
@@ -306,58 +306,54 @@ impl HardwareAdapter for CoralAdapter {
     // ── Batch overrides using motor bitmask ──────
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
-        let mut combined_bits: u8 = 0;
+        // Set speed per motor
         for cmd in commands {
             let bits = motor_bits_for_port(cmd.port)?;
-            combined_bits |= bits;
             let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
-            let dir = map_direction(cmd.direction, cmd.port);
-            // Direction is set per-motor since they may differ
-            let _ = dir; // direction is encoded in run_for_time below per-port
         }
-        // For Coral, run_for_time with combined bits runs both simultaneously
-        // But direction is per-motor, so we need to set directions first then run together
-        // Actually, cmd_motor_run_for_time takes a single direction. If directions differ,
-        // we must issue separate commands. If same, we can batch.
-        // For simplicity and correctness, check if all directions are the same:
+
+        // Check if all directions are the same — can use combined bitmask
         if commands.len() > 1 {
             let dirs: Vec<MotorDirection> = commands.iter()
                 .map(|c| map_direction(c.direction, c.port))
                 .collect();
             if dirs.windows(2).all(|w| w[0] == w[1]) {
-                // Same direction: single batched command
+                let combined_bits: u8 = commands.iter()
+                    .map(|c| motor_bits_for_port(c.port).unwrap())
+                    .fold(0u8, |acc, b| acc | b);
                 let cmd = self.ble.coral.cmd_motor_run_for_time(combined_bits, tenths * 100, dirs[0]);
                 return self.ble.request(&cmd);
             }
         }
-        // Different directions or single port: issue per-port (still nearly simultaneous)
-        for (i, cmd) in commands.iter().enumerate() {
-            let bits = motor_bits_for_port(cmd.port)?;
+
+        // Different directions: send all, then wait for all results
+        let cmd_id = MessageType::MotorRunForTimeCommand as u8;
+        let reqs: Vec<(u8, u8, Vec<u8>)> = commands.iter().map(|cmd| {
+            let bits = motor_bits_for_port(cmd.port).unwrap();
             let dir = map_direction(cmd.direction, cmd.port);
             let msg = self.ble.coral.cmd_motor_run_for_time(bits, tenths * 100, dir);
-            if i == commands.len() - 1 {
-                self.ble.request(&msg)?;
-            } else {
-                self.ble.send(&msg)?;
-            }
-        }
-        Ok(())
+            (cmd_id, bits, msg)
+        }).collect();
+        self.ble.request_all(&reqs)
     }
 
     fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
-        for (i, cmd) in commands.iter().enumerate() {
+        // Set speed per motor
+        for cmd in commands {
             let bits = motor_bits_for_port(cmd.port)?;
             let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
+        }
+
+        // Send all rotation commands, then wait for all results
+        let cmd_id = MessageType::MotorRunForDegreesCommand as u8;
+        let reqs: Vec<(u8, u8, Vec<u8>)> = commands.iter().map(|cmd| {
+            let bits = motor_bits_for_port(cmd.port).unwrap();
             let dir = map_direction(cmd.direction, cmd.port);
             let msg = self.ble.coral.cmd_motor_run_for_degrees(bits, degrees, dir);
-            if i == commands.len() - 1 {
-                self.ble.request(&msg)?;
-            } else {
-                self.ble.send(&msg)?;
-            }
-        }
-        Ok(())
+            (cmd_id, bits, msg)
+        }).collect();
+        self.ble.request_all(&reqs)
     }
 }
