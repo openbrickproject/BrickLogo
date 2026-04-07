@@ -419,9 +419,15 @@ impl PortManager {
         let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
         for qp in &ports {
             self.cancel_flash(qp);
-            let state = self.get_state(qp).clone();
-            let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.rotate_to_home(&qp.port, state.direction, power_to_percent(state.power))?;
+        }
+
+        let groups = self.group_by_device(&ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let commands: Vec<PortCommand> = port_cmds.iter()
+                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+                .collect();
+            entry.adapter.rotate_ports_to_home(&commands)?;
         }
         Ok(())
     }

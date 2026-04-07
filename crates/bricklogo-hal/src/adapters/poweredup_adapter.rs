@@ -132,7 +132,7 @@ impl HardwareAdapter for PoweredUpAdapter {
     fn connected(&self) -> bool { self.ble.is_connected() }
 
     fn connect(&mut self) -> Result<(), String> {
-        self.ble.connect()?;
+        super::ble_connect_with_retry(|| self.ble.connect(), 3)?;
         Ok(())
     }
 
@@ -212,26 +212,8 @@ impl HardwareAdapter for PoweredUpAdapter {
 
     fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
-
-        let current = {
-            let hub = self.ble.hub.lock().unwrap();
-            hub.last_reading(port_id)
-                .and_then(|r| if let SensorReading::Number(n) = r { Some(*n as i32) } else { None })
-                .unwrap_or(0)
-        };
-
-        let norm_current = ((current % 360) + 360) % 360;
-        let norm_target = ((position % 360) + 360) % 360;
-        let delta = norm_target - norm_current;
-        if delta == 0 { return Ok(()); }
-
         let speed = to_signed_speed(direction, power);
-        let abs_delta = delta.abs();
-        let naturally_positive = delta > 0;
-        let user_wants_positive = speed > 0;
-        let degrees = if naturally_positive == user_wants_positive { abs_delta } else { 360 - abs_delta };
-
-        let cmd = protocol::cmd_start_speed_for_degrees(port_id, degrees as u32, speed, 100, BrakingStyle::Hold, true);
+        let cmd = protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
         self.ble.request(port_id, &cmd)?;
         Ok(())
     }
@@ -336,6 +318,34 @@ impl HardwareAdapter for PoweredUpAdapter {
             self.ble.send(&msg)?;
         }
 
+        Ok(())
+    }
+
+    fn rotate_ports_to_position(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
+        let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
+        for cmd in commands {
+            let port_id = self.resolve_port_id(cmd.port)?;
+            let speed = to_signed_speed(cmd.direction, cmd.power);
+            let msg = protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
+            cmds.push((port_id, msg));
+        }
+        if !cmds.is_empty() {
+            self.ble.request_all(&cmds)?;
+        }
+        Ok(())
+    }
+
+    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
+        for cmd in commands {
+            let port_id = self.resolve_port_id(cmd.port)?;
+            let speed = to_signed_speed(cmd.direction, cmd.power);
+            let msg = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
+            cmds.push((port_id, msg));
+        }
+        if !cmds.is_empty() {
+            self.ble.request_all(&cmds)?;
+        }
         Ok(())
     }
 

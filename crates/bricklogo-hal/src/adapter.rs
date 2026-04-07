@@ -101,4 +101,12 @@ pub trait HardwareAdapter: Send {
         }
         Ok(())
     }
+
+    /// Rotate multiple ports to home (absolute zero) simultaneously.
+    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        for cmd in commands {
+            self.rotate_to_home(cmd.port, cmd.direction, cmd.power)?;
+        }
+        Ok(())
+    }
 }

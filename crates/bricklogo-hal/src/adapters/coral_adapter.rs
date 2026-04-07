@@ -52,7 +52,7 @@ impl HardwareAdapter for CoralAdapter {
     fn connected(&self) -> bool { self.ble.is_connected() }
 
     fn connect(&mut self) -> Result<(), String> {
-        self.ble.connect()?;
+        super::ble_connect_with_retry(|| self.ble.connect(), 3)?;
 
         if let Some(kind) = self.ble.coral.device_kind() {
             self.display_name = kind.display_name().to_string();
@@ -147,32 +147,10 @@ impl HardwareAdapter for CoralAdapter {
 
     fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        // Read current position, calculate delta, use run_for_degrees
-        let _ = self.ble.poll();
-        let current = self.ble.coral.read_motor(bits as u8)
-            .and_then(|p| {
-                if let DeviceSensorPayload::Motor(m) = p {
-                    Some(m.position)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
-
-        let norm_current = ((current % 360) + 360) % 360;
-        let norm_target = ((position % 360) + 360) % 360;
-        let delta = norm_target - norm_current;
-        if delta == 0 { return Ok(()); }
-
-        let abs_delta = delta.abs();
-        let dir = map_direction(direction, port);
-        let naturally_positive = delta > 0;
-        let user_wants_clockwise = dir == MotorDirection::Clockwise;
-        let degrees = if naturally_positive == user_wants_clockwise { abs_delta } else { 360 - abs_delta };
-
         let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
-        let cmd = self.ble.coral.cmd_motor_run_for_degrees(bits, degrees, dir);
+        let dir = map_direction(direction, port);
+        let cmd = self.ble.coral.cmd_motor_run_to_absolute_position(bits, position as u16, dir);
         self.ble.request(&cmd)
     }
 
@@ -336,6 +314,43 @@ impl HardwareAdapter for CoralAdapter {
             (cmd_id, bits, msg)
         }).collect();
         self.ble.request_all(&reqs)
+    }
+
+    fn rotate_ports_to_position(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
+        let cmd_id = MessageType::MotorRunToAbsolutePositionCommand as u8;
+        let mut reqs: Vec<(u8, u8, Vec<u8>)> = Vec::new();
+
+        for cmd in commands {
+            let bits = motor_bits_for_port(cmd.port)?;
+            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            self.ble.send(&speed_cmd)?;
+            let dir = map_direction(cmd.direction, cmd.port);
+            let msg = self.ble.coral.cmd_motor_run_to_absolute_position(bits, position as u16, dir);
+            reqs.push((cmd_id, bits, msg));
+        }
+
+        if !reqs.is_empty() {
+            self.ble.request_all(&reqs)?;
+        }
+        Ok(())
+    }
+
+    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        let cmd_id = MessageType::MotorRunToAbsolutePositionCommand as u8;
+        let mut reqs: Vec<(u8, u8, Vec<u8>)> = Vec::new();
+
+        for cmd in commands {
+            let bits = motor_bits_for_port(cmd.port)?;
+            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            self.ble.send(&speed_cmd)?;
+            let msg = self.ble.coral.cmd_motor_run_to_absolute_position(bits, 0, map_direction(cmd.direction, cmd.port));
+            reqs.push((cmd_id, bits, msg));
+        }
+
+        if !reqs.is_empty() {
+            self.ble.request_all(&reqs)?;
+        }
+        Ok(())
     }
 
     fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
