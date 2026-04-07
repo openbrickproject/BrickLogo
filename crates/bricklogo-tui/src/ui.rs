@@ -84,7 +84,31 @@ fn draw_header(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let device_spans = if !app.connected_devices.is_empty() {
+    let device_spans = format_device_line(app);
+    let talkto = format_selection_line("talkto", &app.selected_outputs);
+    let listento = format_selection_line("listento", &app.selected_inputs);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(device_spans),
+            Line::from(talkto),
+            Line::from(listento),
+        ]),
+        area,
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn status_line_strings(app: &App) -> Vec<String> {
+    vec![
+        format_device_line_text(app),
+        format_selection_line_text("talkto", &app.selected_outputs),
+        format_selection_line_text("listento", &app.selected_inputs),
+    ]
+}
+
+fn format_device_line(app: &App) -> Vec<Span<'static>> {
+    if !app.connected_devices.is_empty() {
         let mut spans = vec![Span::styled(
             "[devices: ",
             Style::default().fg(Color::DarkGray),
@@ -125,19 +149,29 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled("]", Style::default().fg(Color::DarkGray)),
         ]
-    };
+    }
+}
 
-    let talkto = format_selection_line("talkto", &app.selected_outputs);
-    let listento = format_selection_line("listento", &app.selected_inputs);
-
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(device_spans),
-            Line::from(talkto),
-            Line::from(listento),
-        ]),
-        area,
-    );
+#[cfg(test)]
+fn format_device_line_text(app: &App) -> String {
+    if app.connected_devices.is_empty() {
+        "[devices: none]".to_string()
+    } else {
+        let active = app.active_device.as_deref();
+        let names = app
+            .connected_devices
+            .iter()
+            .map(|name| {
+                if active == Some(name.as_str()) {
+                    format!("{}*", name)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("[devices: {}]", names)
+    }
 }
 
 fn format_selection_line(label: &str, ports: &[String]) -> Vec<Span<'static>> {
@@ -155,6 +189,16 @@ fn format_selection_line(label: &str, ports: &[String]) -> Vec<Span<'static>> {
         Span::styled(value, Style::default().fg(Color::Cyan)),
         Span::styled("]", Style::default().fg(Color::DarkGray)),
     ]
+}
+
+#[cfg(test)]
+fn format_selection_line_text(label: &str, ports: &[String]) -> String {
+    let value = if ports.is_empty() {
+        "-".to_string()
+    } else {
+        ports.join(" ")
+    };
+    format!("[{}: {}]", label, value)
 }
 
 fn draw_repl(frame: &mut Frame, app: &App, area: Rect) {
@@ -230,3 +274,7 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let paragraph = Paragraph::new(all_lines);
     frame.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+#[path = "tests/ui.rs"]
+mod tests;

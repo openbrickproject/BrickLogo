@@ -103,17 +103,14 @@ pub fn register_hardware_primitives(
                         Box::new(adapter)
                     }
                     "controllab" => {
-                        let serial_path = next_config_entry(
-                            &config.controllab,
-                            &mut indices,
-                            "controllab",
-                        )
-                        .ok_or_else(|| {
-                            LogoError::Runtime(
+                        let serial_path =
+                            next_config_entry(&config.controllab, &mut indices, "controllab")
+                                .ok_or_else(|| {
+                                    LogoError::Runtime(
                                 "No Control Lab serial port configured in bricklogo.config.json"
                                     .to_string(),
                             )
-                        })?;
+                                })?;
                         let mut adapter = ControlLabAdapter::new(&serial_path);
                         system_fn_ref("Scanning for LEGO Control Lab...");
                         adapter
@@ -553,3 +550,7 @@ pub fn register_hardware_primitives(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/bridge.rs"]
+mod tests;

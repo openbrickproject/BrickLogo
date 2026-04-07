@@ -11,11 +11,70 @@ use std::time::Duration;
 use bricklogo_tui::app::App;
 use bricklogo_tui::ui;
 
+#[derive(Default)]
+struct TerminalLifecycle {
+    raw_mode_enabled: bool,
+    alt_screen_entered: bool,
+}
+
+trait TerminalRestorer {
+    fn disable_raw_mode(&mut self) -> io::Result<()>;
+    fn leave_alt_screen(&mut self) -> io::Result<()>;
+    fn show_cursor(&mut self) -> io::Result<()>;
+}
+
+impl TerminalLifecycle {
+    fn mark_raw_mode_enabled(&mut self) {
+        self.raw_mode_enabled = true;
+    }
+
+    fn mark_alt_screen_entered(&mut self) {
+        self.alt_screen_entered = true;
+    }
+
+    fn restore<T: TerminalRestorer>(&mut self, restorer: &mut T) -> io::Result<()> {
+        if self.raw_mode_enabled {
+            restorer.disable_raw_mode()?;
+            self.raw_mode_enabled = false;
+        }
+        if self.alt_screen_entered {
+            restorer.leave_alt_screen()?;
+            self.alt_screen_entered = false;
+        }
+        restorer.show_cursor()?;
+        Ok(())
+    }
+}
+
+struct CrosstermRestorer<'a> {
+    terminal: &'a mut Terminal<CrosstermBackend<io::Stdout>>,
+}
+
+impl TerminalRestorer for CrosstermRestorer<'_> {
+    fn disable_raw_mode(&mut self) -> io::Result<()> {
+        disable_raw_mode()
+    }
+
+    fn leave_alt_screen(&mut self) -> io::Result<()> {
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.terminal.show_cursor()?;
+        Ok(())
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut lifecycle = TerminalLifecycle::default();
+
     // Setup terminal
     enable_raw_mode()?;
+    lifecycle.mark_raw_mode_enabled();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    lifecycle.mark_alt_screen_entered();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -129,9 +188,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    let mut restorer = CrosstermRestorer {
+        terminal: &mut terminal,
+    };
+    lifecycle.restore(&mut restorer)?;
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/main.rs"]
+mod tests;

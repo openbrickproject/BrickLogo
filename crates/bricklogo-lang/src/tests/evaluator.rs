@@ -1,0 +1,425 @@
+use super::*;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn create_evaluator() -> (Evaluator, Arc<Mutex<Vec<String>>>) {
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let output_clone = output.clone();
+    let mut eval = Evaluator::new(Arc::new(move |text: &str| {
+        output_clone.lock().unwrap().push(text.to_string());
+    }));
+    crate::primitives::register_core_primitives(&mut eval);
+    (eval, output)
+}
+
+#[test]
+fn test_number() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("sum 3 4").unwrap(),
+        Some(LogoValue::Number(7.0))
+    );
+}
+
+#[test]
+fn test_infix() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("3 + 4").unwrap(),
+        Some(LogoValue::Number(7.0))
+    );
+    assert_eq!(
+        eval.evaluate("10 - 3").unwrap(),
+        Some(LogoValue::Number(7.0))
+    );
+    assert_eq!(
+        eval.evaluate("3 * 4").unwrap(),
+        Some(LogoValue::Number(12.0))
+    );
+    assert_eq!(
+        eval.evaluate("10 / 2").unwrap(),
+        Some(LogoValue::Number(5.0))
+    );
+}
+
+#[test]
+fn test_comparison() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("3 = 3").unwrap(),
+        Some(LogoValue::Word("true".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("3 = 4").unwrap(),
+        Some(LogoValue::Word("false".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("3 < 4").unwrap(),
+        Some(LogoValue::Word("true".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("4 > 3").unwrap(),
+        Some(LogoValue::Word("true".to_string()))
+    );
+}
+
+#[test]
+fn test_print() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("print \"hello").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["hello"]);
+}
+
+#[test]
+fn test_variables() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"x 42").unwrap();
+    eval.evaluate("print :x").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["42"]);
+}
+
+#[test]
+fn test_undefined_variable() {
+    let (mut eval, _) = create_evaluator();
+    assert!(eval.evaluate("print :nope").is_err());
+}
+
+#[test]
+fn test_logic() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("and \"true \"true").unwrap(),
+        Some(LogoValue::Word("true".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("and \"true \"false").unwrap(),
+        Some(LogoValue::Word("false".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("or \"false \"true").unwrap(),
+        Some(LogoValue::Word("true".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("not \"true").unwrap(),
+        Some(LogoValue::Word("false".to_string()))
+    );
+}
+
+#[test]
+fn test_list_operations() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("first [a b c]").unwrap(),
+        Some(LogoValue::Word("a".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("last [a b c]").unwrap(),
+        Some(LogoValue::Word("c".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("count [a b c]").unwrap(),
+        Some(LogoValue::Number(3.0))
+    );
+}
+
+#[test]
+fn test_repeat() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("repeat 3 [print \"hi]").unwrap();
+    assert_eq!(output.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn test_if() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("if 3 > 2 [print \"yes]").unwrap();
+    eval.evaluate("if 3 < 2 [print \"no]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["yes"]);
+}
+
+#[test]
+fn test_ifelse() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("ifelse 1 = 1 [print \"same] [print \"diff]")
+        .unwrap();
+    eval.evaluate("ifelse 1 = 2 [print \"same] [print \"diff]")
+        .unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["same", "diff"]);
+}
+
+#[test]
+fn test_ifelse_as_reporter() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("ifelse 1 = 1 [\"yes] [\"no]").unwrap(),
+        Some(LogoValue::Word("yes".to_string()))
+    );
+    assert_eq!(
+        eval.evaluate("ifelse 1 = 2 [\"yes] [\"no]").unwrap(),
+        Some(LogoValue::Word("no".to_string()))
+    );
+}
+
+#[test]
+fn test_procedure() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to greet :name print word \"Hello :name end")
+        .unwrap();
+    eval.evaluate("greet \"World").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["HelloWorld"]);
+}
+
+#[test]
+fn test_recursion() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to countdown :n if :n = 0 [print \"done stop] print :n countdown :n - 1 end")
+        .unwrap();
+    eval.evaluate("countdown 3").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["3", "2", "1", "done"]);
+}
+
+#[test]
+fn test_output() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("to double :n output :n * 2 end").unwrap();
+    assert_eq!(
+        eval.evaluate("double 5").unwrap(),
+        Some(LogoValue::Number(10.0))
+    );
+}
+
+#[test]
+fn test_didnt_output() {
+    let (mut eval, _) = create_evaluator();
+    assert!(eval.evaluate("print print 5").is_err());
+}
+
+#[test]
+fn test_unknown_procedure() {
+    let (mut eval, _) = create_evaluator();
+    assert!(eval.evaluate("blorp").is_err());
+}
+
+#[test]
+fn test_carefully_catches() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("carefully [print blorp] [print \"caught]")
+        .unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["caught"]);
+}
+
+#[test]
+fn test_carefully_no_error() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("carefully [print \"ok] [print \"error]")
+        .unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["ok"]);
+}
+
+#[test]
+fn test_carefully_as_reporter() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("carefully [sum 1 2] [0]").unwrap(),
+        Some(LogoValue::Number(3.0))
+    );
+    assert_eq!(
+        eval.evaluate("carefully [blorp] [42]").unwrap(),
+        Some(LogoValue::Number(42.0))
+    );
+}
+
+#[test]
+fn test_data_list() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("show [a b c]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["[a b c]"]);
+}
+
+#[test]
+fn test_division_by_zero() {
+    let (mut eval, _) = create_evaluator();
+    assert!(eval.evaluate("quotient 5 0").is_err());
+}
+
+#[test]
+fn test_stop_in_procedure() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test print \"before stop print \"after end")
+        .unwrap();
+    eval.evaluate("test").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["before"]);
+}
+
+#[test]
+fn test_request_stop() {
+    let (mut eval, _) = create_evaluator();
+    let stop = eval.stop_flag();
+    eval.register_primitive(
+        "tick",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(move |_, _, _| {
+                stop.store(true, Ordering::SeqCst);
+                Ok(None)
+            }),
+        },
+    );
+    assert!(eval.evaluate("forever [tick]").is_err());
+}
+
+#[test]
+fn test_page_commands_round_trip() {
+    let (mut eval, _) = create_evaluator();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-test-{}", unique));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+        .unwrap();
+    eval.evaluate("to greet print \"hi end").unwrap();
+    eval.evaluate("namepage \"demo").unwrap();
+    eval.evaluate("save").unwrap();
+
+    let saved_path = temp_dir.join("demo.logo");
+    assert!(saved_path.exists());
+
+    let (mut loaded_eval, output) = create_evaluator();
+    loaded_eval
+        .evaluate(&format!("setdisk \"{}", temp_dir.display()))
+        .unwrap();
+    loaded_eval.evaluate("load \"demo").unwrap();
+    loaded_eval.evaluate("greet").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["hi"]);
+
+    std::fs::remove_dir_all(&temp_dir).unwrap();
+}
+
+#[test]
+fn test_disk_reports_current_directory() {
+    let (mut eval, _) = create_evaluator();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-disk-{}", unique));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+        .unwrap();
+    assert_eq!(
+        eval.evaluate("disk").unwrap(),
+        Some(LogoValue::Word(temp_dir.display().to_string()))
+    );
+
+    std::fs::remove_dir_all(&temp_dir).unwrap();
+}
+
+#[test]
+fn test_save_without_namepage_errors() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("save").unwrap_err();
+    assert_eq!(err.to_string(), "No page name set (use namepage first)");
+}
+
+#[test]
+fn test_load_missing_page_errors() {
+    let (mut eval, _) = create_evaluator();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-missing-{}", unique));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+        .unwrap();
+    let err = eval.evaluate("load \"missing").unwrap_err();
+    assert!(err.to_string().starts_with("Could not load:"));
+
+    std::fs::remove_dir_all(&temp_dir).unwrap();
+}
+
+#[test]
+fn test_setdisk_missing_path_errors() {
+    let (mut eval, _) = create_evaluator();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let missing = std::env::temp_dir().join(format!("bricklogo-lang-nope-{}", unique));
+    let err = eval
+        .evaluate(&format!("setdisk \"{}", missing.display()))
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("Directory not found: {}", missing.display())
+    );
+}
+
+#[test]
+fn test_erase_missing_procedure_errors() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("erase \"ghost").unwrap_err();
+    assert_eq!(err.to_string(), "No procedure named \"ghost\"");
+}
+
+#[test]
+fn test_page_commands_work_inside_procedure() {
+    let (mut eval, output) = create_evaluator();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-proc-{}", unique));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+        .unwrap();
+    eval.evaluate("to greet print \"hi end").unwrap();
+    eval.evaluate("to persist namepage \"inside save end")
+        .unwrap();
+    eval.evaluate("persist").unwrap();
+    assert!(temp_dir.join("inside.logo").exists());
+
+    eval.evaluate("erase \"greet").unwrap();
+    assert!(eval.evaluate("greet").is_err());
+
+    eval.evaluate("to restore load \"inside end").unwrap();
+    eval.evaluate("restore").unwrap();
+    eval.evaluate("greet").unwrap();
+    assert_eq!(
+        output.lock().unwrap().last().map(String::as_str),
+        Some("hi")
+    );
+
+    std::fs::remove_dir_all(&temp_dir).unwrap();
+}
+
+#[test]
+fn test_infix_with_parens_and_calls() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("to double :n output :n * 2 end").unwrap();
+
+    assert_eq!(
+        eval.evaluate("(sum 2 3) * 4").unwrap(),
+        Some(LogoValue::Number(20.0))
+    );
+    assert_eq!(
+        eval.evaluate("double 3 + 1").unwrap(),
+        Some(LogoValue::Number(8.0))
+    );
+}
+
+#[test]
+fn test_infix_is_left_associative_without_precedence() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(
+        eval.evaluate("3 + 4 * 5").unwrap(),
+        Some(LogoValue::Number(35.0))
+    );
+}

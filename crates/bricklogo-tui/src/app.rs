@@ -416,3 +416,7 @@ impl App {
         lines
     }
 }
+
+#[cfg(test)]
+#[path = "tests/app.rs"]
+mod tests;
