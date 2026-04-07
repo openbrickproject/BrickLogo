@@ -26,7 +26,7 @@ if [ "$PLATFORM" = "windows" ]; then
     BINARY="bricklogo.exe"
 fi
 
-ZIP_NAME="bricklogo-${VERSION}-${PLATFORM}-${ARCH}.zip"
+ZIP_NAME="bricklogo-v${VERSION}-${PLATFORM}-${ARCH}.zip"
 
 echo "Building BrickLogo v${VERSION} for ${PLATFORM}-${ARCH}..."
 cargo build --release --bin bricklogo
