@@ -3,6 +3,27 @@ use hidapi::{HidApi, HidDevice};
 use crate::constants::*;
 use crate::protocol::*;
 
+/// Pre-flight check for WeDo USB device presence on macOS.
+/// hidapi's IOKit backend can SIGTRAP on macOS Sequoia when no HID device
+/// is present, so we check via ioreg before touching hidapi.
+#[cfg(target_os = "macos")]
+fn wedo_usb_present() -> bool {
+    std::process::Command::new("ioreg")
+        .args(["-r", "-c", "IOUSBHostDevice", "-l"])
+        .output()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            s.contains(&format!("\"idVendor\" = {}", WEDO_VENDOR_ID))
+                && s.contains(&format!("\"idProduct\" = {}", WEDO_PRODUCT_ID))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wedo_usb_present() -> bool {
+    true // Only macOS needs the pre-flight; other platforms go straight to hidapi
+}
+
 #[derive(Debug, Clone)]
 pub struct WeDoDeviceInfo {
     pub path: String,
@@ -84,6 +105,9 @@ impl WeDo {
 
     /// Discover all connected WeDo hubs.
     pub fn discover() -> Result<Vec<WeDoDeviceInfo>, String> {
+        if !wedo_usb_present() {
+            return Ok(Vec::new());
+        }
         let api = HidApi::new().map_err(|e| format!("Failed to init HID: {}", e))?;
         let devices = api.device_list()
             .filter(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
@@ -103,6 +127,9 @@ impl WeDo {
 
     /// Connect to a WeDo hub.
     pub fn connect(&mut self) -> Result<(), String> {
+        if !wedo_usb_present() {
+            return Err("No WeDo device found".to_string());
+        }
         let api = HidApi::new().map_err(|e| format!("Failed to init HID: {}", e))?;
 
         let device = if let Some(ref path) = self.target_path {
