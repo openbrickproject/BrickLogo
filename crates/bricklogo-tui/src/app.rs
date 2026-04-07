@@ -61,7 +61,14 @@ impl App {
 
         let stop_flag = evaluator.stop_flag();
         let port_manager = Arc::new(Mutex::new(PortManager::new()));
-        register_hardware_primitives(&mut evaluator, port_manager.clone());
+        let system_output = output_lines_ref.clone();
+        let system_fn: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |text: &str| {
+            system_output.lock().unwrap().push(OutputLine {
+                text: text.to_string(),
+                line_type: OutputLineType::System,
+            });
+        });
+        register_hardware_primitives(&mut evaluator, port_manager.clone(), system_fn);
 
         App {
             output_lines,

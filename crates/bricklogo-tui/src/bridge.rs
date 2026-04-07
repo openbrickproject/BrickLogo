@@ -41,6 +41,7 @@ impl BrickLogoConfig {
 pub fn register_hardware_primitives(
     eval: &mut Evaluator,
     pm: Arc<Mutex<PortManager>>,
+    system_fn: Arc<dyn Fn(&str) + Send + Sync>,
 ) {
     let config = Arc::new(Mutex::new(BrickLogoConfig::load()));
     let used_indices: Arc<Mutex<std::collections::HashMap<String, usize>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -50,7 +51,7 @@ pub fn register_hardware_primitives(
     let pm_ref = pm.clone();
     let config_ref = config.clone();
     let indices_ref = used_indices.clone();
-    let output_fn = eval.output_fn();
+    let system_fn_ref = system_fn.clone();
     let stop_flag = eval.stop_flag();
     eval.register_primitive("connect", PrimitiveSpec {
         min_args: 2, max_args: 2,
@@ -84,7 +85,7 @@ pub fn register_hardware_primitives(
                 "wedo" => {
                     let identifier = next_config_entry(&config.wedo, &mut indices, "wedo");
                     let mut adapter = WeDoAdapter::new(identifier.as_deref());
-                    output_fn("Scanning for LEGO WeDo...");
+                    system_fn_ref("Scanning for LEGO WeDo...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                     Box::new(adapter)
                 }
@@ -92,21 +93,21 @@ pub fn register_hardware_primitives(
                     let serial_path = next_config_entry(&config.controllab, &mut indices, "controllab")
                         .ok_or_else(|| LogoError::Runtime("No Control Lab serial port configured in bricklogo.config.json".to_string()))?;
                     let mut adapter = ControlLabAdapter::new(&serial_path);
-                    output_fn("Scanning for LEGO Control Lab...");
+                    system_fn_ref("Scanning for LEGO Control Lab...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                     Box::new(adapter)
                 }
                 "science" => {
                     let mut adapter = CoralAdapter::new();
                     adapter.set_stop_flag(stop_flag.clone());
-                    output_fn("Scanning for LEGO Education Science...");
+                    system_fn_ref("Scanning for LEGO Education Science...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                     Box::new(adapter)
                 }
                 "pup" => {
                     let mut adapter = PoweredUpAdapter::new();
                     adapter.set_stop_flag(stop_flag.clone());
-                    output_fn("Scanning for Powered UP hub...");
+                    system_fn_ref("Scanning for Powered UP hub...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                     Box::new(adapter)
                 }
@@ -118,7 +119,7 @@ pub fn register_hardware_primitives(
             // Brief lock to register the connected adapter
             let display = adapter.display_name().to_string();
             pm_ref.lock().unwrap().add_device(&name, adapter);
-            output_fn(&format!("Connected to {} as \"{}\"", display, name));
+            system_fn_ref(&format!("Connected to {} as \"{}\"", display, name));
             Ok(None)
         }),
     });
