@@ -31,6 +31,7 @@ struct DeviceEntry {
 
 pub struct PortManager {
     devices: HashMap<String, DeviceEntry>,
+    device_order: Vec<String>,
     active_device: Option<String>,
     selected_outputs: Vec<QualifiedPort>,
     selected_inputs: Vec<QualifiedPort>,
@@ -45,6 +46,7 @@ impl PortManager {
     pub fn new() -> Self {
         PortManager {
             devices: HashMap::new(),
+            device_order: Vec::new(),
             active_device: None,
             selected_outputs: Vec::new(),
             selected_inputs: Vec::new(),
@@ -66,6 +68,7 @@ impl PortManager {
             port_states,
             last_sent: HashMap::new(),
         });
+        self.device_order.push(name.to_string());
         if self.devices.len() == 1 {
             self.active_device = Some(name.to_string());
         }
@@ -88,10 +91,13 @@ impl PortManager {
                 entry.adapter.disconnect();
             }
         }
+        self.device_order.retain(|device_name| device_name != name);
         self.selected_outputs.retain(|p| p.device_name != name);
         self.selected_inputs.retain(|p| p.device_name != name);
         if self.active_device.as_deref() == Some(name) {
-            self.active_device = self.devices.keys().next().cloned();
+            self.active_device = self.device_order.iter()
+                .find(|device_name| self.devices.contains_key(device_name.as_str()))
+                .cloned();
         }
     }
 
@@ -110,6 +116,7 @@ impl PortManager {
             }
         }
         self.active_device = None;
+        self.device_order.clear();
         self.selected_outputs.clear();
         self.selected_inputs.clear();
     }
@@ -127,10 +134,22 @@ impl PortManager {
     }
 
     pub fn get_connected_device_names(&self) -> Vec<String> {
-        self.devices.iter()
-            .filter(|(_, e)| e.adapter.connected())
-            .map(|(name, _)| name.clone())
+        self.device_order.iter()
+            .filter(|name| self.devices.get(name.as_str()).is_some_and(|entry| entry.adapter.connected()))
+            .cloned()
             .collect()
+    }
+
+    pub fn get_active_device_name_owned(&self) -> Option<String> {
+        self.active_device.clone()
+    }
+
+    pub fn get_selected_output_display_ports(&self) -> Vec<String> {
+        self.format_selected_ports(&self.selected_outputs)
+    }
+
+    pub fn get_selected_input_display_ports(&self) -> Vec<String> {
+        self.format_selected_ports(&self.selected_inputs)
     }
 
     fn resolve_port(&self, port_str: &str) -> Result<QualifiedPort, String> {
@@ -146,6 +165,19 @@ impl PortManager {
                 .ok_or_else(|| "No device connected".to_string())?;
             Ok(QualifiedPort { device_name: device.clone(), port: port_str.to_string() })
         }
+    }
+
+    fn format_selected_ports(&self, ports: &[QualifiedPort]) -> Vec<String> {
+        let active = self.active_device.as_deref();
+        ports.iter()
+            .map(|qp| {
+                if active == Some(qp.device_name.as_str()) {
+                    qp.port.clone()
+                } else {
+                    format!("{}.{}", qp.device_name, qp.port)
+                }
+            })
+            .collect()
     }
 
     fn get_state(&mut self, qp: &QualifiedPort) -> &mut OutputPortState {

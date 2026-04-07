@@ -44,7 +44,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9), // header + version + blank line
-            Constraint::Length(1), // status bar
+            Constraint::Length(3), // repl context
             Constraint::Length(1), // blank line
             Constraint::Min(1),   // repl
         ])
@@ -78,24 +78,58 @@ fn draw_header(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let status = if !app.connected_devices.is_empty() {
-        let names = app.connected_devices.join(", ");
-        Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::DarkGray)),
-            Span::styled("● ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(names, Style::default().fg(Color::Green)),
-            Span::styled("]", Style::default().fg(Color::DarkGray)),
-        ])
+    let device_spans = if !app.connected_devices.is_empty() {
+        let mut spans = vec![
+            Span::styled("[devices: ", Style::default().fg(Color::DarkGray)),
+        ];
+        let active = app.active_device.as_deref();
+        for (index, name) in app.connected_devices.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let is_active = active == Some(name.as_str());
+            spans.push(Span::styled(
+                if is_active { format!("{}*", name) } else { name.clone() },
+                Style::default().fg(if is_active { Color::Green } else { Color::White }).add_modifier(
+                    if is_active { Modifier::BOLD } else { Modifier::empty() }
+                ),
+            ));
+        }
+        spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        spans
     } else {
-        Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::DarkGray)),
-            Span::styled("● ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled("Disconnected", Style::default().fg(Color::Red)),
+        vec![
+            Span::styled("[devices: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("none", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled("]", Style::default().fg(Color::DarkGray)),
-        ])
+        ]
     };
 
-    frame.render_widget(Paragraph::new(status), area);
+    let talkto = format_selection_line("talkto", &app.selected_outputs);
+    let listento = format_selection_line("listento", &app.selected_inputs);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(device_spans),
+            Line::from(talkto),
+            Line::from(listento),
+        ]),
+        area,
+    );
+}
+
+fn format_selection_line(label: &str, ports: &[String]) -> Vec<Span<'static>> {
+    let value = if ports.is_empty() {
+        "-".to_string()
+    } else {
+        ports.join(" ")
+    };
+
+    vec![
+        Span::styled(format!("[{}: ", label), Style::default().fg(Color::DarkGray)),
+        Span::styled(value, Style::default().fg(Color::Cyan)),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
+    ]
 }
 
 fn draw_repl(frame: &mut Frame, app: &App, area: Rect) {

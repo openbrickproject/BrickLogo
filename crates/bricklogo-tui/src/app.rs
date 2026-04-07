@@ -32,6 +32,9 @@ pub struct App {
     pub cursor_position: usize,
     pub busy: bool,
     pub connected_devices: Vec<String>,
+    pub active_device: Option<String>,
+    pub selected_outputs: Vec<String>,
+    pub selected_inputs: Vec<String>,
     pub should_quit: bool,
     pub help_mode: bool,
     pub help_scroll: usize,
@@ -78,6 +81,9 @@ impl App {
             cursor_position: 0,
             busy: false,
             connected_devices: Vec::new(),
+            active_device: None,
+            selected_outputs: Vec::new(),
+            selected_inputs: Vec::new(),
             should_quit: false,
             help_mode: false,
             help_scroll: 0,
@@ -109,9 +115,30 @@ impl App {
         let mut changed = self.drain_output_buffer();
 
         // Sync connected device names from port manager
-        let devices = self.port_manager.lock().unwrap().get_connected_device_names();
+        let (devices, active_device, selected_outputs, selected_inputs) = {
+            let pm = self.port_manager.lock().unwrap();
+            (
+                pm.get_connected_device_names(),
+                pm.get_active_device_name_owned(),
+                pm.get_selected_output_display_ports(),
+                pm.get_selected_input_display_ports(),
+            )
+        };
+
         if devices != self.connected_devices {
             self.connected_devices = devices;
+            changed = true;
+        }
+        if active_device != self.active_device {
+            self.active_device = active_device;
+            changed = true;
+        }
+        if selected_outputs != self.selected_outputs {
+            self.selected_outputs = selected_outputs;
+            changed = true;
+        }
+        if selected_inputs != self.selected_inputs {
+            self.selected_inputs = selected_inputs;
             changed = true;
         }
 
