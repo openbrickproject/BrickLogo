@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 
 #[derive(Debug, Clone)]
 pub struct OutputPortState {
@@ -172,6 +172,44 @@ impl PortManager {
         Ok(())
     }
 
+    /// Group ports by device name, collecting their current state.
+    fn group_by_device(&self, ports: &[QualifiedPort]) -> Vec<(String, Vec<(String, PortDirection, u8)>)> {
+        let mut groups: HashMap<String, Vec<(String, PortDirection, u8)>> = HashMap::new();
+        for qp in ports {
+            let entry = self.devices.get(&qp.device_name).unwrap();
+            let state = entry.port_states.get(&qp.port).cloned()
+                .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
+            groups.entry(qp.device_name.clone())
+                .or_default()
+                .push((qp.port.clone(), state.direction, power_to_percent(state.power)));
+        }
+        groups.into_iter().collect()
+    }
+
+    /// Batch start ports, grouped by device.
+    fn batch_start(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
+        let groups = self.group_by_device(ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let commands: Vec<PortCommand> = port_cmds.iter()
+                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+                .collect();
+            entry.adapter.start_ports(&commands)?;
+        }
+        Ok(())
+    }
+
+    /// Batch stop ports, grouped by device.
+    fn batch_stop(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
+        let groups = self.group_by_device(ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let port_refs: Vec<&str> = port_cmds.iter().map(|(p, _, _)| p.as_str()).collect();
+            entry.adapter.stop_ports(&port_refs)?;
+        }
+        Ok(())
+    }
+
     fn cancel_flash(&mut self, qp: &QualifiedPort) {
         let key = format!("{}:{}", qp.device_name, qp.port);
         if self.flash_timers.remove(&key).is_some() {
@@ -259,8 +297,9 @@ impl PortManager {
         for qp in &ports {
             self.cancel_flash(qp);
             self.get_state(qp).is_running = true;
-            self.sync_port(qp)?;
         }
+        // Batch start per device
+        self.batch_start(&ports)?;
         Ok(())
     }
 
@@ -274,8 +313,9 @@ impl PortManager {
         for qp in &ports {
             self.cancel_flash(qp);
             self.get_state(qp).is_running = false;
-            self.sync_port(qp)?;
         }
+        // Batch stop per device
+        self.batch_stop(&ports)?;
         Ok(())
     }
 
@@ -290,13 +330,17 @@ impl PortManager {
         for qp in &ports {
             self.cancel_flash(qp);
         }
-        // Run all ports — in Rust without async, we do them sequentially
-        // TODO: use threads for parallel execution
-        for qp in &ports {
-            let state = self.get_state(qp).clone();
-            let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.run_port_for_time(&qp.port, state.direction, power_to_percent(state.power), tenths)?;
+
+        // Group by device and call batch method
+        let groups = self.group_by_device(&ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let commands: Vec<PortCommand> = port_cmds.iter()
+                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+                .collect();
+            entry.adapter.run_ports_for_time(&commands, tenths)?;
         }
+
         for qp in &ports {
             self.get_state(qp).is_running = false;
         }
@@ -312,9 +356,15 @@ impl PortManager {
         let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
         for qp in &ports {
             self.cancel_flash(qp);
-            let state = self.get_state(qp).clone();
-            let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.rotate_port_by_degrees(&qp.port, state.direction, power_to_percent(state.power), degrees)?;
+        }
+
+        let groups = self.group_by_device(&ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let commands: Vec<PortCommand> = port_cmds.iter()
+                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+                .collect();
+            entry.adapter.rotate_ports_by_degrees(&commands, degrees)?;
         }
         Ok(())
     }
@@ -328,9 +378,15 @@ impl PortManager {
         let ports: Vec<QualifiedPort> = self.selected_outputs.clone();
         for qp in &ports {
             self.cancel_flash(qp);
-            let state = self.get_state(qp).clone();
-            let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.rotate_port_to_position(&qp.port, state.direction, power_to_percent(state.power), position)?;
+        }
+
+        let groups = self.group_by_device(&ports);
+        for (device_name, port_cmds) in groups {
+            let entry = self.devices.get_mut(&device_name).unwrap();
+            let commands: Vec<PortCommand> = port_cmds.iter()
+                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+                .collect();
+            entry.adapter.rotate_ports_to_position(&commands, position)?;
         }
         Ok(())
     }

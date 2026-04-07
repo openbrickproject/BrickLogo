@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
+use rust_controllab::protocol::get_output_port_mask;
 use rust_controllab::controllab::ControlLab;
 use rust_controllab::constants::SensorType;
 use rust_controllab::ControlLabSensorPayload;
@@ -150,5 +151,39 @@ impl HardwareAdapter for ControlLabAdapter {
             ControlLabSensorPayload::Light(p) => Ok(Some(LogoValue::Number(p.intensity as f64))),
             ControlLabSensorPayload::Rotation(p) => Ok(Some(LogoValue::Number(p.rotations as f64))),
         }
+    }
+
+    // ── Batch overrides (combined bitmask for same-power ports) ──
+
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        // Group by signed power, combine masks
+        let mut groups: HashMap<i8, u8> = HashMap::new();
+        for cmd in commands {
+            let power = to_signed_power(cmd.direction, cmd.power);
+            let mask = get_output_port_mask(cmd.port)
+                .ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
+            *groups.entry(power).or_insert(0) |= mask;
+        }
+        for (power, mask) in groups {
+            self.hub.set_power_masked(mask, power)?;
+        }
+        Ok(())
+    }
+
+    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        let mut combined_mask: u8 = 0;
+        for port in ports {
+            let mask = get_output_port_mask(port)
+                .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+            combined_mask |= mask;
+        }
+        self.hub.set_power_masked(combined_mask, 0)
+    }
+
+    fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        self.start_ports(commands)?;
+        std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
+        let ports: Vec<&str> = commands.iter().map(|c| c.port).collect();
+        self.stop_ports(&ports)
     }
 }

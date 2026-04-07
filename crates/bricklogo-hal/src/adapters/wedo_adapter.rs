@@ -1,5 +1,5 @@
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use rust_wedo::wedo::{WeDo, WeDoSensorPayload};
 
 fn to_signed_power(direction: PortDirection, power: u8) -> i32 {
@@ -133,5 +133,28 @@ impl HardwareAdapter for WeDoAdapter {
             }
             _ => Err(format!("Unsupported sensor mode \"{}\" for WeDo", effective_mode)),
         }
+    }
+
+    // ── Batch overrides (single HID write for both motors) ──
+
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        let upper: Vec<(String, i32)> = commands.iter()
+            .map(|c| (c.port.to_uppercase(), to_signed_power(c.direction, c.power)))
+            .collect();
+        let pairs: Vec<(&str, i32)> = upper.iter().map(|(p, v)| (p.as_str(), *v)).collect();
+        self.hub.set_powers(&pairs)
+    }
+
+    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        let upper: Vec<(String, i32)> = ports.iter().map(|p| (p.to_uppercase(), 0_i32)).collect();
+        let pairs: Vec<(&str, i32)> = upper.iter().map(|(p, v)| (p.as_str(), *v)).collect();
+        self.hub.set_powers(&pairs)
+    }
+
+    fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        self.start_ports(commands)?;
+        std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
+        let ports: Vec<&str> = commands.iter().map(|c| c.port).collect();
+        self.stop_ports(&ports)
     }
 }

@@ -286,6 +286,40 @@ impl PoweredUpBle {
         }
     }
 
+    /// Send multiple commands and wait for all their feedback.
+    pub fn request_all(&self, commands: &[(u8, Vec<u8>)]) -> Result<(), String> {
+        let mut pending: Vec<u8> = Vec::new();
+        for (port_id, data) in commands {
+            self.send(data)?;
+            pending.push(*port_id);
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let rx = self.feedback_rx.as_ref().ok_or("No feedback channel")?;
+
+        while !pending.is_empty() {
+            if std::time::Instant::now() > deadline {
+                return Err("Request timed out".to_string());
+            }
+            if self.is_stop_requested() {
+                return Err("Cancelled".to_string());
+            }
+
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(fb) => {
+                    if fb.is_completed() || fb.is_discarded() {
+                        pending.retain(|&id| id != fb.port_id);
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("Connection lost".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Subscribe to a sensor mode on a port.
     pub fn subscribe(&self, port_id: u8, mode: u8) -> Result<(), String> {
         let cmd = protocol::cmd_subscribe(port_id, mode);

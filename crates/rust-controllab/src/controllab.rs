@@ -129,6 +129,19 @@ impl ControlLab {
         self.write_bytes(&cmd)
     }
 
+    /// Set power for multiple ports in a single serial write using combined bitmask.
+    /// All ports must share the same power value.
+    pub fn set_power_masked(&mut self, mask: u8, power: i8) -> Result<(), String> {
+        if !self.is_connected() {
+            return Err("Control Lab not connected".to_string());
+        }
+        if power < -8 || power > 8 {
+            return Err("Power must be between -8 and 8".to_string());
+        }
+        let cmd = encode_output_power(mask, power);
+        self.write_bytes(&cmd)
+    }
+
     pub fn set_sensor_type(&mut self, input_port: usize, sensor_type: SensorType) {
         if input_port >= 1 && input_port <= INPUT_PORT_COUNT {
             let idx = input_port - 1;

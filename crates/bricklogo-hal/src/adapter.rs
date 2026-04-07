@@ -25,6 +25,13 @@ impl fmt::Display for PortDirection {
     }
 }
 
+/// Per-port command parameters for batch operations.
+pub struct PortCommand<'a> {
+    pub port: &'a str,
+    pub direction: PortDirection,
+    pub power: u8,
+}
+
 /// Trait that all hardware adapters must implement.
 /// Each adapter represents a connection to a specific LEGO device.
 pub trait HardwareAdapter: Send {
@@ -48,4 +55,50 @@ pub trait HardwareAdapter: Send {
     fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String>;
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String>;
+
+    // ── Batch operations (default: sequential) ───
+
+    /// Start multiple ports simultaneously.
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        for cmd in commands {
+            self.start_port(cmd.port, cmd.direction, cmd.power)?;
+        }
+        Ok(())
+    }
+
+    /// Stop multiple ports simultaneously.
+    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        for port in ports {
+            self.stop_port(port)?;
+        }
+        Ok(())
+    }
+
+    /// Run multiple ports for the same duration simultaneously.
+    fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        for cmd in commands {
+            self.start_port(cmd.port, cmd.direction, cmd.power)?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
+        for cmd in commands {
+            self.stop_port(cmd.port)?;
+        }
+        Ok(())
+    }
+
+    /// Rotate multiple ports by the same degrees simultaneously.
+    fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
+        for cmd in commands {
+            self.rotate_port_by_degrees(cmd.port, cmd.direction, cmd.power, degrees)?;
+        }
+        Ok(())
+    }
+
+    /// Rotate multiple ports to the same position simultaneously.
+    fn rotate_ports_to_position(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
+        for cmd in commands {
+            self.rotate_port_to_position(cmd.port, cmd.direction, cmd.power, position)?;
+        }
+        Ok(())
+    }
 }

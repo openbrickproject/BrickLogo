@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use rust_poweredup::ble::PoweredUpBle;
 use rust_poweredup::constants::*;
 use rust_poweredup::devices::{self, SensorReading};
@@ -286,5 +286,68 @@ impl HardwareAdapter for PoweredUpAdapter {
         let hub = self.ble.hub.lock().unwrap();
         let reading = hub.last_reading(port_id).map(reading_to_logo);
         Ok(reading)
+    }
+
+    // ── Batch overrides ─────────────────────────
+
+    fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        // Check which ports are tacho vs basic
+        let mut tacho_cmds: Vec<(u8, Vec<u8>)> = Vec::new();
+        let mut basic_ports: Vec<(u8, PortDirection, u8)> = Vec::new();
+
+        for cmd in commands {
+            let port_id = self.resolve_port_id(cmd.port)?;
+            let speed = to_signed_speed(cmd.direction, cmd.power);
+            let is_tacho = {
+                let hub = self.ble.hub.lock().unwrap();
+                hub.get_device(port_id).map_or(false, |d| d.device_type.is_tacho_motor())
+            };
+
+            if is_tacho {
+                let time_ms = tenths * 100;
+                let msg = protocol::cmd_start_speed_for_time(port_id, time_ms as u16, speed, 100, BrakingStyle::Float, true);
+                tacho_cmds.push((port_id, msg));
+            } else {
+                basic_ports.push((port_id, cmd.direction, cmd.power));
+            }
+        }
+
+        // Start basic motors
+        for (port_id, direction, power) in &basic_ports {
+            let speed = to_signed_speed(*direction, *power);
+            let msg = protocol::cmd_set_power(*port_id, speed, true);
+            self.ble.send(&msg)?;
+        }
+
+        // Fire all tacho commands, then wait for all feedback
+        if !tacho_cmds.is_empty() {
+            self.ble.request_all(&tacho_cmds)?;
+        }
+
+        // If there were basic motors, they've been running during the tacho wait.
+        // If there were ONLY basic motors, sleep for the duration.
+        if tacho_cmds.is_empty() && !basic_ports.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
+        }
+
+        // Stop basic motors
+        for (port_id, _, _) in &basic_ports {
+            let msg = protocol::cmd_motor_stop(*port_id, true);
+            self.ble.send(&msg)?;
+        }
+
+        Ok(())
+    }
+
+    fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
+        let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
+        for cmd in commands {
+            let port_id = self.resolve_port_id(cmd.port)?;
+            let speed = to_signed_speed(cmd.direction, cmd.power);
+            let msg = protocol::cmd_start_speed_for_degrees(port_id, degrees.unsigned_abs(), speed, 100, BrakingStyle::Hold, true);
+            cmds.push((port_id, msg));
+        }
+        self.ble.request_all(&cmds)?;
+        Ok(())
     }
 }

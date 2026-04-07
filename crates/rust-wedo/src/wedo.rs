@@ -146,6 +146,18 @@ impl WeDo {
         Ok(())
     }
 
+    /// Set motor power for multiple ports in a single HID write.
+    pub fn set_powers(&mut self, ports: &[(&str, i32)]) -> Result<(), String> {
+        let device = self.device.as_ref().ok_or("WeDo not connected")?;
+        for (port, power) in ports {
+            let port_idx = self.normalize_port(port)?;
+            self.motor_values[port_idx] = normalize_power(*power);
+        }
+        let cmd = encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
+        device.write(&cmd).map_err(|e| format!("Failed to write: {}", e))?;
+        Ok(())
+    }
+
     /// Poll for sensor data and update the cache.
     /// Call this periodically to keep sensor data fresh.
     pub fn poll_sensors(&mut self) -> Result<(), String> {
