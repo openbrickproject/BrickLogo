@@ -8,8 +8,7 @@ fn is_infix(ch: char) -> bool {
 }
 
 fn is_delimiter(ch: char) -> bool {
-    matches!(ch, ' ' | '\t' | '\n' | '\r' | '[' | ']' | '(' | ')' | ';')
-        || is_infix(ch)
+    matches!(ch, ' ' | '\t' | '\n' | '\r' | '[' | ']' | '(' | ')' | ';') || is_infix(ch)
 }
 
 fn is_quoted_word_delimiter(ch: char) -> bool {
@@ -65,22 +64,50 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
 
         // Brackets
         if ch == '[' {
-            tokens.push(Token { token_type: TokenType::OpenBracket, value: "[".to_string(), line, col });
-            i += 1; col += 1; continue;
+            tokens.push(Token {
+                token_type: TokenType::OpenBracket,
+                value: "[".to_string(),
+                line,
+                col,
+            });
+            i += 1;
+            col += 1;
+            continue;
         }
         if ch == ']' {
-            tokens.push(Token { token_type: TokenType::CloseBracket, value: "]".to_string(), line, col });
-            i += 1; col += 1; continue;
+            tokens.push(Token {
+                token_type: TokenType::CloseBracket,
+                value: "]".to_string(),
+                line,
+                col,
+            });
+            i += 1;
+            col += 1;
+            continue;
         }
 
         // Parens
         if ch == '(' {
-            tokens.push(Token { token_type: TokenType::OpenParen, value: "(".to_string(), line, col });
-            i += 1; col += 1; continue;
+            tokens.push(Token {
+                token_type: TokenType::OpenParen,
+                value: "(".to_string(),
+                line,
+                col,
+            });
+            i += 1;
+            col += 1;
+            continue;
         }
         if ch == ')' {
-            tokens.push(Token { token_type: TokenType::CloseParen, value: ")".to_string(), line, col });
-            i += 1; col += 1; continue;
+            tokens.push(Token {
+                token_type: TokenType::CloseParen,
+                value: ")".to_string(),
+                line,
+                col,
+            });
+            i += 1;
+            col += 1;
+            continue;
         }
 
         // Infix operators (but not negative numbers)
@@ -88,14 +115,24 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
             if ch == '-' && i + 1 < chars.len() && is_digit(chars[i + 1]) {
                 let prev = tokens.last().map(|t| &t.token_type);
                 if prev.is_none()
-                    || matches!(prev, Some(TokenType::OpenBracket | TokenType::OpenParen | TokenType::Infix | TokenType::Newline))
+                    || matches!(
+                        prev,
+                        Some(
+                            TokenType::OpenBracket
+                                | TokenType::OpenParen
+                                | TokenType::Infix
+                                | TokenType::Newline
+                        )
+                    )
                 {
                     // Parse as negative number
                     let start = i;
                     let start_col = col;
-                    i += 1; col += 1;
+                    i += 1;
+                    col += 1;
                     while i < chars.len() && (is_digit(chars[i]) || chars[i] == '.') {
-                        i += 1; col += 1;
+                        i += 1;
+                        col += 1;
                     }
                     tokens.push(Token {
                         token_type: TokenType::Number,
@@ -106,8 +143,15 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
                     continue;
                 }
             }
-            tokens.push(Token { token_type: TokenType::Infix, value: ch.to_string(), line, col });
-            i += 1; col += 1; continue;
+            tokens.push(Token {
+                token_type: TokenType::Infix,
+                value: ch.to_string(),
+                line,
+                col,
+            });
+            i += 1;
+            col += 1;
+            continue;
         }
 
         // Numbers
@@ -115,7 +159,8 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
             let start = i;
             let start_col = col;
             while i < chars.len() && (is_digit(chars[i]) || chars[i] == '.') {
-                i += 1; col += 1;
+                i += 1;
+                col += 1;
             }
             tokens.push(Token {
                 token_type: TokenType::Number,
@@ -129,19 +174,26 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
         // Quoted word: "hello or "|hello world|
         if ch == '"' {
             let start_col = col;
-            i += 1; col += 1;
+            i += 1;
+            col += 1;
             if i < chars.len() && chars[i] == '|' {
                 // "|...|
-                i += 1; col += 1;
+                i += 1;
+                col += 1;
                 let start = i;
                 while i < chars.len() && chars[i] != '|' {
-                    if chars[i] == '\n' { line += 1; col = 0; }
-                    i += 1; col += 1;
+                    if chars[i] == '\n' {
+                        line += 1;
+                        col = 0;
+                    }
+                    i += 1;
+                    col += 1;
                 }
                 if i >= chars.len() {
                     return Err(LogoError::Syntax {
                         message: "Missing closing '|'".to_string(),
-                        line, col,
+                        line,
+                        col,
                     });
                 }
                 tokens.push(Token {
@@ -150,11 +202,13 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
                     line,
                     col: start_col,
                 });
-                i += 1; col += 1; // skip closing |
+                i += 1;
+                col += 1; // skip closing |
             } else {
                 let start = i;
                 while i < chars.len() && !is_quoted_word_delimiter(chars[i]) {
-                    i += 1; col += 1;
+                    i += 1;
+                    col += 1;
                 }
                 tokens.push(Token {
                     token_type: TokenType::QuotedWord,
@@ -169,15 +223,18 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
         // Variable reference: :name
         if ch == ':' {
             let start_col = col;
-            i += 1; col += 1;
+            i += 1;
+            col += 1;
             let start = i;
             while i < chars.len() && !is_delimiter(chars[i]) {
-                i += 1; col += 1;
+                i += 1;
+                col += 1;
             }
             if i == start {
                 return Err(LogoError::Syntax {
                     message: "Expected variable name after ':'".to_string(),
-                    line, col,
+                    line,
+                    col,
                 });
             }
             let name: String = chars[start..i].iter().collect();
@@ -195,7 +252,8 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
             let start = i;
             let start_col = col;
             while i < chars.len() && is_word_char(chars[i]) {
-                i += 1; col += 1;
+                i += 1;
+                col += 1;
             }
             let word: String = chars[start..i].iter().collect();
             tokens.push(Token {
@@ -209,11 +267,17 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
 
         return Err(LogoError::Syntax {
             message: format!("Unexpected character '{}'", ch),
-            line, col,
+            line,
+            col,
         });
     }
 
-    tokens.push(Token { token_type: TokenType::Eof, value: String::new(), line, col });
+    tokens.push(Token {
+        token_type: TokenType::Eof,
+        value: String::new(),
+        line,
+        col,
+    });
     Ok(tokens)
 }
 
@@ -316,7 +380,10 @@ mod tests {
     #[test]
     fn test_comments() {
         let tokens = tokenize("print 5 ; this is a comment\nprint 6").unwrap();
-        let words: Vec<_> = tokens.iter().filter(|t| t.token_type == TokenType::Word).collect();
+        let words: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.token_type == TokenType::Word)
+            .collect();
         assert_eq!(words.len(), 2);
     }
 

@@ -58,13 +58,17 @@ pub enum AttachedIoEvent {
 }
 
 pub fn parse_attached_io(msg: &[u8]) -> Option<AttachedIoEvent> {
-    if msg.len() < 5 { return None; }
+    if msg.len() < 5 {
+        return None;
+    }
     let port_id = msg[3];
     let event = msg[4];
     match event {
         0x00 => Some(AttachedIoEvent::Detached { port_id }),
         0x01 => {
-            if msg.len() < 7 { return None; }
+            if msg.len() < 7 {
+                return None;
+            }
             let device_type_raw = u16::from_le_bytes([msg[5], msg[6]]);
             Some(AttachedIoEvent::Attached {
                 port_id,
@@ -72,7 +76,9 @@ pub fn parse_attached_io(msg: &[u8]) -> Option<AttachedIoEvent> {
             })
         }
         0x02 => {
-            if msg.len() < 9 { return None; }
+            if msg.len() < 9 {
+                return None;
+            }
             let device_type_raw = u16::from_le_bytes([msg[5], msg[6]]);
             Some(AttachedIoEvent::AttachedVirtual {
                 port_id,
@@ -98,7 +104,9 @@ pub enum HubPropertyValue {
 }
 
 pub fn parse_hub_property(msg: &[u8]) -> Option<HubPropertyValue> {
-    if msg.len() < 5 { return None; }
+    if msg.len() < 5 {
+        return None;
+    }
     let property = msg[3];
     // msg[4] = operation (0x06 = update)
     match property {
@@ -106,7 +114,9 @@ pub fn parse_hub_property(msg: &[u8]) -> Option<HubPropertyValue> {
         0x05 => Some(HubPropertyValue::Rssi(msg[5] as i8)),
         0x02 => Some(HubPropertyValue::Button(msg[5] != 0)),
         0x01 => {
-            let name = String::from_utf8_lossy(&msg[5..]).trim_end_matches('\0').to_string();
+            let name = String::from_utf8_lossy(&msg[5..])
+                .trim_end_matches('\0')
+                .to_string();
             Some(HubPropertyValue::Name(name))
         }
         0x03 => {
@@ -156,14 +166,18 @@ pub enum SensorValue {
 
 /// Parse a PORT_VALUE_SINGLE message. Returns (port_id, raw_data).
 pub fn parse_port_value(msg: &[u8]) -> Option<(u8, &[u8])> {
-    if msg.len() < 5 { return None; }
+    if msg.len() < 5 {
+        return None;
+    }
     let port_id = msg[3];
     Some((port_id, &msg[4..]))
 }
 
 /// Parse a PORT_VALUE_SINGLE message for WeDo 2.0. Offset starts at 0.
 pub fn parse_wedo2_sensor_value(msg: &[u8]) -> Option<(u8, &[u8])> {
-    if msg.len() < 3 { return None; }
+    if msg.len() < 3 {
+        return None;
+    }
     let port_id = msg[1];
     Some((port_id, &msg[2..]))
 }
@@ -192,7 +206,9 @@ impl PortFeedback {
 
 pub fn parse_port_feedback(msg: &[u8]) -> Vec<PortFeedback> {
     let mut result = Vec::new();
-    if msg.len() < 5 { return result; }
+    if msg.len() < 5 {
+        return result;
+    }
     let mut i = 3;
     while i + 1 < msg.len() {
         result.push(PortFeedback {
@@ -214,8 +230,12 @@ fn map_speed(speed: i8) -> i8 {
 /// Build acceleration/deceleration profile byte.
 fn profile_byte(use_acc: bool, use_dec: bool) -> u8 {
     let mut b: u8 = 0;
-    if use_acc { b |= 0x01; }
-    if use_dec { b |= 0x02; }
+    if use_acc {
+        b |= 0x01;
+    }
+    if use_dec {
+        b |= 0x02;
+    }
     b
 }
 
@@ -267,7 +287,14 @@ pub fn cmd_start_speed(port_id: u8, speed: i8, max_power: u8, interrupt: bool) -
 }
 
 /// Encode setSpeed with time limit (milliseconds).
-pub fn cmd_start_speed_for_time(port_id: u8, time_ms: u16, speed: i8, max_power: u8, braking: BrakingStyle, interrupt: bool) -> Vec<u8> {
+pub fn cmd_start_speed_for_time(
+    port_id: u8,
+    time_ms: u16,
+    speed: i8,
+    max_power: u8,
+    braking: BrakingStyle,
+    interrupt: bool,
+) -> Vec<u8> {
     let sc = if interrupt { 0x11 } else { 0x01 };
     let prof = profile_byte(true, true);
     let time_bytes = time_ms.to_le_bytes();
@@ -276,7 +303,8 @@ pub fn cmd_start_speed_for_time(port_id: u8, time_ms: u16, speed: i8, max_power:
         port_id,
         sc,
         SUBCMD_START_SPEED_FOR_TIME,
-        time_bytes[0], time_bytes[1],
+        time_bytes[0],
+        time_bytes[1],
         map_speed(speed) as u8,
         max_power,
         braking as u8,
@@ -285,7 +313,14 @@ pub fn cmd_start_speed_for_time(port_id: u8, time_ms: u16, speed: i8, max_power:
 }
 
 /// Encode rotateByDegrees.
-pub fn cmd_start_speed_for_degrees(port_id: u8, degrees: u32, speed: i8, max_power: u8, braking: BrakingStyle, interrupt: bool) -> Vec<u8> {
+pub fn cmd_start_speed_for_degrees(
+    port_id: u8,
+    degrees: u32,
+    speed: i8,
+    max_power: u8,
+    braking: BrakingStyle,
+    interrupt: bool,
+) -> Vec<u8> {
     let sc = if interrupt { 0x11 } else { 0x01 };
     let prof = profile_byte(true, true);
     let deg_bytes = degrees.to_le_bytes();
@@ -294,7 +329,10 @@ pub fn cmd_start_speed_for_degrees(port_id: u8, degrees: u32, speed: i8, max_pow
         port_id,
         sc,
         SUBCMD_START_SPEED_FOR_DEGREES,
-        deg_bytes[0], deg_bytes[1], deg_bytes[2], deg_bytes[3],
+        deg_bytes[0],
+        deg_bytes[1],
+        deg_bytes[2],
+        deg_bytes[3],
         map_speed(speed) as u8,
         max_power,
         braking as u8,
@@ -303,7 +341,14 @@ pub fn cmd_start_speed_for_degrees(port_id: u8, degrees: u32, speed: i8, max_pow
 }
 
 /// Encode gotoAbsolutePosition.
-pub fn cmd_goto_absolute(port_id: u8, position: i32, speed: i8, max_power: u8, braking: BrakingStyle, interrupt: bool) -> Vec<u8> {
+pub fn cmd_goto_absolute(
+    port_id: u8,
+    position: i32,
+    speed: i8,
+    max_power: u8,
+    braking: BrakingStyle,
+    interrupt: bool,
+) -> Vec<u8> {
     let sc = if interrupt { 0x11 } else { 0x01 };
     let prof = profile_byte(true, true);
     let pos_bytes = position.to_le_bytes();
@@ -312,7 +357,10 @@ pub fn cmd_goto_absolute(port_id: u8, position: i32, speed: i8, max_power: u8, b
         port_id,
         sc,
         SUBCMD_GOTO_ABSOLUTE,
-        pos_bytes[0], pos_bytes[1], pos_bytes[2], pos_bytes[3],
+        pos_bytes[0],
+        pos_bytes[1],
+        pos_bytes[2],
+        pos_bytes[3],
         map_speed(speed) as u8,
         max_power,
         braking as u8,
@@ -329,7 +377,10 @@ pub fn cmd_reset_zero(port_id: u8, interrupt: bool) -> Vec<u8> {
         sc,
         SUBCMD_WRITE_DIRECT_MODE,
         0x02, // mode 2 = position reset
-        0x00, 0x00, 0x00, 0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
     ])
 }
 
@@ -341,7 +392,10 @@ pub fn cmd_subscribe(port_id: u8, mode: u8) -> Vec<u8> {
         MessageType::PortInputFormatSetupSingle as u8,
         port_id,
         mode,
-        0x01, 0x00, 0x00, 0x00, // delta interval = 1
+        0x01,
+        0x00,
+        0x00,
+        0x00, // delta interval = 1
         0x01, // enable notifications
     ])
 }
@@ -352,7 +406,10 @@ pub fn cmd_unsubscribe(port_id: u8, mode: u8) -> Vec<u8> {
         MessageType::PortInputFormatSetupSingle as u8,
         port_id,
         mode,
-        0x01, 0x00, 0x00, 0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
         0x00, // disable notifications
     ])
 }
@@ -394,12 +451,36 @@ pub fn wedo2_cmd_motor(port_id: u8, power: i8) -> Vec<u8> {
 
 /// WeDo 2.0 subscribe to sensor.
 pub fn wedo2_cmd_subscribe(port_id: u8, device_type: u8, mode: u8) -> Vec<u8> {
-    vec![0x01, 0x02, port_id, device_type, mode, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01]
+    vec![
+        0x01,
+        0x02,
+        port_id,
+        device_type,
+        mode,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+    ]
 }
 
 /// WeDo 2.0 unsubscribe.
 pub fn wedo2_cmd_unsubscribe(port_id: u8, device_type: u8, mode: u8) -> Vec<u8> {
-    vec![0x01, 0x02, port_id, device_type, mode, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+    vec![
+        0x01,
+        0x02,
+        port_id,
+        device_type,
+        mode,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    ]
 }
 
 #[cfg(test)]
@@ -426,10 +507,7 @@ mod tests {
 
     #[test]
     fn test_extract_messages_multiple() {
-        let buf = vec![
-            5, 0x00, 0x45, 0x00, 0x10,
-            5, 0x00, 0x45, 0x01, 0x20,
-        ];
+        let buf = vec![5, 0x00, 0x45, 0x00, 0x10, 5, 0x00, 0x45, 0x01, 0x20];
         let (msgs, remaining) = extract_messages(&buf);
         assert_eq!(msgs.len(), 2);
         assert!(remaining.is_empty());
@@ -452,12 +530,17 @@ mod tests {
     #[test]
     fn test_parse_attached_io_attached() {
         // Attached: port 0, device type 0x003d (61 = TechnicColorSensor)
-        let msg = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let msg = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         let event = parse_attached_io(&msg).unwrap();
-        assert_eq!(event, AttachedIoEvent::Attached {
-            port_id: 0,
-            device_type: DeviceType::TechnicColorSensor,
-        });
+        assert_eq!(
+            event,
+            AttachedIoEvent::Attached {
+                port_id: 0,
+                device_type: DeviceType::TechnicColorSensor,
+            }
+        );
     }
 
     #[test]
@@ -471,12 +554,15 @@ mod tests {
     fn test_parse_attached_io_virtual() {
         let msg = vec![9, 0x00, 0x04, 0x10, 0x02, 0x26, 0x00, 0x00, 0x01];
         let event = parse_attached_io(&msg).unwrap();
-        assert_eq!(event, AttachedIoEvent::AttachedVirtual {
-            port_id: 0x10,
-            device_type: DeviceType::MediumLinearMotor,
-            first_port: 0x00,
-            second_port: 0x01,
-        });
+        assert_eq!(
+            event,
+            AttachedIoEvent::AttachedVirtual {
+                port_id: 0x10,
+                device_type: DeviceType::MediumLinearMotor,
+                first_port: 0x00,
+                second_port: 0x01,
+            }
+        );
     }
 
     #[test]
@@ -649,7 +735,10 @@ mod tests {
 
     #[test]
     fn test_feedback_flags() {
-        let fb = PortFeedback { port_id: 0, feedback: 0x0a };
+        let fb = PortFeedback {
+            port_id: 0,
+            feedback: 0x0a,
+        };
         assert!(fb.is_completed()); // 0x02 set
         assert!(fb.is_buffer_empty()); // 0x08 set
         assert!(!fb.is_discarded());

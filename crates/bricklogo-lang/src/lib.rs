@@ -1,9 +1,9 @@
+pub mod ast;
+pub mod error;
+pub mod evaluator;
+pub mod parser;
+pub mod primitives;
 pub mod token;
 pub mod tokenizer;
-pub mod ast;
-pub mod parser;
-pub mod evaluator;
-pub mod primitives;
 pub mod unparse;
-pub mod error;
 pub mod value;

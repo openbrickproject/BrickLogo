@@ -20,14 +20,20 @@ pub fn encode_motor_command(output_bits: u8, motor_a: i8, motor_b: i8) -> [u8; 9
         output_bits,
         motor_a as u8,
         motor_b as u8,
-        0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
     ]
 }
 
 /// Normalize a power value (-100..100) to the motor range (-127..127).
 pub fn normalize_power(power: i32) -> i8 {
     if power.abs() <= 100 {
-        ((power as f64 / 100.0) * MAX_MOTOR_POWER as f64).round().clamp(-127.0, 127.0) as i8
+        ((power as f64 / 100.0) * MAX_MOTOR_POWER as f64)
+            .round()
+            .clamp(-127.0, 127.0) as i8
     } else {
         power.clamp(-127, 127) as i8
     }

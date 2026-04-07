@@ -68,7 +68,9 @@ pub fn decode_sensor_message(data: &[u8]) -> Option<SensorNotification> {
 
     let mut samples = Vec::new();
     for (sensor_idx, &offset) in SENSOR_MESSAGE_OFFSETS.iter().enumerate() {
-        if offset + 1 >= data.len() { continue; }
+        if offset + 1 >= data.len() {
+            continue;
+        }
         let word = &data[offset..offset + 2];
         let raw_value = ((word[0] as u16) << 2) | (((word[1] >> 6) & 0x03) as u16);
         let state = word[1] & 0x3f;
@@ -86,7 +88,10 @@ pub fn decode_sensor_message(data: &[u8]) -> Option<SensorNotification> {
 /// Get the output port bitmask for a port letter (A-H).
 pub fn get_output_port_mask(port: &str) -> Option<u8> {
     let normalized = port.to_uppercase();
-    OUTPUT_PORTS.iter().position(|&p| p == normalized).map(|i| 1u8 << i)
+    OUTPUT_PORTS
+        .iter()
+        .position(|&p| p == normalized)
+        .map(|i| 1u8 << i)
 }
 
 #[cfg(test)]

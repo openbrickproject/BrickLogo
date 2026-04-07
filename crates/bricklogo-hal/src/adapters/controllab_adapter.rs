@@ -1,13 +1,13 @@
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
+use crate::driver::{self, DeviceSlot};
+use bricklogo_lang::value::LogoValue;
+use rust_controllab::constants::*;
+use rust_controllab::controllab::{self, ControlLabSensorPayload, process_sensor_data};
+use rust_controllab::protocol::{encode_keep_alive, encode_output_power, get_output_port_mask};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
-use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use crate::driver::{self, DeviceSlot};
-use rust_controllab::protocol::{get_output_port_mask, encode_output_power, encode_keep_alive};
-use rust_controllab::controllab::{self, ControlLabSensorPayload, process_sensor_data};
-use rust_controllab::constants::*;
 
 const OUTPUT_PORTS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h"];
 const INPUT_PORTS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -141,10 +141,18 @@ impl ControlLabAdapter {
 }
 
 impl HardwareAdapter for ControlLabAdapter {
-    fn display_name(&self) -> &str { &self.display_name }
-    fn output_ports(&self) -> &[String] { &self.output_ports }
-    fn input_ports(&self) -> &[String] { &self.input_ports }
-    fn connected(&self) -> bool { self.tx.is_some() }
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    fn output_ports(&self) -> &[String] {
+        &self.output_ports
+    }
+    fn input_ports(&self) -> &[String] {
+        &self.input_ports
+    }
+    fn connected(&self) -> bool {
+        self.tx.is_some()
+    }
 
     fn connect(&mut self) -> Result<(), String> {
         let port = controllab::connect(&self.serial_path, DEFAULT_BAUD_RATE)?;
@@ -176,12 +184,17 @@ impl HardwareAdapter for ControlLabAdapter {
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
-        if OUTPUT_PORTS.contains(&port) { Ok(()) }
-        else { Err(format!("Unknown output port \"{}\"", port)) }
+        if OUTPUT_PORTS.contains(&port) {
+            Ok(())
+        } else {
+            Err(format!("Unknown output port \"{}\"", port))
+        }
     }
 
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
-        let input_port: usize = port.parse().map_err(|_| format!("Unknown sensor port \"{}\"", port))?;
+        let input_port: usize = port
+            .parse()
+            .map_err(|_| format!("Unknown sensor port \"{}\"", port))?;
         if input_port < 1 || input_port > 8 {
             return Err(format!("Unknown sensor port \"{}\"", port));
         }
@@ -193,34 +206,64 @@ impl HardwareAdapter for ControlLabAdapter {
         Ok(())
     }
 
-    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+    fn start_port(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+    ) -> Result<(), String> {
         let mask = get_output_port_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         let signed = to_signed_power(direction, power);
-        self.tx.as_ref().ok_or("Not connected")?
-            .send(ControlLabCommand::Power { mask, power: signed })
+        self.tx
+            .as_ref()
+            .ok_or("Not connected")?
+            .send(ControlLabCommand::Power {
+                mask,
+                power: signed,
+            })
             .map_err(|_| "Send failed".to_string())
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let mask = get_output_port_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.tx.as_ref().ok_or("Not connected")?
+        self.tx
+            .as_ref()
+            .ok_or("Not connected")?
             .send(ControlLabCommand::Power { mask, power: 0 })
             .map_err(|_| "Send failed".to_string())
     }
 
-    fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
+    fn run_port_for_time(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        tenths: u32,
+    ) -> Result<(), String> {
         self.start_port(port, direction, power)?;
         std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
         self.stop_port(port)
     }
 
-    fn rotate_port_by_degrees(&mut self, _port: &str, _direction: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> {
+    fn rotate_port_by_degrees(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+        _degrees: i32,
+    ) -> Result<(), String> {
         Err("Control Lab does not support rotation by degrees".to_string())
     }
 
-    fn rotate_port_to_position(&mut self, _port: &str, _direction: PortDirection, _power: u8, _position: i32) -> Result<(), String> {
+    fn rotate_port_to_position(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+        _position: i32,
+    ) -> Result<(), String> {
         Err("Control Lab does not support rotation to position".to_string())
     }
 
@@ -228,12 +271,19 @@ impl HardwareAdapter for ControlLabAdapter {
         Err("Control Lab does not support position reset".to_string())
     }
 
-    fn rotate_to_home(&mut self, _port: &str, _direction: PortDirection, _power: u8) -> Result<(), String> {
+    fn rotate_to_home(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+    ) -> Result<(), String> {
         Err("Control Lab does not support absolute positioning".to_string())
     }
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
-        let input_port: usize = port.parse().map_err(|_| format!("Unknown sensor port \"{}\"", port))?;
+        let input_port: usize = port
+            .parse()
+            .map_err(|_| format!("Unknown sensor port \"{}\"", port))?;
         if input_port < 1 || input_port > 8 {
             return Err(format!("Unknown sensor port \"{}\"", port));
         }
@@ -241,7 +291,8 @@ impl HardwareAdapter for ControlLabAdapter {
         // Set sensor type if mode specified and changed
         if let Some(m) = mode {
             if m != "raw" {
-                if let Some((_, sensor_type)) = SENSOR_MODE_MAP.iter().find(|(name, _)| *name == m) {
+                if let Some((_, sensor_type)) = SENSOR_MODE_MAP.iter().find(|(name, _)| *name == m)
+                {
                     if self.sensor_types.get(&input_port) != Some(sensor_type) {
                         let mut shared = self.shared.lock().unwrap();
                         shared.sensor_types[input_port - 1] = *sensor_type;
@@ -260,7 +311,9 @@ impl HardwareAdapter for ControlLabAdapter {
             SensorType::Light => "light",
             SensorType::Rotation => "rotation",
             SensorType::Unknown => {
-                if mode == Some("touch") { return Ok(Some(LogoValue::Word("false".to_string()))); }
+                if mode == Some("touch") {
+                    return Ok(Some(LogoValue::Word("false".to_string())));
+                }
                 return Ok(Some(LogoValue::Number(0.0)));
             }
         };
@@ -268,22 +321,34 @@ impl HardwareAdapter for ControlLabAdapter {
 
         let payload = shared.last_payloads.get(&key);
         if payload.is_none() {
-            if mode == Some("touch") { return Ok(Some(LogoValue::Word("false".to_string()))); }
+            if mode == Some("touch") {
+                return Ok(Some(LogoValue::Word("false".to_string())));
+            }
             return Ok(Some(LogoValue::Number(0.0)));
         }
 
         let payload = payload.unwrap();
         if mode == Some("raw") {
             return match payload {
-                ControlLabSensorPayload::Touch(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
-                ControlLabSensorPayload::Temperature(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
-                ControlLabSensorPayload::Light(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
-                ControlLabSensorPayload::Rotation(p) => Ok(Some(LogoValue::Number(p.raw_value as f64))),
+                ControlLabSensorPayload::Touch(p) => {
+                    Ok(Some(LogoValue::Number(p.raw_value as f64)))
+                }
+                ControlLabSensorPayload::Temperature(p) => {
+                    Ok(Some(LogoValue::Number(p.raw_value as f64)))
+                }
+                ControlLabSensorPayload::Light(p) => {
+                    Ok(Some(LogoValue::Number(p.raw_value as f64)))
+                }
+                ControlLabSensorPayload::Rotation(p) => {
+                    Ok(Some(LogoValue::Number(p.raw_value as f64)))
+                }
             };
         }
 
         match payload {
-            ControlLabSensorPayload::Touch(p) => Ok(Some(LogoValue::Word(if p.pressed { "true" } else { "false" }.to_string()))),
+            ControlLabSensorPayload::Touch(p) => Ok(Some(LogoValue::Word(
+                if p.pressed { "true" } else { "false" }.to_string(),
+            ))),
             ControlLabSensorPayload::Temperature(p) => Ok(Some(LogoValue::Number(p.celsius))),
             ControlLabSensorPayload::Light(p) => Ok(Some(LogoValue::Number(p.intensity as f64))),
             ControlLabSensorPayload::Rotation(p) => Ok(Some(LogoValue::Number(p.rotations as f64))),
@@ -316,8 +381,11 @@ impl HardwareAdapter for ControlLabAdapter {
                 .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
             combined_mask |= mask;
         }
-        tx.send(ControlLabCommand::Power { mask: combined_mask, power: 0 })
-            .map_err(|_| "Send failed".to_string())
+        tx.send(ControlLabCommand::Power {
+            mask: combined_mask,
+            power: 0,
+        })
+        .map_err(|_| "Send failed".to_string())
     }
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {

@@ -158,45 +158,48 @@ impl DeviceType {
 
     /// Returns true if this device type has tacho (rotation) feedback.
     pub fn is_tacho_motor(&self) -> bool {
-        matches!(self,
-            DeviceType::MediumLinearMotor |
-            DeviceType::MoveHubMediumLinearMotor |
-            DeviceType::TechnicLargeLinearMotor |
-            DeviceType::TechnicXLargeLinearMotor |
-            DeviceType::TechnicMediumAngularMotor |
-            DeviceType::TechnicLargeAngularMotor |
-            DeviceType::TechnicSmallAngularMotor |
-            DeviceType::TechnicMediumAngularMotorGrey |
-            DeviceType::TechnicLargeAngularMotorGrey
+        matches!(
+            self,
+            DeviceType::MediumLinearMotor
+                | DeviceType::MoveHubMediumLinearMotor
+                | DeviceType::TechnicLargeLinearMotor
+                | DeviceType::TechnicXLargeLinearMotor
+                | DeviceType::TechnicMediumAngularMotor
+                | DeviceType::TechnicLargeAngularMotor
+                | DeviceType::TechnicSmallAngularMotor
+                | DeviceType::TechnicMediumAngularMotorGrey
+                | DeviceType::TechnicLargeAngularMotorGrey
         )
     }
 
     /// Returns true if this device type has absolute position feedback.
     pub fn is_absolute_motor(&self) -> bool {
-        matches!(self,
-            DeviceType::TechnicMediumAngularMotor |
-            DeviceType::TechnicLargeAngularMotor |
-            DeviceType::TechnicSmallAngularMotor |
-            DeviceType::TechnicMediumAngularMotorGrey |
-            DeviceType::TechnicLargeAngularMotorGrey
+        matches!(
+            self,
+            DeviceType::TechnicMediumAngularMotor
+                | DeviceType::TechnicLargeAngularMotor
+                | DeviceType::TechnicSmallAngularMotor
+                | DeviceType::TechnicMediumAngularMotorGrey
+                | DeviceType::TechnicLargeAngularMotorGrey
         )
     }
 
     /// Returns true if this device type is any kind of motor.
     pub fn is_motor(&self) -> bool {
-        matches!(self,
-            DeviceType::SimpleMediumLinearMotor |
-            DeviceType::TrainMotor |
-            DeviceType::DuploTrainBaseMotor |
-            DeviceType::MediumLinearMotor |
-            DeviceType::MoveHubMediumLinearMotor |
-            DeviceType::TechnicLargeLinearMotor |
-            DeviceType::TechnicXLargeLinearMotor |
-            DeviceType::TechnicMediumAngularMotor |
-            DeviceType::TechnicLargeAngularMotor |
-            DeviceType::TechnicSmallAngularMotor |
-            DeviceType::TechnicMediumAngularMotorGrey |
-            DeviceType::TechnicLargeAngularMotorGrey
+        matches!(
+            self,
+            DeviceType::SimpleMediumLinearMotor
+                | DeviceType::TrainMotor
+                | DeviceType::DuploTrainBaseMotor
+                | DeviceType::MediumLinearMotor
+                | DeviceType::MoveHubMediumLinearMotor
+                | DeviceType::TechnicLargeLinearMotor
+                | DeviceType::TechnicXLargeLinearMotor
+                | DeviceType::TechnicMediumAngularMotor
+                | DeviceType::TechnicLargeAngularMotor
+                | DeviceType::TechnicSmallAngularMotor
+                | DeviceType::TechnicMediumAngularMotorGrey
+                | DeviceType::TechnicLargeAngularMotorGrey
         )
     }
 }
@@ -371,8 +374,14 @@ mod tests {
         assert_eq!(hub_type_from_manufacturer_byte(64), HubType::MoveHub);
         assert_eq!(hub_type_from_manufacturer_byte(65), HubType::Hub);
         assert_eq!(hub_type_from_manufacturer_byte(66), HubType::RemoteControl);
-        assert_eq!(hub_type_from_manufacturer_byte(128), HubType::TechnicMediumHub);
-        assert_eq!(hub_type_from_manufacturer_byte(131), HubType::TechnicSmallHub);
+        assert_eq!(
+            hub_type_from_manufacturer_byte(128),
+            HubType::TechnicMediumHub
+        );
+        assert_eq!(
+            hub_type_from_manufacturer_byte(131),
+            HubType::TechnicSmallHub
+        );
         assert_eq!(hub_type_from_manufacturer_byte(32), HubType::DuploTrainBase);
         assert_eq!(hub_type_from_manufacturer_byte(99), HubType::Unknown);
     }
@@ -403,9 +412,18 @@ mod tests {
     fn test_message_type_from_u8() {
         assert_eq!(MessageType::from_u8(0x01), Some(MessageType::HubProperties));
         assert_eq!(MessageType::from_u8(0x04), Some(MessageType::HubAttachedIo));
-        assert_eq!(MessageType::from_u8(0x45), Some(MessageType::PortValueSingle));
-        assert_eq!(MessageType::from_u8(0x81), Some(MessageType::PortOutputCommand));
-        assert_eq!(MessageType::from_u8(0x82), Some(MessageType::PortOutputCommandFeedback));
+        assert_eq!(
+            MessageType::from_u8(0x45),
+            Some(MessageType::PortValueSingle)
+        );
+        assert_eq!(
+            MessageType::from_u8(0x81),
+            Some(MessageType::PortOutputCommand)
+        );
+        assert_eq!(
+            MessageType::from_u8(0x82),
+            Some(MessageType::PortOutputCommandFeedback)
+        );
         assert_eq!(MessageType::from_u8(0xFF), None);
     }
 

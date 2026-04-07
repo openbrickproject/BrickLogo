@@ -46,13 +46,37 @@ pub trait HardwareAdapter: Send {
     fn validate_output_port(&self, port: &str) -> Result<(), String>;
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String>;
 
-    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String>;
+    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8)
+    -> Result<(), String>;
     fn stop_port(&mut self, port: &str) -> Result<(), String>;
-    fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String>;
-    fn rotate_port_by_degrees(&mut self, port: &str, direction: PortDirection, power: u8, degrees: i32) -> Result<(), String>;
-    fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String>;
+    fn run_port_for_time(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        tenths: u32,
+    ) -> Result<(), String>;
+    fn rotate_port_by_degrees(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        degrees: i32,
+    ) -> Result<(), String>;
+    fn rotate_port_to_position(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        position: i32,
+    ) -> Result<(), String>;
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String>;
-    fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String>;
+    fn rotate_to_home(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+    ) -> Result<(), String>;
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String>;
 
@@ -87,7 +111,11 @@ pub trait HardwareAdapter: Send {
     }
 
     /// Rotate multiple ports by the same degrees simultaneously.
-    fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
+    fn rotate_ports_by_degrees(
+        &mut self,
+        commands: &[PortCommand],
+        degrees: i32,
+    ) -> Result<(), String> {
         for cmd in commands {
             self.rotate_port_by_degrees(cmd.port, cmd.direction, cmd.power, degrees)?;
         }
@@ -95,7 +123,11 @@ pub trait HardwareAdapter: Send {
     }
 
     /// Rotate multiple ports to the same position simultaneously.
-    fn rotate_ports_to_position(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
+    fn rotate_ports_to_position(
+        &mut self,
+        commands: &[PortCommand],
+        position: i32,
+    ) -> Result<(), String> {
         for cmd in commands {
             self.rotate_port_to_position(cmd.port, cmd.direction, cmd.power, position)?;
         }

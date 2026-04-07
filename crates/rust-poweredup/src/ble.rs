@@ -1,18 +1,15 @@
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use btleplug::api::{
-    Central, Manager as _, Peripheral as _, ScanFilter,
-    WriteType,
-};
+use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Manager, Peripheral};
 use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::constants::*;
 use crate::hub::Hub;
-use crate::protocol::{self, PortFeedback, HubPropertyValue};
 use crate::hub::HubEvent;
+use crate::protocol::{self, HubPropertyValue, PortFeedback};
 
 const LEGO_COMPANY_ID: u16 = 0x0397;
 
@@ -42,21 +39,31 @@ impl PoweredUpBle {
     }
 
     fn is_stop_requested(&self) -> bool {
-        self.stop_flag.as_ref().map_or(false, |f| f.load(Ordering::SeqCst))
+        self.stop_flag
+            .as_ref()
+            .map_or(false, |f| f.load(Ordering::SeqCst))
     }
 
     /// Scan and connect to the first Powered UP hub found.
     pub fn connect(&mut self) -> Result<(), String> {
         let manager = self.runtime.block_on(async {
-            Manager::new().await.map_err(|e| format!("BLE init failed: {}", e))
+            Manager::new()
+                .await
+                .map_err(|e| format!("BLE init failed: {}", e))
         })?;
         let adapters = self.runtime.block_on(async {
-            manager.adapters().await.map_err(|e| format!("No BLE adapter: {}", e))
+            manager
+                .adapters()
+                .await
+                .map_err(|e| format!("No BLE adapter: {}", e))
         })?;
         let adapter = adapters.into_iter().next().ok_or("No BLE adapter found")?;
 
         self.runtime.block_on(async {
-            adapter.start_scan(ScanFilter::default()).await.map_err(|e| format!("Scan failed: {}", e))
+            adapter
+                .start_scan(ScanFilter::default())
+                .await
+                .map_err(|e| format!("Scan failed: {}", e))
         })?;
 
         let lpf2_uuid = Uuid::parse_str(LPF2_SERVICE_UUID).unwrap();
@@ -75,7 +82,10 @@ impl PoweredUpBle {
             }
 
             let peripherals = self.runtime.block_on(async {
-                adapter.peripherals().await.map_err(|e| format!("Scan error: {}", e))
+                adapter
+                    .peripherals()
+                    .await
+                    .map_err(|e| format!("Scan error: {}", e))
             })?;
 
             for p in peripherals {
@@ -87,7 +97,9 @@ impl PoweredUpBle {
                 let is_lpf2 = props.services.contains(&lpf2_uuid);
                 let is_wedo2 = props.services.contains(&wedo2_uuid);
 
-                if !is_lpf2 && !is_wedo2 { continue; }
+                if !is_lpf2 && !is_wedo2 {
+                    continue;
+                }
 
                 let _ = self.runtime.block_on(adapter.stop_scan());
 
@@ -95,34 +107,49 @@ impl PoweredUpBle {
                 let hub_type = if is_wedo2 {
                     HubType::WeDo2SmartHub
                 } else {
-                    props.manufacturer_data.iter()
+                    props
+                        .manufacturer_data
+                        .iter()
                         .find(|(id, _)| **id == LEGO_COMPANY_ID)
                         .and_then(|(_, data)| {
                             // btleplug strips company ID; hub type byte is at index 1
-                            if data.len() >= 2 { Some(hub_type_from_manufacturer_byte(data[1])) }
-                            else { None }
+                            if data.len() >= 2 {
+                                Some(hub_type_from_manufacturer_byte(data[1]))
+                            } else {
+                                None
+                            }
                         })
                         .unwrap_or(HubType::Unknown)
                 };
 
                 // Connect
                 self.runtime.block_on(async {
-                    p.connect().await.map_err(|e| format!("Connect failed: {}", e))
+                    p.connect()
+                        .await
+                        .map_err(|e| format!("Connect failed: {}", e))
                 })?;
                 self.runtime.block_on(async {
-                    p.discover_services().await.map_err(|e| format!("Service discovery failed: {}", e))
+                    p.discover_services()
+                        .await
+                        .map_err(|e| format!("Service discovery failed: {}", e))
                 })?;
 
                 // Create notification stream before subscribing
                 let mut stream = self.runtime.block_on(async {
-                    p.notifications().await.map_err(|e| format!("Notification stream failed: {}", e))
+                    p.notifications()
+                        .await
+                        .map_err(|e| format!("Notification stream failed: {}", e))
                 })?;
 
                 // Subscribe to characteristics
                 let chars = p.characteristics();
 
                 if is_wedo2 {
-                    for uuid_str in &[WEDO2_PORT_TYPE_UUID, WEDO2_SENSOR_VALUE_UUID, WEDO2_BUTTON_UUID] {
+                    for uuid_str in &[
+                        WEDO2_PORT_TYPE_UUID,
+                        WEDO2_SENSOR_VALUE_UUID,
+                        WEDO2_BUTTON_UUID,
+                    ] {
                         let uuid = Uuid::parse_str(uuid_str).unwrap();
                         if let Some(c) = chars.iter().find(|c| c.uuid == uuid) {
                             let _ = self.runtime.block_on(p.subscribe(c));
@@ -132,7 +159,9 @@ impl PoweredUpBle {
                     let lpf2_char_uuid = Uuid::parse_str(LPF2_CHARACTERISTIC_UUID).unwrap();
                     if let Some(c) = chars.iter().find(|c| c.uuid == lpf2_char_uuid) {
                         self.runtime.block_on(async {
-                            p.subscribe(c).await.map_err(|e| format!("Subscribe failed: {}", e))
+                            p.subscribe(c)
+                                .await
+                                .map_err(|e| format!("Subscribe failed: {}", e))
                         })?;
                     }
                 }
@@ -171,10 +200,21 @@ impl PoweredUpBle {
 
                         // Forward command feedback events
                         for event in &events {
-                            if let HubEvent::CommandFeedback { port_id, completed, discarded } = event {
+                            if let HubEvent::CommandFeedback {
+                                port_id,
+                                completed,
+                                discarded,
+                            } = event
+                            {
                                 let _ = feedback_tx.send(PortFeedback {
                                     port_id: *port_id,
-                                    feedback: if *completed { 0x0a } else if *discarded { 0x04 } else { 0x00 },
+                                    feedback: if *completed {
+                                        0x0a
+                                    } else if *discarded {
+                                        0x04
+                                    } else {
+                                        0x00
+                                    },
                                 });
                             }
                         }
@@ -222,11 +262,15 @@ impl PoweredUpBle {
         if self.hub.lock().unwrap().hub_type.is_wedo2() {
             let uuid = Uuid::parse_str(WEDO2_MOTOR_VALUE_WRITE_UUID).unwrap();
             let chars = peripheral.characteristics();
-            let c = chars.iter().find(|c| c.uuid == uuid)
+            let c = chars
+                .iter()
+                .find(|c| c.uuid == uuid)
                 .ok_or("Motor write characteristic not found")?;
             self.runtime.block_on(async {
-                peripheral.write(c, data, WriteType::WithoutResponse)
-                    .await.map_err(|e| format!("Write failed: {}", e))
+                peripheral
+                    .write(c, data, WriteType::WithoutResponse)
+                    .await
+                    .map_err(|e| format!("Write failed: {}", e))
             })
         } else {
             self.send_to(peripheral, data)
@@ -236,11 +280,15 @@ impl PoweredUpBle {
     fn send_to(&self, peripheral: &Peripheral, data: &[u8]) -> Result<(), String> {
         let uuid = Uuid::parse_str(LPF2_CHARACTERISTIC_UUID).unwrap();
         let chars = peripheral.characteristics();
-        let c = chars.iter().find(|c| c.uuid == uuid)
+        let c = chars
+            .iter()
+            .find(|c| c.uuid == uuid)
             .ok_or("LPF2 characteristic not found")?;
         self.runtime.block_on(async {
-            peripheral.write(c, data, WriteType::WithoutResponse)
-                .await.map_err(|e| format!("Write failed: {}", e))
+            peripheral
+                .write(c, data, WriteType::WithoutResponse)
+                .await
+                .map_err(|e| format!("Write failed: {}", e))
         })
     }
 
@@ -249,11 +297,15 @@ impl PoweredUpBle {
         let peripheral = self.peripheral.as_ref().ok_or("Not connected")?;
         let uuid = Uuid::parse_str(char_uuid).unwrap();
         let chars = peripheral.characteristics();
-        let c = chars.iter().find(|c| c.uuid == uuid)
+        let c = chars
+            .iter()
+            .find(|c| c.uuid == uuid)
             .ok_or("WeDo2 characteristic not found")?;
         self.runtime.block_on(async {
-            peripheral.write(c, data, WriteType::WithoutResponse)
-                .await.map_err(|e| format!("Write failed: {}", e))
+            peripheral
+                .write(c, data, WriteType::WithoutResponse)
+                .await
+                .map_err(|e| format!("Write failed: {}", e))
         })
     }
 

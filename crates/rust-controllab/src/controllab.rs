@@ -1,9 +1,9 @@
+use crate::constants::*;
+use crate::protocol::*;
+use serialport::SerialPort;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
-use serialport::SerialPort;
-use crate::constants::*;
-use crate::protocol::*;
 
 #[derive(Debug, Clone)]
 pub struct TouchSensorPayload {
@@ -66,7 +66,8 @@ pub fn connect(path: &str, baud_rate: u32) -> Result<Box<dyn SerialPort>, String
             Ok(n) if n > 0 => buffer.extend_from_slice(&read_buf[..n]),
             _ => {}
         }
-        if buffer.windows(HANDSHAKE_INBOUND.len())
+        if buffer
+            .windows(HANDSHAKE_INBOUND.len())
             .any(|w| w == HANDSHAKE_INBOUND)
         {
             return Ok(port);
@@ -96,7 +97,9 @@ pub fn process_sensor_data(
 
             for sample in &notification.samples {
                 let port = sample.input_port;
-                if port < 1 || port > INPUT_PORT_COUNT { continue; }
+                if port < 1 || port > INPUT_PORT_COUNT {
+                    continue;
+                }
                 let idx = port - 1;
 
                 rotation_values[idx] += sample.rotation_delta as i32;
@@ -110,30 +113,62 @@ pub fn process_sensor_data(
                             TouchEvent::Released
                         };
                         let force = (100.0 - (sample.raw_value as f64 / 1024.0) * 100.0)
-                            .max(0.0).min(100.0) as u8;
-                        last_payloads.insert(format!("touch:{}", port), ControlLabSensorPayload::Touch(TouchSensorPayload {
-                            input_port: port, raw_value: sample.raw_value,
-                            event: pressed_value, pressed: pressed_value == TouchEvent::Pressed, force,
-                        }));
+                            .max(0.0)
+                            .min(100.0) as u8;
+                        last_payloads.insert(
+                            format!("touch:{}", port),
+                            ControlLabSensorPayload::Touch(TouchSensorPayload {
+                                input_port: port,
+                                raw_value: sample.raw_value,
+                                event: pressed_value,
+                                pressed: pressed_value == TouchEvent::Pressed,
+                                force,
+                            }),
+                        );
                     }
                     SensorType::Temperature => {
-                        let fahrenheit = ((760.0 - sample.raw_value as f64) / 4.4 + 32.0 * 100.0).round() / 100.0;
-                        let celsius = (((760.0 - sample.raw_value as f64) / 4.4) * (5.0 / 9.0) * 100.0).round() / 100.0;
-                        last_payloads.insert(format!("temperature:{}", port), ControlLabSensorPayload::Temperature(TemperatureSensorPayload {
-                            input_port: port, raw_value: sample.raw_value, fahrenheit, celsius,
-                        }));
+                        let fahrenheit = ((760.0 - sample.raw_value as f64) / 4.4 + 32.0 * 100.0)
+                            .round()
+                            / 100.0;
+                        let celsius =
+                            (((760.0 - sample.raw_value as f64) / 4.4) * (5.0 / 9.0) * 100.0)
+                                .round()
+                                / 100.0;
+                        last_payloads.insert(
+                            format!("temperature:{}", port),
+                            ControlLabSensorPayload::Temperature(TemperatureSensorPayload {
+                                input_port: port,
+                                raw_value: sample.raw_value,
+                                fahrenheit,
+                                celsius,
+                            }),
+                        );
                     }
                     SensorType::Light => {
-                        let intensity = (146.0 - sample.raw_value as f64 / 7.0).floor().max(0.0).min(255.0) as u8;
-                        last_payloads.insert(format!("light:{}", port), ControlLabSensorPayload::Light(LightSensorPayload {
-                            input_port: port, raw_value: sample.raw_value, intensity,
-                        }));
+                        let intensity = (146.0 - sample.raw_value as f64 / 7.0)
+                            .floor()
+                            .max(0.0)
+                            .min(255.0) as u8;
+                        last_payloads.insert(
+                            format!("light:{}", port),
+                            ControlLabSensorPayload::Light(LightSensorPayload {
+                                input_port: port,
+                                raw_value: sample.raw_value,
+                                intensity,
+                            }),
+                        );
                     }
                     SensorType::Rotation => {
                         let rotations = rotation_values[idx];
-                        last_payloads.insert(format!("rotation:{}", port), ControlLabSensorPayload::Rotation(RotationSensorPayload {
-                            input_port: port, raw_value: sample.raw_value, rotations, delta: sample.rotation_delta,
-                        }));
+                        last_payloads.insert(
+                            format!("rotation:{}", port),
+                            ControlLabSensorPayload::Rotation(RotationSensorPayload {
+                                input_port: port,
+                                raw_value: sample.raw_value,
+                                rotations,
+                                delta: sample.rotation_delta,
+                            }),
+                        );
                     }
                     SensorType::Unknown => {}
                 }
@@ -169,7 +204,12 @@ mod tests {
         msg[SENSOR_MESSAGE_LENGTH - 1] = msg[SENSOR_MESSAGE_LENGTH - 1].wrapping_add(needed as u8);
 
         let mut buffer = msg;
-        process_sensor_data(&mut buffer, &sensor_types, &mut rotation_values, &mut payloads);
+        process_sensor_data(
+            &mut buffer,
+            &sensor_types,
+            &mut rotation_values,
+            &mut payloads,
+        );
 
         let payload = payloads.get("touch:1");
         assert!(payload.is_some());
@@ -189,7 +229,10 @@ mod tests {
         for _ in 0..5 {
             let notification = SensorNotification {
                 samples: vec![SensorSample {
-                    input_port: 1, raw_value: 512, state: 5, rotation_delta: 1,
+                    input_port: 1,
+                    raw_value: 512,
+                    state: 5,
+                    rotation_delta: 1,
                 }],
             };
             // Process directly via notification handler logic
@@ -197,11 +240,15 @@ mod tests {
                 let idx = sample.input_port - 1;
                 rotation_values[idx] += sample.rotation_delta as i32;
                 let rotations = rotation_values[idx];
-                payloads.insert(format!("rotation:{}", sample.input_port),
+                payloads.insert(
+                    format!("rotation:{}", sample.input_port),
                     ControlLabSensorPayload::Rotation(RotationSensorPayload {
-                        input_port: sample.input_port, raw_value: sample.raw_value,
-                        rotations, delta: sample.rotation_delta,
-                    }));
+                        input_port: sample.input_port,
+                        raw_value: sample.raw_value,
+                        rotations,
+                        delta: sample.rotation_delta,
+                    }),
+                );
             }
         }
 

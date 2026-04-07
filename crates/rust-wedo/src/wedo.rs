@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use hidapi::{HidApi, HidDevice};
 use crate::constants::*;
 use crate::protocol::*;
+use hidapi::{HidApi, HidDevice};
+use std::collections::HashMap;
 
 /// Pre-flight check for WeDo USB device presence on macOS.
 /// hidapi's IOKit backend can SIGTRAP on macOS Sequoia when no HID device
@@ -109,7 +109,8 @@ impl WeDo {
             return Ok(Vec::new());
         }
         let api = HidApi::new().map_err(|e| format!("Failed to init HID: {}", e))?;
-        let devices = api.device_list()
+        let devices = api
+            .device_list()
             .filter(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
             .filter_map(|d| {
                 d.path().to_str().ok().map(|p| WeDoDeviceInfo {
@@ -134,18 +135,23 @@ impl WeDo {
 
         let device = if let Some(ref path) = self.target_path {
             let c_path = std::ffi::CString::new(path.as_str()).map_err(|e| e.to_string())?;
-            api.open_path(&c_path).map_err(|e| format!("Failed to open WeDo at {}: {}", path, e))?
+            api.open_path(&c_path)
+                .map_err(|e| format!("Failed to open WeDo at {}: {}", path, e))?
         } else {
             // Find first matching device
-            let dev_info = api.device_list()
+            let dev_info = api
+                .device_list()
                 .find(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
                 .ok_or_else(|| "No WeDo device found".to_string())?;
             let path = dev_info.path();
-            api.open_path(path).map_err(|e| format!("Failed to open WeDo: {}", e))?
+            api.open_path(path)
+                .map_err(|e| format!("Failed to open WeDo: {}", e))?
         };
 
         // Set non-blocking for sensor reads
-        device.set_blocking_mode(false).map_err(|e| format!("Failed to set non-blocking: {}", e))?;
+        device
+            .set_blocking_mode(false)
+            .map_err(|e| format!("Failed to set non-blocking: {}", e))?;
 
         self.device = Some(device);
         self.state = WeDoState::Ready;
@@ -168,8 +174,11 @@ impl WeDo {
         let raw_power = normalize_power(power);
         self.motor_values[port_idx] = raw_power;
 
-        let cmd = encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
-        device.write(&cmd).map_err(|e| format!("Failed to write: {}", e))?;
+        let cmd =
+            encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
+        device
+            .write(&cmd)
+            .map_err(|e| format!("Failed to write: {}", e))?;
         Ok(())
     }
 
@@ -180,8 +189,11 @@ impl WeDo {
             let port_idx = self.normalize_port(port)?;
             self.motor_values[port_idx] = normalize_power(*power);
         }
-        let cmd = encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
-        device.write(&cmd).map_err(|e| format!("Failed to write: {}", e))?;
+        let cmd =
+            encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
+        device
+            .write(&cmd)
+            .map_err(|e| format!("Failed to write: {}", e))?;
         Ok(())
     }
 

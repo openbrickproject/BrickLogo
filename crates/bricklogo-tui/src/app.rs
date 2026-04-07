@@ -1,12 +1,12 @@
-use std::sync::{Arc, Mutex};
+use crate::bridge::register_hardware_primitives;
+use bricklogo_hal::port_manager::PortManager;
+use bricklogo_lang::error::LogoError;
+use bricklogo_lang::evaluator::Evaluator;
+use bricklogo_lang::primitives::register_core_primitives;
+use bricklogo_lang::value::LogoValue;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use bricklogo_lang::evaluator::Evaluator;
-use bricklogo_lang::error::LogoError;
-use bricklogo_lang::value::LogoValue;
-use bricklogo_lang::primitives::register_core_primitives;
-use bricklogo_hal::port_manager::PortManager;
-use crate::bridge::register_hardware_primitives;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub enum OutputLineType {
@@ -44,8 +44,6 @@ pub struct App {
     stop_flag: Arc<AtomicBool>,
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
-    pub page_name: Option<String>,
-    pub disk_path: String,
 }
 
 impl App {
@@ -71,6 +69,7 @@ impl App {
                 line_type: OutputLineType::System,
             });
         });
+        evaluator.set_system_fn(system_fn.clone());
         register_hardware_primitives(&mut evaluator, port_manager.clone(), system_fn);
 
         App {
@@ -93,8 +92,6 @@ impl App {
             stop_flag,
             port_manager,
             output_buffer: output_lines_ref,
-            page_name: None,
-            disk_path: std::env::current_dir().unwrap_or_default().to_string_lossy().to_string(),
         }
     }
 
@@ -183,7 +180,9 @@ impl App {
 
     pub fn submit_input(&mut self) {
         let input = self.input.trim().to_string();
-        if input.is_empty() { return; }
+        if input.is_empty() {
+            return;
+        }
 
         // Add to history
         if self.input_history.first().map(|s| s.as_str()) != Some(&input) {
@@ -242,72 +241,6 @@ impl App {
             _ => {}
         }
 
-        // Handle file/erase commands before evaluator
-        let lower = input.to_lowercase();
-        if lower.starts_with("namepage ") || lower.starts_with("np ") {
-            let name = input.split_whitespace().nth(1).unwrap_or("").trim_start_matches('"');
-            self.page_name = Some(name.to_string());
-            self.add_output(&format!("Page named \"{}\"", name), OutputLineType::System);
-            return;
-        }
-        if lower == "save" {
-            if let Some(ref name) = self.page_name {
-                let filename = if name.ends_with(".logo") { name.clone() } else { format!("{}.logo", name) };
-                let path = std::path::Path::new(&self.disk_path).join(&filename);
-                let procs = self.evaluator.as_ref().unwrap().get_all_procedures();
-                let source = bricklogo_lang::unparse::procedures_to_source(&procs);
-                match std::fs::write(&path, &source) {
-                    Ok(_) => self.add_output(&format!("Saved {}", path.display()), OutputLineType::System),
-                    Err(e) => self.add_output(&format!("Could not save: {}", e), OutputLineType::Error),
-                }
-            } else {
-                self.add_output("No page name set (use namepage first)", OutputLineType::Error);
-            }
-            return;
-        }
-        if lower.starts_with("load ") || lower.starts_with("getpage ") || lower.starts_with("gp ") {
-            let name = input.split_whitespace().nth(1).unwrap_or("").trim_start_matches('"');
-            let filename = if name.ends_with(".logo") { name.to_string() } else { format!("{}.logo", name) };
-            let path = std::path::Path::new(&self.disk_path).join(&filename);
-            match std::fs::read_to_string(&path) {
-                Ok(source) => {
-                    match self.evaluator.as_mut().unwrap().load_source(&source) {
-                        Ok(_) => {
-                            self.page_name = Some(name.to_string());
-                            self.add_output(&format!("Loaded {}", path.display()), OutputLineType::System);
-                        }
-                        Err(e) => self.add_output(&format!("{}", e), OutputLineType::Error),
-                    }
-                }
-                Err(e) => self.add_output(&format!("Could not load: {}", e), OutputLineType::Error),
-            }
-            return;
-        }
-        if lower.starts_with("setdisk ") {
-            let path_str = input.split_whitespace().nth(1).unwrap_or("").trim_start_matches('"');
-            let resolved = std::path::Path::new(&self.disk_path).join(path_str);
-            if resolved.exists() {
-                self.disk_path = resolved.to_string_lossy().to_string();
-                self.add_output(&format!("Disk set to {}", self.disk_path), OutputLineType::System);
-            } else {
-                self.add_output(&format!("Directory not found: {}", resolved.display()), OutputLineType::Error);
-            }
-            return;
-        }
-        if lower == "disk" {
-            self.add_output(&self.disk_path.clone(), OutputLineType::Output);
-            return;
-        }
-        if lower.starts_with("erase ") {
-            let name = input.split_whitespace().nth(1).unwrap_or("").trim_start_matches('"');
-            if self.evaluator.as_mut().unwrap().erase_procedure(name) {
-                self.add_output(&format!("Erased \"{}\"", name), OutputLineType::System);
-            } else {
-                self.add_output(&format!("No procedure named \"{}\"", name), OutputLineType::Error);
-            }
-            return;
-        }
-
         self.execute(&input);
     }
 
@@ -361,16 +294,24 @@ impl App {
     }
 
     fn calc_def_indent(&self, current_line: &str) -> usize {
-        if current_line.trim().to_lowercase() == "end" { return 0; }
+        if current_line.trim().to_lowercase() == "end" {
+            return 0;
+        }
         if let Some(buffer) = &self.def_buffer {
             let mut depth: i32 = 1; // inside to...end
             for line in buffer {
                 for ch in line.chars() {
-                    if ch == '[' { depth += 1; }
-                    if ch == ']' { depth -= 1; }
+                    if ch == '[' {
+                        depth += 1;
+                    }
+                    if ch == ']' {
+                        depth -= 1;
+                    }
                 }
             }
-            if current_line.trim().starts_with(']') { depth -= 1; }
+            if current_line.trim().starts_with(']') {
+                depth -= 1;
+            }
             depth.max(0) as usize
         } else {
             0
@@ -378,8 +319,12 @@ impl App {
     }
 
     pub fn get_prompt(&self) -> &str {
-        if self.busy { return "... "; }
-        if self.def_buffer.is_some() { return "> "; }
+        if self.busy {
+            return "... ";
+        }
+        if self.def_buffer.is_some() {
+            return "> ";
+        }
         "? "
     }
 
@@ -443,7 +388,14 @@ impl App {
                     let params = if proc.params.is_empty() {
                         String::new()
                     } else {
-                        format!(" {}", proc.params.iter().map(|p| format!(":{}", p)).collect::<Vec<_>>().join(" "))
+                        format!(
+                            " {}",
+                            proc.params
+                                .iter()
+                                .map(|p| format!(":{}", p))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
                     };
                     lines.push(format!("    {}{}", proc.name, params));
                 }

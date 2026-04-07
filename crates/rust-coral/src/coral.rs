@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::constants::*;
 use crate::protocol::*;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct CoralDeviceInfo {
@@ -58,7 +58,15 @@ impl Coral {
     }
 
     /// Call when info response is received.
-    pub fn on_info_response(&mut self, fw_major: u8, fw_minor: u8, fw_build: u16, bl_major: u8, bl_minor: u8, bl_build: u16) {
+    pub fn on_info_response(
+        &mut self,
+        fw_major: u8,
+        fw_minor: u8,
+        fw_build: u16,
+        bl_major: u8,
+        bl_minor: u8,
+        bl_build: u16,
+    ) {
         self.device_info = Some(CoralDeviceInfo {
             kind: self.device_kind.unwrap_or(CoralDeviceKind::SingleMotor),
             firmware_version: (fw_major, fw_minor, fw_build),
@@ -127,15 +135,30 @@ impl Coral {
         encode_motor_stop(motor_bits)
     }
 
-    pub fn cmd_motor_run_for_time(&self, motor_bits: u8, time_ms: u32, direction: MotorDirection) -> Vec<u8> {
+    pub fn cmd_motor_run_for_time(
+        &self,
+        motor_bits: u8,
+        time_ms: u32,
+        direction: MotorDirection,
+    ) -> Vec<u8> {
         encode_motor_run_for_time(motor_bits, time_ms, direction as u8)
     }
 
-    pub fn cmd_motor_run_for_degrees(&self, motor_bits: u8, degrees: i32, direction: MotorDirection) -> Vec<u8> {
+    pub fn cmd_motor_run_for_degrees(
+        &self,
+        motor_bits: u8,
+        degrees: i32,
+        direction: MotorDirection,
+    ) -> Vec<u8> {
         encode_motor_run_for_degrees(motor_bits, degrees, direction as u8)
     }
 
-    pub fn cmd_motor_run_to_absolute_position(&self, motor_bits: u8, position: u16, direction: MotorDirection) -> Vec<u8> {
+    pub fn cmd_motor_run_to_absolute_position(
+        &self,
+        motor_bits: u8,
+        position: u16,
+        direction: MotorDirection,
+    ) -> Vec<u8> {
         encode_motor_run_to_absolute_position(motor_bits, position, direction as u8)
     }
 
@@ -180,10 +203,10 @@ mod tests {
         let mut data = vec![60]; // DeviceNotification
         data.extend_from_slice(&0u16.to_le_bytes()); // reserved
         data.push(10); // DEVICE_MSG_MOTOR
-        data.push(1);  // motor_bit_mask = Left
-        data.push(1);  // state = Running
+        data.push(1); // motor_bit_mask = Left
+        data.push(1); // state = Running
         data.extend_from_slice(&100u16.to_le_bytes()); // absolute_position
-        data.extend_from_slice(&50i16.to_le_bytes());  // power
+        data.extend_from_slice(&50i16.to_le_bytes()); // power
         data.push(25i8 as u8); // speed
         data.extend_from_slice(&360i32.to_le_bytes()); // position
 
@@ -256,8 +279,8 @@ mod tests {
         // Left motor notification
         let mut data1 = vec![60, 0, 0];
         data1.push(10); // motor
-        data1.push(1);  // Left
-        data1.push(0);  // Ready
+        data1.push(1); // Left
+        data1.push(0); // Ready
         data1.extend_from_slice(&0u16.to_le_bytes());
         data1.extend_from_slice(&0i16.to_le_bytes());
         data1.push(0);
@@ -267,8 +290,8 @@ mod tests {
         // Right motor notification
         let mut data2 = vec![60, 0, 0];
         data2.push(10); // motor
-        data2.push(2);  // Right
-        data2.push(0);  // Ready
+        data2.push(2); // Right
+        data2.push(0); // Ready
         data2.extend_from_slice(&0u16.to_le_bytes());
         data2.extend_from_slice(&0i16.to_le_bytes());
         data2.push(0);

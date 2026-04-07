@@ -1,16 +1,20 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
+use bricklogo_lang::value::LogoValue;
 use rust_poweredup::ble::PoweredUpBle;
 use rust_poweredup::constants::*;
 use rust_poweredup::devices::{self, SensorReading};
 use rust_poweredup::protocol;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 fn to_signed_speed(direction: PortDirection, power: u8) -> i8 {
     let speed = power.min(100) as i8;
-    if direction == PortDirection::Even { speed } else { -speed }
+    if direction == PortDirection::Even {
+        speed
+    } else {
+        -speed
+    }
 }
 
 pub struct PoweredUpAdapter {
@@ -73,8 +77,9 @@ impl PoweredUpAdapter {
 /// Map internal device types to port names for sensors built into the hub.
 fn internal_port_name(device_type: DeviceType) -> String {
     match device_type {
-        DeviceType::TiltSensor | DeviceType::MoveHubTiltSensor |
-        DeviceType::TechnicMediumHubTiltSensor => "tilt".to_string(),
+        DeviceType::TiltSensor
+        | DeviceType::MoveHubTiltSensor
+        | DeviceType::TechnicMediumHubTiltSensor => "tilt".to_string(),
         DeviceType::TechnicMediumHubAccelerometer => "accel".to_string(),
         DeviceType::TechnicMediumHubGyroSensor => "gyro".to_string(),
         DeviceType::VoltageSensor => "voltage".to_string(),
@@ -90,15 +95,19 @@ fn reading_to_logo(reading: &SensorReading) -> LogoValue {
     match reading {
         SensorReading::Number(n) => LogoValue::Number(*n),
         SensorReading::Bool(b) => LogoValue::Word(if *b { "true" } else { "false" }.to_string()),
-        SensorReading::Pair(a, b) => LogoValue::List(vec![
-            LogoValue::Number(*a), LogoValue::Number(*b),
-        ]),
+        SensorReading::Pair(a, b) => {
+            LogoValue::List(vec![LogoValue::Number(*a), LogoValue::Number(*b)])
+        }
         SensorReading::Triple(a, b, c) => LogoValue::List(vec![
-            LogoValue::Number(*a), LogoValue::Number(*b), LogoValue::Number(*c),
+            LogoValue::Number(*a),
+            LogoValue::Number(*b),
+            LogoValue::Number(*c),
         ]),
         SensorReading::Quad(a, b, c, d) => LogoValue::List(vec![
-            LogoValue::Number(*a), LogoValue::Number(*b),
-            LogoValue::Number(*c), LogoValue::Number(*d),
+            LogoValue::Number(*a),
+            LogoValue::Number(*b),
+            LogoValue::Number(*c),
+            LogoValue::Number(*d),
         ]),
     }
 }
@@ -127,9 +136,13 @@ impl HardwareAdapter for PoweredUpAdapter {
         &[]
     }
 
-    fn input_ports(&self) -> &[String] { &[] }
+    fn input_ports(&self) -> &[String] {
+        &[]
+    }
 
-    fn connected(&self) -> bool { self.ble.is_connected() }
+    fn connected(&self) -> bool {
+        self.ble.is_connected()
+    }
 
     fn connect(&mut self) -> Result<(), String> {
         super::ble_connect_with_retry(|| self.ble.connect(), 3)?;
@@ -155,7 +168,8 @@ impl HardwareAdapter for PoweredUpAdapter {
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let hub = self.ble.hub.lock().unwrap();
-        let device = hub.get_device(port_id)
+        let device = hub
+            .get_device(port_id)
             .ok_or_else(|| format!("No device on port \"{}\"", port))?;
 
         if let Some(m) = mode {
@@ -166,7 +180,12 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 
-    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+    fn start_port(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+    ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd = protocol::cmd_set_power(port_id, speed, true);
@@ -179,18 +198,32 @@ impl HardwareAdapter for PoweredUpAdapter {
         self.ble.send(&cmd)
     }
 
-    fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
+    fn run_port_for_time(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        tenths: u32,
+    ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
 
         let is_tacho = {
             let hub = self.ble.hub.lock().unwrap();
-            hub.get_device(port_id).map_or(false, |d| d.device_type.is_tacho_motor())
+            hub.get_device(port_id)
+                .map_or(false, |d| d.device_type.is_tacho_motor())
         };
 
         if is_tacho {
             let time_ms = tenths * 100;
-            let cmd = protocol::cmd_start_speed_for_time(port_id, time_ms as u16, speed, 100, BrakingStyle::Float, true);
+            let cmd = protocol::cmd_start_speed_for_time(
+                port_id,
+                time_ms as u16,
+                speed,
+                100,
+                BrakingStyle::Float,
+                true,
+            );
             self.ble.request(port_id, &cmd)?;
         } else {
             let cmd = protocol::cmd_set_power(port_id, speed, true);
@@ -202,18 +235,38 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 
-    fn rotate_port_by_degrees(&mut self, port: &str, direction: PortDirection, power: u8, degrees: i32) -> Result<(), String> {
+    fn rotate_port_by_degrees(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        degrees: i32,
+    ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
-        let cmd = protocol::cmd_start_speed_for_degrees(port_id, degrees.unsigned_abs(), speed, 100, BrakingStyle::Hold, true);
+        let cmd = protocol::cmd_start_speed_for_degrees(
+            port_id,
+            degrees.unsigned_abs(),
+            speed,
+            100,
+            BrakingStyle::Hold,
+            true,
+        );
         self.ble.request(port_id, &cmd)?;
         Ok(())
     }
 
-    fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
+    fn rotate_port_to_position(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        position: i32,
+    ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
-        let cmd = protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
+        let cmd =
+            protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
         self.ble.request(port_id, &cmd)?;
         Ok(())
     }
@@ -224,7 +277,12 @@ impl HardwareAdapter for PoweredUpAdapter {
         self.ble.send(&cmd)
     }
 
-    fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+    fn rotate_to_home(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+    ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
@@ -237,14 +295,16 @@ impl HardwareAdapter for PoweredUpAdapter {
 
         let (device_type, current_mode) = {
             let hub = self.ble.hub.lock().unwrap();
-            let device = hub.get_device(port_id)
+            let device = hub
+                .get_device(port_id)
                 .ok_or_else(|| format!("No device on port \"{}\"", port))?;
             (device.device_type, device.current_mode)
         };
 
         // Resolve mode name
         let default_mode_name = devices::default_event(device_type);
-        let mode_name = mode.or(default_mode_name)
+        let mode_name = mode
+            .or(default_mode_name)
             .ok_or_else(|| format!("No sensor modes for port \"{}\"", port))?;
 
         let target_mode = devices::mode_for_event(device_type, mode_name)
@@ -282,12 +342,20 @@ impl HardwareAdapter for PoweredUpAdapter {
             let speed = to_signed_speed(cmd.direction, cmd.power);
             let is_tacho = {
                 let hub = self.ble.hub.lock().unwrap();
-                hub.get_device(port_id).map_or(false, |d| d.device_type.is_tacho_motor())
+                hub.get_device(port_id)
+                    .map_or(false, |d| d.device_type.is_tacho_motor())
             };
 
             if is_tacho {
                 let time_ms = tenths * 100;
-                let msg = protocol::cmd_start_speed_for_time(port_id, time_ms as u16, speed, 100, BrakingStyle::Float, true);
+                let msg = protocol::cmd_start_speed_for_time(
+                    port_id,
+                    time_ms as u16,
+                    speed,
+                    100,
+                    BrakingStyle::Float,
+                    true,
+                );
                 tacho_cmds.push((port_id, msg));
             } else {
                 basic_ports.push((port_id, cmd.direction, cmd.power));
@@ -321,12 +389,23 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 
-    fn rotate_ports_to_position(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
+    fn rotate_ports_to_position(
+        &mut self,
+        commands: &[PortCommand],
+        position: i32,
+    ) -> Result<(), String> {
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;
             let speed = to_signed_speed(cmd.direction, cmd.power);
-            let msg = protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
+            let msg = protocol::cmd_goto_absolute(
+                port_id,
+                position,
+                speed,
+                100,
+                BrakingStyle::Hold,
+                true,
+            );
             cmds.push((port_id, msg));
         }
         if !cmds.is_empty() {
@@ -349,12 +428,23 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 
-    fn rotate_ports_by_degrees(&mut self, commands: &[PortCommand], degrees: i32) -> Result<(), String> {
+    fn rotate_ports_by_degrees(
+        &mut self,
+        commands: &[PortCommand],
+        degrees: i32,
+    ) -> Result<(), String> {
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;
             let speed = to_signed_speed(cmd.direction, cmd.power);
-            let msg = protocol::cmd_start_speed_for_degrees(port_id, degrees.unsigned_abs(), speed, 100, BrakingStyle::Hold, true);
+            let msg = protocol::cmd_start_speed_for_degrees(
+                port_id,
+                degrees.unsigned_abs(),
+                speed,
+                100,
+                BrakingStyle::Hold,
+                true,
+            );
             cmds.push((port_id, msg));
         }
         self.ble.request_all(&cmds)?;

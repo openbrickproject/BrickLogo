@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::ast::{AstNode, UserProcedure};
 use crate::error::{LogoError, LogoResult};
@@ -8,12 +9,31 @@ use crate::parser::Parser;
 use crate::tokenizer::tokenize;
 use crate::value::LogoValue;
 
-type PrimitiveFn = Box<dyn Fn(&[LogoValue], &mut Environment) -> LogoResult<Option<LogoValue>> + Send>;
+type PrimitiveFn = Arc<
+    dyn Fn(&[LogoValue], &mut Environment, &mut Evaluator) -> LogoResult<Option<LogoValue>>
+        + Send
+        + Sync,
+>;
 
 pub struct PrimitiveSpec {
     pub min_args: usize,
     pub max_args: usize,
     pub func: PrimitiveFn,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionState {
+    page_name: Option<String>,
+    disk_path: PathBuf,
+}
+
+impl SessionState {
+    fn new() -> Self {
+        SessionState {
+            page_name: None,
+            disk_path: std::env::current_dir().unwrap_or_default(),
+        }
+    }
 }
 
 pub struct Environment {
@@ -65,7 +85,10 @@ impl Environment {
                 return Ok(val.clone());
             }
         }
-        Err(LogoError::Runtime(format!("I don't know about \"{}\"", name)))
+        Err(LogoError::Runtime(format!(
+            "I don't know about \"{}\"",
+            name
+        )))
     }
 
     pub fn set_local(&mut self, name: &str, value: LogoValue) {
@@ -84,7 +107,9 @@ pub struct Evaluator {
     aliases: HashMap<String, String>,
     stop_requested: Arc<AtomicBool>,
     output_callback: Arc<dyn Fn(&str) + Send + Sync>,
+    system_callback: Arc<dyn Fn(&str) + Send + Sync>,
     timer_start: std::time::Instant,
+    session: SessionState,
 }
 
 impl Evaluator {
@@ -96,7 +121,9 @@ impl Evaluator {
             aliases: HashMap::new(),
             stop_requested: Arc::new(AtomicBool::new(false)),
             output_callback,
+            system_callback: Arc::new(|_| {}),
             timer_start: std::time::Instant::now(),
+            session: SessionState::new(),
         }
     }
 
@@ -108,8 +135,13 @@ impl Evaluator {
         self.primitives.insert(name.to_lowercase(), spec);
     }
 
+    pub fn set_system_fn(&mut self, system_callback: Arc<dyn Fn(&str) + Send + Sync>) {
+        self.system_callback = system_callback;
+    }
+
     pub fn register_alias(&mut self, alias: &str, canonical: &str) {
-        self.aliases.insert(alias.to_lowercase(), canonical.to_lowercase());
+        self.aliases
+            .insert(alias.to_lowercase(), canonical.to_lowercase());
     }
 
     pub fn get_arity(&self, name: &str) -> Option<usize> {
@@ -133,11 +165,14 @@ impl Evaluator {
     }
 
     pub fn define_procedure(&mut self, name: &str, params: Vec<String>, body: Vec<AstNode>) {
-        self.procedures.insert(name.to_lowercase(), UserProcedure {
-            name: name.to_string(),
-            params,
-            body,
-        });
+        self.procedures.insert(
+            name.to_lowercase(),
+            UserProcedure {
+                name: name.to_string(),
+                params,
+                body,
+            },
+        );
     }
 
     pub fn erase_procedure(&mut self, name: &str) -> bool {
@@ -162,6 +197,72 @@ impl Evaluator {
 
     pub fn output(&self, text: &str) {
         (self.output_callback)(text);
+    }
+
+    pub fn system_output(&self, text: &str) {
+        (self.system_callback)(text);
+    }
+
+    pub fn page_name(&self) -> Option<&str> {
+        self.session.page_name.as_deref()
+    }
+
+    pub fn disk_path(&self) -> &Path {
+        &self.session.disk_path
+    }
+
+    pub fn set_page_name(&mut self, name: &str) {
+        self.session.page_name = Some(name.to_string());
+    }
+
+    pub fn set_disk_path(&mut self, path: PathBuf) {
+        self.session.disk_path = path;
+    }
+
+    pub fn save_page(&mut self) -> LogoResult<()> {
+        let name = self.page_name().ok_or_else(|| {
+            LogoError::Runtime("No page name set (use namepage first)".to_string())
+        })?;
+        let filename = if name.ends_with(".logo") {
+            name.to_string()
+        } else {
+            format!("{}.logo", name)
+        };
+        let path = self.disk_path().join(&filename);
+        let procs = self.get_all_procedures();
+        let source = crate::unparse::procedures_to_source(&procs);
+        std::fs::write(&path, &source)
+            .map_err(|e| LogoError::Runtime(format!("Could not save: {}", e)))?;
+        self.system_output(&format!("Saved {}", path.display()));
+        Ok(())
+    }
+
+    pub fn load_page(&mut self, name: &str) -> LogoResult<()> {
+        let filename = if name.ends_with(".logo") {
+            name.to_string()
+        } else {
+            format!("{}.logo", name)
+        };
+        let path = self.disk_path().join(&filename);
+        let source = std::fs::read_to_string(&path)
+            .map_err(|e| LogoError::Runtime(format!("Could not load: {}", e)))?;
+        self.load_source(&source)?;
+        self.session.page_name = Some(name.to_string());
+        self.system_output(&format!("Loaded {}", path.display()));
+        Ok(())
+    }
+
+    pub fn set_disk(&mut self, path_str: &str) -> LogoResult<()> {
+        let resolved = self.disk_path().join(path_str);
+        if !resolved.exists() {
+            return Err(LogoError::Runtime(format!(
+                "Directory not found: {}",
+                resolved.display()
+            )));
+        }
+        self.session.disk_path = resolved;
+        self.system_output(&format!("Disk set to {}", self.session.disk_path.display()));
+        Ok(())
     }
 
     pub fn load_source(&mut self, source: &str) -> LogoResult<()> {
@@ -227,7 +328,11 @@ impl Evaluator {
         }
     }
 
-    fn eval_node(&mut self, node: &AstNode, env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_node(
+        &mut self,
+        node: &AstNode,
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         self.check_stop()?;
 
         match node {
@@ -235,9 +340,12 @@ impl Evaluator {
             AstNode::Word(s) => Ok(Some(LogoValue::Word(s.clone()))),
             AstNode::Variable(name) => {
                 let val = env.get_variable(name).or_else(|_| {
-                    self.global_vars.get(&name.to_lowercase())
+                    self.global_vars
+                        .get(&name.to_lowercase())
                         .cloned()
-                        .ok_or_else(|| LogoError::Runtime(format!("I don't know about \"{}\"", name)))
+                        .ok_or_else(|| {
+                            LogoError::Runtime(format!("I don't know about \"{}\"", name))
+                        })
                 })?;
                 Ok(Some(val))
             }
@@ -250,39 +358,35 @@ impl Evaluator {
                 }
                 Ok(Some(LogoValue::List(result)))
             }
-            AstNode::Infix { operator, left, right } => {
+            AstNode::Infix {
+                operator,
+                left,
+                right,
+            } => {
                 let l = self.require_value(left, env)?;
                 let r = self.require_value(right, env)?;
                 self.eval_infix(operator, &l, &r).map(Some)
             }
-            AstNode::Paren { name, args } => {
-                self.eval_call(name, args, env)
-            }
-            AstNode::Call { name, args, token: _ } => {
-                self.eval_call(name, args, env)
-            }
+            AstNode::Paren { name, args } => self.eval_call(name, args, env),
+            AstNode::Call {
+                name,
+                args,
+                token: _,
+            } => self.eval_call(name, args, env),
             AstNode::ProcDef { name, params, body } => {
                 self.define_procedure(name, params.clone(), body.clone());
                 Ok(None)
             }
-            AstNode::Repeat { count, body } => {
-                self.eval_repeat(count, body, env)
-            }
-            AstNode::Forever { body } => {
-                self.eval_forever(body, env)
-            }
-            AstNode::If { condition, body } => {
-                self.eval_if(condition, body, env)
-            }
-            AstNode::IfElse { condition, then_body, else_body } => {
-                self.eval_ifelse(condition, then_body, else_body, env)
-            }
-            AstNode::WaitUntil { condition } => {
-                self.eval_waituntil(condition, env)
-            }
-            AstNode::Carefully { body, handler } => {
-                self.eval_carefully(body, handler, env)
-            }
+            AstNode::Repeat { count, body } => self.eval_repeat(count, body, env),
+            AstNode::Forever { body } => self.eval_forever(body, env),
+            AstNode::If { condition, body } => self.eval_if(condition, body, env),
+            AstNode::IfElse {
+                condition,
+                then_body,
+                else_body,
+            } => self.eval_ifelse(condition, then_body, else_body, env),
+            AstNode::WaitUntil { condition } => self.eval_waituntil(condition, env),
+            AstNode::Carefully { body, handler } => self.eval_carefully(body, handler, env),
             AstNode::Output(value) => {
                 let val = self.require_value(value, env)?;
                 Err(LogoError::Output(val))
@@ -292,14 +396,13 @@ impl Evaluator {
     }
 
     fn require_value(&mut self, node: &AstNode, env: &mut Environment) -> LogoResult<LogoValue> {
-        self.eval_node(node, env)?
-            .ok_or_else(|| {
-                let name = match node {
-                    AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
-                    _ => "expression".to_string(),
-                };
-                LogoError::Runtime(format!("{} didn't output", name))
-            })
+        self.eval_node(node, env)?.ok_or_else(|| {
+            let name = match node {
+                AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
+                _ => "expression".to_string(),
+            };
+            LogoError::Runtime(format!("{} didn't output", name))
+        })
     }
 
     fn eval_infix(&self, op: &str, l: &LogoValue, r: &LogoValue) -> LogoResult<LogoValue> {
@@ -315,43 +418,58 @@ impl Evaluator {
                     Ok(LogoValue::Number(l.as_number()? / divisor))
                 }
             }
-            "=" => Ok(LogoValue::Word(if l.logo_equal(r) { "true" } else { "false" }.to_string())),
-            "<" => Ok(LogoValue::Word(if l.as_number()? < r.as_number()? { "true" } else { "false" }.to_string())),
-            ">" => Ok(LogoValue::Word(if l.as_number()? > r.as_number()? { "true" } else { "false" }.to_string())),
+            "=" => Ok(LogoValue::Word(
+                if l.logo_equal(r) { "true" } else { "false" }.to_string(),
+            )),
+            "<" => Ok(LogoValue::Word(
+                if l.as_number()? < r.as_number()? {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            )),
+            ">" => Ok(LogoValue::Word(
+                if l.as_number()? > r.as_number()? {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            )),
             _ => Err(LogoError::Runtime(format!("Unknown operator '{}'", op))),
         }
     }
 
-    fn eval_call(&mut self, name: &str, arg_nodes: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
-        let resolved = self.aliases.get(&name.to_lowercase()).cloned().unwrap_or_else(|| name.to_lowercase());
-
-        // Handle timer/resett specially since they need evaluator state
-        if resolved == "timer" {
-            return Ok(Some(LogoValue::Number(self.timer_elapsed() as f64)));
-        }
-        if resolved == "resett" {
-            self.reset_timer();
-            return Ok(None);
-        }
+    fn eval_call(
+        &mut self,
+        name: &str,
+        arg_nodes: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
+        let resolved = self
+            .aliases
+            .get(&name.to_lowercase())
+            .cloned()
+            .unwrap_or_else(|| name.to_lowercase());
 
         // Check primitive
         if self.primitives.contains_key(&resolved) {
             let mut args = Vec::new();
             for a in arg_nodes.iter() {
-                let val = self.eval_node(a, env)?
-                    .ok_or_else(|| {
-                        let arg_name = match a {
-                            AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
-                            _ => "expression".to_string(),
-                        };
-                        LogoError::Runtime(format!("{} didn't output to {}", arg_name, name))
-                    })?;
+                let val = self.eval_node(a, env)?.ok_or_else(|| {
+                    let arg_name = match a {
+                        AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
+                        _ => "expression".to_string(),
+                    };
+                    LogoError::Runtime(format!("{} didn't output to {}", arg_name, name))
+                })?;
                 args.push(val);
             }
             // Need to borrow self.primitives immutably while env is mutable
             // Use a temporary to avoid borrow conflict
-            let prim = self.primitives.get(&resolved).unwrap();
-            let result = (prim.func)(&args, env)?;
+            let prim_fn = self.primitives.get(&resolved).unwrap().func.clone();
+            let result = (prim_fn)(&args, env, self)?;
             return Ok(result);
         }
 
@@ -360,19 +478,20 @@ impl Evaluator {
             if arg_nodes.len() != proc.params.len() {
                 return Err(LogoError::Runtime(format!(
                     "{} expects {} input(s), got {}",
-                    name, proc.params.len(), arg_nodes.len()
+                    name,
+                    proc.params.len(),
+                    arg_nodes.len()
                 )));
             }
             let mut args = Vec::new();
             for a in arg_nodes {
-                let val = self.eval_node(a, env)?
-                    .ok_or_else(|| {
-                        let arg_name = match a {
-                            AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
-                            _ => "expression".to_string(),
-                        };
-                        LogoError::Runtime(format!("{} didn't output to {}", arg_name, name))
-                    })?;
+                let val = self.eval_node(a, env)?.ok_or_else(|| {
+                    let arg_name = match a {
+                        AstNode::Call { name, .. } | AstNode::Paren { name, .. } => name.clone(),
+                        _ => "expression".to_string(),
+                    };
+                    LogoError::Runtime(format!("{} didn't output to {}", arg_name, name))
+                })?;
                 args.push(val);
             }
             let mut child_env = Environment::child(&self.global_vars);
@@ -403,7 +522,12 @@ impl Evaluator {
         Err(LogoError::Runtime(format!("I don't know how to {}", name)))
     }
 
-    fn eval_repeat(&mut self, count_node: &AstNode, body: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_repeat(
+        &mut self,
+        count_node: &AstNode,
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         let count = self.require_value(count_node, env)?.as_number()? as i64;
         for _ in 0..count {
             self.check_stop()?;
@@ -414,7 +538,11 @@ impl Evaluator {
         Ok(None)
     }
 
-    fn eval_forever(&mut self, body: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_forever(
+        &mut self,
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         loop {
             self.check_stop()?;
             for node in body {
@@ -425,7 +553,12 @@ impl Evaluator {
         }
     }
 
-    fn eval_if(&mut self, condition: &AstNode, body: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_if(
+        &mut self,
+        condition: &AstNode,
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         let val = self.require_value(condition, env)?;
         if val.is_truthy().map_err(|e| LogoError::Runtime(e))? {
             for node in body {
@@ -435,9 +568,19 @@ impl Evaluator {
         Ok(None)
     }
 
-    fn eval_ifelse(&mut self, condition: &AstNode, then_body: &[AstNode], else_body: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_ifelse(
+        &mut self,
+        condition: &AstNode,
+        then_body: &[AstNode],
+        else_body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         let val = self.require_value(condition, env)?;
-        let body = if val.is_truthy().map_err(|e| LogoError::Runtime(e))? { then_body } else { else_body };
+        let body = if val.is_truthy().map_err(|e| LogoError::Runtime(e))? {
+            then_body
+        } else {
+            else_body
+        };
         let mut result = None;
         for node in body {
             result = self.eval_node(node, env)?;
@@ -445,7 +588,11 @@ impl Evaluator {
         Ok(result)
     }
 
-    fn eval_waituntil(&mut self, condition: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_waituntil(
+        &mut self,
+        condition: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         loop {
             self.check_stop()?;
             let mut result = None;
@@ -461,7 +608,12 @@ impl Evaluator {
         }
     }
 
-    fn eval_carefully(&mut self, body: &[AstNode], handler: &[AstNode], env: &mut Environment) -> LogoResult<Option<LogoValue>> {
+    fn eval_carefully(
+        &mut self,
+        body: &[AstNode],
+        handler: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
         let body_result = (|| -> LogoResult<Option<LogoValue>> {
             let mut result = None;
             for node in body {
@@ -489,6 +641,7 @@ impl Evaluator {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn create_evaluator() -> (Evaluator, Arc<Mutex<Vec<String>>>) {
         let output = Arc::new(Mutex::new(Vec::new()));
@@ -503,25 +656,52 @@ mod tests {
     #[test]
     fn test_number() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("sum 3 4").unwrap(), Some(LogoValue::Number(7.0)));
+        assert_eq!(
+            eval.evaluate("sum 3 4").unwrap(),
+            Some(LogoValue::Number(7.0))
+        );
     }
 
     #[test]
     fn test_infix() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("3 + 4").unwrap(), Some(LogoValue::Number(7.0)));
-        assert_eq!(eval.evaluate("10 - 3").unwrap(), Some(LogoValue::Number(7.0)));
-        assert_eq!(eval.evaluate("3 * 4").unwrap(), Some(LogoValue::Number(12.0)));
-        assert_eq!(eval.evaluate("10 / 2").unwrap(), Some(LogoValue::Number(5.0)));
+        assert_eq!(
+            eval.evaluate("3 + 4").unwrap(),
+            Some(LogoValue::Number(7.0))
+        );
+        assert_eq!(
+            eval.evaluate("10 - 3").unwrap(),
+            Some(LogoValue::Number(7.0))
+        );
+        assert_eq!(
+            eval.evaluate("3 * 4").unwrap(),
+            Some(LogoValue::Number(12.0))
+        );
+        assert_eq!(
+            eval.evaluate("10 / 2").unwrap(),
+            Some(LogoValue::Number(5.0))
+        );
     }
 
     #[test]
     fn test_comparison() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("3 = 3").unwrap(), Some(LogoValue::Word("true".to_string())));
-        assert_eq!(eval.evaluate("3 = 4").unwrap(), Some(LogoValue::Word("false".to_string())));
-        assert_eq!(eval.evaluate("3 < 4").unwrap(), Some(LogoValue::Word("true".to_string())));
-        assert_eq!(eval.evaluate("4 > 3").unwrap(), Some(LogoValue::Word("true".to_string())));
+        assert_eq!(
+            eval.evaluate("3 = 3").unwrap(),
+            Some(LogoValue::Word("true".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("3 = 4").unwrap(),
+            Some(LogoValue::Word("false".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("3 < 4").unwrap(),
+            Some(LogoValue::Word("true".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("4 > 3").unwrap(),
+            Some(LogoValue::Word("true".to_string()))
+        );
     }
 
     #[test]
@@ -548,18 +728,39 @@ mod tests {
     #[test]
     fn test_logic() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("and \"true \"true").unwrap(), Some(LogoValue::Word("true".to_string())));
-        assert_eq!(eval.evaluate("and \"true \"false").unwrap(), Some(LogoValue::Word("false".to_string())));
-        assert_eq!(eval.evaluate("or \"false \"true").unwrap(), Some(LogoValue::Word("true".to_string())));
-        assert_eq!(eval.evaluate("not \"true").unwrap(), Some(LogoValue::Word("false".to_string())));
+        assert_eq!(
+            eval.evaluate("and \"true \"true").unwrap(),
+            Some(LogoValue::Word("true".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("and \"true \"false").unwrap(),
+            Some(LogoValue::Word("false".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("or \"false \"true").unwrap(),
+            Some(LogoValue::Word("true".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("not \"true").unwrap(),
+            Some(LogoValue::Word("false".to_string()))
+        );
     }
 
     #[test]
     fn test_list_operations() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("first [a b c]").unwrap(), Some(LogoValue::Word("a".to_string())));
-        assert_eq!(eval.evaluate("last [a b c]").unwrap(), Some(LogoValue::Word("c".to_string())));
-        assert_eq!(eval.evaluate("count [a b c]").unwrap(), Some(LogoValue::Number(3.0)));
+        assert_eq!(
+            eval.evaluate("first [a b c]").unwrap(),
+            Some(LogoValue::Word("a".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("last [a b c]").unwrap(),
+            Some(LogoValue::Word("c".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("count [a b c]").unwrap(),
+            Some(LogoValue::Number(3.0))
+        );
     }
 
     #[test]
@@ -580,22 +781,31 @@ mod tests {
     #[test]
     fn test_ifelse() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("ifelse 1 = 1 [print \"same] [print \"diff]").unwrap();
-        eval.evaluate("ifelse 1 = 2 [print \"same] [print \"diff]").unwrap();
+        eval.evaluate("ifelse 1 = 1 [print \"same] [print \"diff]")
+            .unwrap();
+        eval.evaluate("ifelse 1 = 2 [print \"same] [print \"diff]")
+            .unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["same", "diff"]);
     }
 
     #[test]
     fn test_ifelse_as_reporter() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("ifelse 1 = 1 [\"yes] [\"no]").unwrap(), Some(LogoValue::Word("yes".to_string())));
-        assert_eq!(eval.evaluate("ifelse 1 = 2 [\"yes] [\"no]").unwrap(), Some(LogoValue::Word("no".to_string())));
+        assert_eq!(
+            eval.evaluate("ifelse 1 = 1 [\"yes] [\"no]").unwrap(),
+            Some(LogoValue::Word("yes".to_string()))
+        );
+        assert_eq!(
+            eval.evaluate("ifelse 1 = 2 [\"yes] [\"no]").unwrap(),
+            Some(LogoValue::Word("no".to_string()))
+        );
     }
 
     #[test]
     fn test_procedure() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("to greet :name print word \"Hello :name end").unwrap();
+        eval.evaluate("to greet :name print word \"Hello :name end")
+            .unwrap();
         eval.evaluate("greet \"World").unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["HelloWorld"]);
     }
@@ -603,7 +813,10 @@ mod tests {
     #[test]
     fn test_recursion() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("to countdown :n if :n = 0 [print \"done stop] print :n countdown :n - 1 end").unwrap();
+        eval.evaluate(
+            "to countdown :n if :n = 0 [print \"done stop] print :n countdown :n - 1 end",
+        )
+        .unwrap();
         eval.evaluate("countdown 3").unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["3", "2", "1", "done"]);
     }
@@ -612,7 +825,10 @@ mod tests {
     fn test_output() {
         let (mut eval, _) = create_evaluator();
         eval.evaluate("to double :n output :n * 2 end").unwrap();
-        assert_eq!(eval.evaluate("double 5").unwrap(), Some(LogoValue::Number(10.0)));
+        assert_eq!(
+            eval.evaluate("double 5").unwrap(),
+            Some(LogoValue::Number(10.0))
+        );
     }
 
     #[test]
@@ -630,22 +846,30 @@ mod tests {
     #[test]
     fn test_carefully_catches() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("carefully [print blorp] [print \"caught]").unwrap();
+        eval.evaluate("carefully [print blorp] [print \"caught]")
+            .unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["caught"]);
     }
 
     #[test]
     fn test_carefully_no_error() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("carefully [print \"ok] [print \"error]").unwrap();
+        eval.evaluate("carefully [print \"ok] [print \"error]")
+            .unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["ok"]);
     }
 
     #[test]
     fn test_carefully_as_reporter() {
         let (mut eval, _) = create_evaluator();
-        assert_eq!(eval.evaluate("carefully [sum 1 2] [0]").unwrap(), Some(LogoValue::Number(3.0)));
-        assert_eq!(eval.evaluate("carefully [blorp] [42]").unwrap(), Some(LogoValue::Number(42.0)));
+        assert_eq!(
+            eval.evaluate("carefully [sum 1 2] [0]").unwrap(),
+            Some(LogoValue::Number(3.0))
+        );
+        assert_eq!(
+            eval.evaluate("carefully [blorp] [42]").unwrap(),
+            Some(LogoValue::Number(42.0))
+        );
     }
 
     #[test]
@@ -664,7 +888,8 @@ mod tests {
     #[test]
     fn test_stop_in_procedure() {
         let (mut eval, output) = create_evaluator();
-        eval.evaluate("to test print \"before stop print \"after end").unwrap();
+        eval.evaluate("to test print \"before stop print \"after end")
+            .unwrap();
         eval.evaluate("test").unwrap();
         assert_eq!(output.lock().unwrap().as_slice(), &["before"]);
     }
@@ -673,14 +898,67 @@ mod tests {
     fn test_request_stop() {
         let (mut eval, _) = create_evaluator();
         let stop = eval.stop_flag();
-        eval.register_primitive("tick", PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Box::new(move |_, _| {
-                stop.store(true, Ordering::SeqCst);
-                Ok(None)
-            }),
-        });
+        eval.register_primitive(
+            "tick",
+            PrimitiveSpec {
+                min_args: 0,
+                max_args: 0,
+                func: Arc::new(move |_, _, _| {
+                    stop.store(true, Ordering::SeqCst);
+                    Ok(None)
+                }),
+            },
+        );
         assert!(eval.evaluate("forever [tick]").is_err());
+    }
+
+    #[test]
+    fn test_page_commands_round_trip() {
+        let (mut eval, _) = create_evaluator();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-test-{}", unique));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+            .unwrap();
+        eval.evaluate("to greet print \"hi end").unwrap();
+        eval.evaluate("namepage \"demo").unwrap();
+        eval.evaluate("save").unwrap();
+
+        let saved_path = temp_dir.join("demo.logo");
+        assert!(saved_path.exists());
+
+        let (mut loaded_eval, output) = create_evaluator();
+        loaded_eval
+            .evaluate(&format!("setdisk \"{}", temp_dir.display()))
+            .unwrap();
+        loaded_eval.evaluate("load \"demo").unwrap();
+        loaded_eval.evaluate("greet").unwrap();
+        assert_eq!(output.lock().unwrap().as_slice(), &["hi"]);
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_disk_reports_current_directory() {
+        let (mut eval, _) = create_evaluator();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("bricklogo-lang-disk-{}", unique));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        eval.evaluate(&format!("setdisk \"{}", temp_dir.display()))
+            .unwrap();
+        assert_eq!(
+            eval.evaluate("disk").unwrap(),
+            Some(LogoValue::Word(temp_dir.display().to_string()))
+        );
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 }

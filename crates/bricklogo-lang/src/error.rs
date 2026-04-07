@@ -2,7 +2,11 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub enum LogoError {
-    Syntax { message: String, line: usize, col: usize },
+    Syntax {
+        message: String,
+        line: usize,
+        col: usize,
+    },
     Runtime(String),
     Stop,
     Output(super::value::LogoValue),

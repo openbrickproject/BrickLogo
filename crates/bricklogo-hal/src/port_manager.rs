@@ -1,7 +1,10 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
-use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
+use bricklogo_lang::value::LogoValue;
+use std::collections::HashMap;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[derive(Debug, Clone)]
 pub struct OutputPortState {
@@ -57,17 +60,23 @@ impl PortManager {
     pub fn add_device(&mut self, name: &str, adapter: Box<dyn HardwareAdapter>) {
         let mut port_states = HashMap::new();
         for port in adapter.output_ports() {
-            port_states.insert(port.clone(), OutputPortState {
-                direction: PortDirection::Even,
-                power: 4,
-                is_running: false,
-            });
+            port_states.insert(
+                port.clone(),
+                OutputPortState {
+                    direction: PortDirection::Even,
+                    power: 4,
+                    is_running: false,
+                },
+            );
         }
-        self.devices.insert(name.to_string(), DeviceEntry {
-            adapter,
-            port_states,
-            last_sent: HashMap::new(),
-        });
+        self.devices.insert(
+            name.to_string(),
+            DeviceEntry {
+                adapter,
+                port_states,
+                last_sent: HashMap::new(),
+            },
+        );
         self.device_order.push(name.to_string());
         if self.devices.len() == 1 {
             self.active_device = Some(name.to_string());
@@ -76,7 +85,9 @@ impl PortManager {
 
     pub fn remove_device(&mut self, name: &str) {
         // Cancel flash timers for this device
-        let keys_to_remove: Vec<String> = self.flash_timers.keys()
+        let keys_to_remove: Vec<String> = self
+            .flash_timers
+            .keys()
             .filter(|k| k.starts_with(&format!("{}:", name)))
             .cloned()
             .collect();
@@ -95,7 +106,9 @@ impl PortManager {
         self.selected_outputs.retain(|p| p.device_name != name);
         self.selected_inputs.retain(|p| p.device_name != name);
         if self.active_device.as_deref() == Some(name) {
-            self.active_device = self.device_order.iter()
+            self.active_device = self
+                .device_order
+                .iter()
                 .find(|device_name| self.devices.contains_key(device_name.as_str()))
                 .cloned();
         }
@@ -134,8 +147,13 @@ impl PortManager {
     }
 
     pub fn get_connected_device_names(&self) -> Vec<String> {
-        self.device_order.iter()
-            .filter(|name| self.devices.get(name.as_str()).is_some_and(|entry| entry.adapter.connected()))
+        self.device_order
+            .iter()
+            .filter(|name| {
+                self.devices
+                    .get(name.as_str())
+                    .is_some_and(|entry| entry.adapter.connected())
+            })
             .cloned()
             .collect()
     }
@@ -159,17 +177,26 @@ impl PortManager {
             if !self.devices.contains_key(device_name) {
                 return Err(format!("No device named \"{}\"", device_name));
             }
-            Ok(QualifiedPort { device_name: device_name.to_string(), port: port.to_string() })
+            Ok(QualifiedPort {
+                device_name: device_name.to_string(),
+                port: port.to_string(),
+            })
         } else {
-            let device = self.active_device.as_ref()
+            let device = self
+                .active_device
+                .as_ref()
                 .ok_or_else(|| "No device connected".to_string())?;
-            Ok(QualifiedPort { device_name: device.clone(), port: port_str.to_string() })
+            Ok(QualifiedPort {
+                device_name: device.clone(),
+                port: port_str.to_string(),
+            })
         }
     }
 
     fn format_selected_ports(&self, ports: &[QualifiedPort]) -> Vec<String> {
         let active = self.active_device.as_deref();
-        ports.iter()
+        ports
+            .iter()
             .map(|qp| {
                 if active == Some(qp.device_name.as_str()) {
                     qp.port.clone()
@@ -182,18 +209,30 @@ impl PortManager {
 
     fn get_state(&mut self, qp: &QualifiedPort) -> &mut OutputPortState {
         let entry = self.devices.get_mut(&qp.device_name).unwrap();
-        entry.port_states.entry(qp.port.clone()).or_insert(OutputPortState {
-            direction: PortDirection::Even,
-            power: 4,
-            is_running: false,
-        })
+        entry
+            .port_states
+            .entry(qp.port.clone())
+            .or_insert(OutputPortState {
+                direction: PortDirection::Even,
+                power: 4,
+                is_running: false,
+            })
     }
 
     fn sync_port(&mut self, qp: &QualifiedPort) -> Result<(), String> {
-        let entry = self.devices.get_mut(&qp.device_name)
+        let entry = self
+            .devices
+            .get_mut(&qp.device_name)
             .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
-        let state = entry.port_states.get(&qp.port).cloned()
-            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
+        let state = entry
+            .port_states
+            .get(&qp.port)
+            .cloned()
+            .unwrap_or(OutputPortState {
+                direction: PortDirection::Even,
+                power: 4,
+                is_running: false,
+            });
 
         let desired = SentState {
             direction: state.direction,
@@ -211,8 +250,17 @@ impl PortManager {
         }
 
         if desired.is_running {
-            entry.adapter.start_port(&qp.port, desired.direction, power_to_percent(desired.power))?;
-        } else if entry.last_sent.get(&qp.port).map(|l| l.is_running).unwrap_or(false) {
+            entry.adapter.start_port(
+                &qp.port,
+                desired.direction,
+                power_to_percent(desired.power),
+            )?;
+        } else if entry
+            .last_sent
+            .get(&qp.port)
+            .map(|l| l.is_running)
+            .unwrap_or(false)
+        {
             entry.adapter.stop_port(&qp.port)?;
         }
 
@@ -221,15 +269,27 @@ impl PortManager {
     }
 
     /// Group ports by device name, collecting their current state.
-    fn group_by_device(&self, ports: &[QualifiedPort]) -> Vec<(String, Vec<(String, PortDirection, u8)>)> {
+    fn group_by_device(
+        &self,
+        ports: &[QualifiedPort],
+    ) -> Vec<(String, Vec<(String, PortDirection, u8)>)> {
         let mut groups: HashMap<String, Vec<(String, PortDirection, u8)>> = HashMap::new();
         for qp in ports {
             let entry = self.devices.get(&qp.device_name).unwrap();
-            let state = entry.port_states.get(&qp.port).cloned()
-                .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
-            groups.entry(qp.device_name.clone())
-                .or_default()
-                .push((qp.port.clone(), state.direction, power_to_percent(state.power)));
+            let state = entry
+                .port_states
+                .get(&qp.port)
+                .cloned()
+                .unwrap_or(OutputPortState {
+                    direction: PortDirection::Even,
+                    power: 4,
+                    is_running: false,
+                });
+            groups.entry(qp.device_name.clone()).or_default().push((
+                qp.port.clone(),
+                state.direction,
+                power_to_percent(state.power),
+            ));
         }
         groups.into_iter().collect()
     }
@@ -239,8 +299,13 @@ impl PortManager {
         let groups = self.group_by_device(ports);
         for (device_name, port_cmds) in groups {
             let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+            let commands: Vec<PortCommand> = port_cmds
+                .iter()
+                .map(|(port, dir, power)| PortCommand {
+                    port: port.as_str(),
+                    direction: *dir,
+                    power: *power,
+                })
                 .collect();
             entry.adapter.start_ports(&commands)?;
         }
@@ -281,11 +346,14 @@ impl PortManager {
         // Ensure port states exist
         for qp in &self.selected_outputs {
             let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.port_states.entry(qp.port.clone()).or_insert(OutputPortState {
-                direction: PortDirection::Even,
-                power: 4,
-                is_running: false,
-            });
+            entry
+                .port_states
+                .entry(qp.port.clone())
+                .or_insert(OutputPortState {
+                    direction: PortDirection::Even,
+                    power: 4,
+                    is_running: false,
+                });
         }
         Ok(())
     }
@@ -330,7 +398,9 @@ impl PortManager {
         for qp in &ports {
             let state = self.get_state(qp);
             state.power = clamped;
-            if clamped == 0 { state.is_running = false; }
+            if clamped == 0 {
+                state.is_running = false;
+            }
             let _ = self.sync_port(qp);
         }
     }
@@ -338,7 +408,9 @@ impl PortManager {
     pub fn on(&mut self) -> Result<(), String> {
         // Validate all first
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -354,7 +426,9 @@ impl PortManager {
 
     pub fn off(&mut self) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -371,7 +445,9 @@ impl PortManager {
     pub fn on_for(&mut self, tenths: u32) -> Result<(), String> {
         // Validate all first
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -384,8 +460,13 @@ impl PortManager {
         let groups = self.group_by_device(&ports);
         for (device_name, port_cmds) in groups {
             let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+            let commands: Vec<PortCommand> = port_cmds
+                .iter()
+                .map(|(port, dir, power)| PortCommand {
+                    port: port.as_str(),
+                    direction: *dir,
+                    power: *power,
+                })
                 .collect();
             entry.adapter.run_ports_for_time(&commands, tenths)?;
         }
@@ -398,7 +479,9 @@ impl PortManager {
 
     pub fn rotate(&mut self, degrees: i32) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -410,8 +493,13 @@ impl PortManager {
         let groups = self.group_by_device(&ports);
         for (device_name, port_cmds) in groups {
             let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+            let commands: Vec<PortCommand> = port_cmds
+                .iter()
+                .map(|(port, dir, power)| PortCommand {
+                    port: port.as_str(),
+                    direction: *dir,
+                    power: *power,
+                })
                 .collect();
             entry.adapter.rotate_ports_by_degrees(&commands, degrees)?;
         }
@@ -420,7 +508,9 @@ impl PortManager {
 
     pub fn rotate_to(&mut self, position: i32) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -432,17 +522,26 @@ impl PortManager {
         let groups = self.group_by_device(&ports);
         for (device_name, port_cmds) in groups {
             let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+            let commands: Vec<PortCommand> = port_cmds
+                .iter()
+                .map(|(port, dir, power)| PortCommand {
+                    port: port.as_str(),
+                    direction: *dir,
+                    power: *power,
+                })
                 .collect();
-            entry.adapter.rotate_ports_to_position(&commands, position)?;
+            entry
+                .adapter
+                .rotate_ports_to_position(&commands, position)?;
         }
         Ok(())
     }
 
     pub fn reset_zero(&mut self) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -456,7 +555,9 @@ impl PortManager {
 
     pub fn rotate_to_home(&mut self) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -468,17 +569,29 @@ impl PortManager {
         let groups = self.group_by_device(&ports);
         for (device_name, port_cmds) in groups {
             let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
+            let commands: Vec<PortCommand> = port_cmds
+                .iter()
+                .map(|(port, dir, power)| PortCommand {
+                    port: port.as_str(),
+                    direction: *dir,
+                    power: *power,
+                })
                 .collect();
             entry.adapter.rotate_ports_to_home(&commands)?;
         }
         Ok(())
     }
 
-    pub fn flash(&mut self, on_tenths: u32, off_tenths: u32, pm: Arc<Mutex<PortManager>>) -> Result<(), String> {
+    pub fn flash(
+        &mut self,
+        on_tenths: u32,
+        off_tenths: u32,
+        pm: Arc<Mutex<PortManager>>,
+    ) -> Result<(), String> {
         for qp in &self.selected_outputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.adapter.validate_output_port(&qp.port)?;
         }
@@ -490,7 +603,9 @@ impl PortManager {
 
             // Start the port immediately
             let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.start_port(&qp.port, state.direction, power_to_percent(state.power))?;
+            entry
+                .adapter
+                .start_port(&qp.port, state.direction, power_to_percent(state.power))?;
 
             // Spawn cycling thread
             let cancelled = Arc::new(AtomicBool::new(false));
@@ -508,18 +623,38 @@ impl PortManager {
                     let delay = if is_on { on_ms } else { off_ms };
                     std::thread::sleep(std::time::Duration::from_millis(delay));
 
-                    if cancelled.load(Ordering::Relaxed) { return; }
+                    if cancelled.load(Ordering::Relaxed) {
+                        return;
+                    }
 
-                    let Ok(mut pm) = pm.lock() else { return; };
-                    let Some(entry) = pm.devices.get_mut(&device_name) else { return; };
-                    if !entry.adapter.connected() { return; }
+                    let Ok(mut pm) = pm.lock() else {
+                        return;
+                    };
+                    let Some(entry) = pm.devices.get_mut(&device_name) else {
+                        return;
+                    };
+                    if !entry.adapter.connected() {
+                        return;
+                    }
 
                     if is_on {
                         let _ = entry.adapter.stop_port(&port);
                     } else {
-                        let state = entry.port_states.get(&port).cloned()
-                            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
-                        let _ = entry.adapter.start_port(&port, state.direction, power_to_percent(state.power));
+                        let state =
+                            entry
+                                .port_states
+                                .get(&port)
+                                .cloned()
+                                .unwrap_or(OutputPortState {
+                                    direction: PortDirection::Even,
+                                    power: 4,
+                                    is_running: false,
+                                });
+                        let _ = entry.adapter.start_port(
+                            &port,
+                            state.direction,
+                            power_to_percent(state.power),
+                        );
                     }
                     is_on = !is_on;
                 }
@@ -537,7 +672,9 @@ impl PortManager {
         let names: Vec<String> = self.devices.keys().cloned().collect();
         for name in &names {
             let entry = self.devices.get_mut(name).unwrap();
-            if !entry.adapter.connected() { continue; }
+            if !entry.adapter.connected() {
+                continue;
+            }
             let ports: Vec<String> = entry.port_states.keys().cloned().collect();
             for port in &ports {
                 let state = entry.port_states.get_mut(port).unwrap();
@@ -559,7 +696,9 @@ impl PortManager {
 
         // Validate all first
         for qp in &self.selected_inputs.clone() {
-            let entry = self.devices.get(&qp.device_name)
+            let entry = self
+                .devices
+                .get(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             if !entry.adapter.connected() {
                 return Err(format!("Device \"{}\" is not connected", qp.device_name));
@@ -609,14 +748,30 @@ mod tests {
     }
 
     impl HardwareAdapter for MockAdapter {
-        fn display_name(&self) -> &str { "Mock" }
-        fn output_ports(&self) -> &[String] { &self.ports }
-        fn input_ports(&self) -> &[String] { &[] }
-        fn connected(&self) -> bool { self.connected }
-        fn connect(&mut self) -> Result<(), String> { Ok(()) }
-        fn disconnect(&mut self) { self.connected = false; }
-        fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
-        fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+        fn display_name(&self) -> &str {
+            "Mock"
+        }
+        fn output_ports(&self) -> &[String] {
+            &self.ports
+        }
+        fn input_ports(&self) -> &[String] {
+            &[]
+        }
+        fn connected(&self) -> bool {
+            self.connected
+        }
+        fn connect(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+        fn disconnect(&mut self) {
+            self.connected = false;
+        }
+        fn validate_output_port(&self, _port: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> {
+            Ok(())
+        }
         fn start_port(&mut self, port: &str, dir: PortDirection, power: u8) -> Result<(), String> {
             self.start_calls.push((port.to_string(), dir, power));
             Ok(())
@@ -625,12 +780,51 @@ mod tests {
             self.stop_calls.push(port.to_string());
             Ok(())
         }
-        fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
-        fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
-        fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
-        fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
-        fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
-        fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+        fn run_port_for_time(
+            &mut self,
+            _port: &str,
+            _dir: PortDirection,
+            _power: u8,
+            _tenths: u32,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn rotate_port_by_degrees(
+            &mut self,
+            _port: &str,
+            _dir: PortDirection,
+            _power: u8,
+            _degrees: i32,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn rotate_port_to_position(
+            &mut self,
+            _port: &str,
+            _dir: PortDirection,
+            _power: u8,
+            _pos: i32,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn rotate_to_home(
+            &mut self,
+            _port: &str,
+            _dir: PortDirection,
+            _power: u8,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn read_sensor(
+            &mut self,
+            _port: &str,
+            _mode: Option<&str>,
+        ) -> Result<Option<LogoValue>, String> {
+            Ok(None)
+        }
     }
 
     #[test]

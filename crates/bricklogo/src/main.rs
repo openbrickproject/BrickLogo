@@ -1,12 +1,12 @@
-use std::io;
-use std::time::Duration;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use std::io;
+use std::time::Duration;
 
 use bricklogo_tui::app::App;
 use bricklogo_tui::ui;
@@ -32,14 +32,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Poll with short timeout so we can check for background eval results
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
 
                 // Help mode
                 if app.help_mode {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => app.help_mode = false,
                         KeyCode::Up => {
-                            if app.help_scroll > 0 { app.help_scroll -= 1; }
+                            if app.help_scroll > 0 {
+                                app.help_scroll -= 1;
+                            }
                         }
                         KeyCode::Down => app.help_scroll += 1,
                         _ => {}
@@ -68,7 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Enter => {
                         if !app.busy {
                             app.submit_input();
-                            if app.should_quit { break; }
+                            if app.should_quit {
+                                break;
+                            }
                         }
                     }
                     KeyCode::Char(c) => {
@@ -89,10 +95,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     KeyCode::Left => {
-                        if app.cursor_position > 0 { app.cursor_position -= 1; }
+                        if app.cursor_position > 0 {
+                            app.cursor_position -= 1;
+                        }
                     }
                     KeyCode::Right => {
-                        if app.cursor_position < app.input.len() { app.cursor_position += 1; }
+                        if app.cursor_position < app.input.len() {
+                            app.cursor_position += 1;
+                        }
                     }
                     KeyCode::Up => {
                         if !app.busy && app.def_buffer.is_none() {

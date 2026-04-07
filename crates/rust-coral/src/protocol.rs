@@ -208,9 +208,15 @@ const DEVICE_MSG_IMU_GESTURE: u8 = 16;
 const DEVICE_MSG_MOTOR_GESTURE: u8 = 17;
 
 const DEVICE_MSG_TYPES: &[u8] = &[
-    DEVICE_MSG_INFO_HUB, DEVICE_MSG_IMU_HUB, DEVICE_MSG_TAG_HUB,
-    DEVICE_MSG_BUTTON, DEVICE_MSG_MOTOR, DEVICE_MSG_COLOR,
-    DEVICE_MSG_JOYSTICK, DEVICE_MSG_IMU_GESTURE, DEVICE_MSG_MOTOR_GESTURE,
+    DEVICE_MSG_INFO_HUB,
+    DEVICE_MSG_IMU_HUB,
+    DEVICE_MSG_TAG_HUB,
+    DEVICE_MSG_BUTTON,
+    DEVICE_MSG_MOTOR,
+    DEVICE_MSG_COLOR,
+    DEVICE_MSG_JOYSTICK,
+    DEVICE_MSG_IMU_GESTURE,
+    DEVICE_MSG_MOTOR_GESTURE,
 ];
 
 fn is_device_msg_type(v: u8) -> bool {
@@ -219,12 +225,28 @@ fn is_device_msg_type(v: u8) -> bool {
 
 // ── Encoding ────────────────────────────────────
 
-fn push_u8(buf: &mut Vec<u8>, v: u8) { buf.push(v); }
-fn push_i8(buf: &mut Vec<u8>, v: i8) { buf.push(v as u8); }
-fn push_u16(buf: &mut Vec<u8>, v: u16) { buf.push(v as u8); buf.push((v >> 8) as u8); }
-fn push_i16(buf: &mut Vec<u8>, v: i16) { push_u16(buf, v as u16); }
-fn push_u32(buf: &mut Vec<u8>, v: u32) { buf.push(v as u8); buf.push((v >> 8) as u8); buf.push((v >> 16) as u8); buf.push((v >> 24) as u8); }
-fn push_i32(buf: &mut Vec<u8>, v: i32) { push_u32(buf, v as u32); }
+fn push_u8(buf: &mut Vec<u8>, v: u8) {
+    buf.push(v);
+}
+fn push_i8(buf: &mut Vec<u8>, v: i8) {
+    buf.push(v as u8);
+}
+fn push_u16(buf: &mut Vec<u8>, v: u16) {
+    buf.push(v as u8);
+    buf.push((v >> 8) as u8);
+}
+fn push_i16(buf: &mut Vec<u8>, v: i16) {
+    push_u16(buf, v as u16);
+}
+fn push_u32(buf: &mut Vec<u8>, v: u32) {
+    buf.push(v as u8);
+    buf.push((v >> 8) as u8);
+    buf.push((v >> 16) as u8);
+    buf.push((v >> 24) as u8);
+}
+fn push_i32(buf: &mut Vec<u8>, v: i32) {
+    push_u32(buf, v as u32);
+}
 
 pub fn encode_info_request() -> Vec<u8> {
     vec![MessageType::InfoRequest as u8]
@@ -272,7 +294,11 @@ pub fn encode_motor_run_for_degrees(motor_bits: u8, degrees: i32, direction: u8)
     buf
 }
 
-pub fn encode_motor_run_to_absolute_position(motor_bits: u8, position: u16, direction: u8) -> Vec<u8> {
+pub fn encode_motor_run_to_absolute_position(
+    motor_bits: u8,
+    position: u16,
+    direction: u8,
+) -> Vec<u8> {
     let mut buf = vec![MessageType::MotorRunToAbsolutePositionCommand as u8];
     push_u8(&mut buf, motor_bits);
     push_u16(&mut buf, position);
@@ -305,7 +331,9 @@ pub fn encode_motor_set_duty_cycle(motor_bits: u8, duty_cycle: i16) -> Vec<u8> {
 
 /// Decode device notification data into sensor payloads.
 pub fn decode_device_data(data: &[u8]) -> Vec<DeviceSensorPayload> {
-    if data.is_empty() { return Vec::new(); }
+    if data.is_empty() {
+        return Vec::new();
+    }
     let mut reader = BufferReader::new(data);
     let mut events = Vec::new();
 
@@ -316,7 +344,8 @@ pub fn decode_device_data(data: &[u8]) -> Vec<DeviceSensorPayload> {
                 let level = reader.read_u8();
                 let usb = reader.read_u8();
                 events.push(DeviceSensorPayload::Battery(BatteryPayload {
-                    level, usb_power_state: usb,
+                    level,
+                    usb_power_state: usb,
                 }));
                 // Optional embedded joystick data
                 if reader.remaining() >= 6 {
@@ -403,7 +432,9 @@ pub fn decode_device_data(data: &[u8]) -> Vec<DeviceSensorPayload> {
                 // Skip unknown bytes until next known type
                 while reader.remaining() > 0 {
                     if let Some(next) = reader.peek_u8() {
-                        if is_device_msg_type(next) { break; }
+                        if is_device_msg_type(next) {
+                            break;
+                        }
                     }
                     reader.read_u8();
                 }
@@ -420,7 +451,11 @@ pub enum IncomingMessage {
     /// Device notification containing sensor payloads (id 60).
     Notification(Vec<DeviceSensorPayload>),
     /// Motor command result with motor_bit_mask and status.
-    MotorResult { command_id: u8, motor_bit_mask: u8, status: u8 },
+    MotorResult {
+        command_id: u8,
+        motor_bit_mask: u8,
+        status: u8,
+    },
     /// Status-only result (light, sound, movement, IMU commands).
     StatusResult { command_id: u8, status: u8 },
     /// Other message (info response, notification ack, etc.).
@@ -443,15 +478,20 @@ impl IncomingMessage {
 const MOTOR_RESULT_IDS: &[u8] = &[121, 123, 125, 127, 129, 131, 133, 139, 141, 143, 145];
 
 // Status-only result IDs
-const STATUS_ONLY_RESULT_IDS: &[u8] = &[111, 113, 115, 151, 153, 155, 157, 159, 161, 169, 171, 173, 175, 177, 191, 193];
+const STATUS_ONLY_RESULT_IDS: &[u8] = &[
+    111, 113, 115, 151, 153, 155, 157, 159, 161, 169, 171, 173, 175, 177, 191, 193,
+];
 
 /// Decode a full incoming BLE message.
 pub fn decode_incoming(data: &[u8]) -> Option<IncomingMessage> {
-    if data.is_empty() { return None; }
+    if data.is_empty() {
+        return None;
+    }
     let mut reader = BufferReader::new(data);
     let id = reader.read_u8();
 
-    if id == 60 { // DeviceNotification
+    if id == 60 {
+        // DeviceNotification
         let _reserved = reader.read_u16();
         let device_data = decode_device_data(reader.read_remaining());
         return Some(IncomingMessage::Notification(device_data));
@@ -461,12 +501,19 @@ pub fn decode_incoming(data: &[u8]) -> Option<IncomingMessage> {
         let motor_bit_mask = reader.read_u8();
         let status = reader.read_u8();
         // command_id is result_id - 1
-        return Some(IncomingMessage::MotorResult { command_id: id - 1, motor_bit_mask, status });
+        return Some(IncomingMessage::MotorResult {
+            command_id: id - 1,
+            motor_bit_mask,
+            status,
+        });
     }
 
     if STATUS_ONLY_RESULT_IDS.contains(&id) {
         let status = reader.read_u8();
-        return Some(IncomingMessage::StatusResult { command_id: id - 1, status });
+        return Some(IncomingMessage::StatusResult {
+            command_id: id - 1,
+            status,
+        });
     }
 
     // Info response, device notification response, etc.
@@ -487,54 +534,54 @@ mod tests {
         let msg = encode_notification_request(50);
         assert_eq!(msg[0], 40); // DeviceNotificationRequest
         assert_eq!(msg[1], 50); // low byte
-        assert_eq!(msg[2], 0);  // high byte
+        assert_eq!(msg[2], 0); // high byte
     }
 
     #[test]
     fn test_encode_motor_set_speed() {
         let msg = encode_motor_set_speed(1, 50);
         assert_eq!(msg[0], 140); // MotorSetSpeedCommand
-        assert_eq!(msg[1], 1);   // Left motor
-        assert_eq!(msg[2], 50);  // Speed
+        assert_eq!(msg[1], 1); // Left motor
+        assert_eq!(msg[2], 50); // Speed
     }
 
     #[test]
     fn test_encode_motor_run() {
         let msg = encode_motor_run(3, 0); // Both, Clockwise
         assert_eq!(msg[0], 122); // MotorRunCommand
-        assert_eq!(msg[1], 3);   // Both
-        assert_eq!(msg[2], 0);   // Clockwise
+        assert_eq!(msg[1], 3); // Both
+        assert_eq!(msg[2], 0); // Clockwise
     }
 
     #[test]
     fn test_encode_motor_stop() {
         let msg = encode_motor_stop(3);
         assert_eq!(msg[0], 138); // MotorStopCommand
-        assert_eq!(msg[1], 3);   // Both
+        assert_eq!(msg[1], 3); // Both
     }
 
     #[test]
     fn test_encode_motor_run_for_time() {
         let msg = encode_motor_run_for_time(1, 1000, 0);
         assert_eq!(msg[0], 126); // MotorRunForTimeCommand
-        assert_eq!(msg[1], 1);   // Left
+        assert_eq!(msg[1], 1); // Left
         // 1000 as u32 LE = 0xE8, 0x03, 0x00, 0x00
         assert_eq!(msg[2], 0xE8);
         assert_eq!(msg[3], 0x03);
         assert_eq!(msg[4], 0x00);
         assert_eq!(msg[5], 0x00);
-        assert_eq!(msg[6], 0);   // Clockwise
+        assert_eq!(msg[6], 0); // Clockwise
     }
 
     #[test]
     fn test_encode_motor_run_for_degrees() {
         let msg = encode_motor_run_for_degrees(2, 360, 1);
         assert_eq!(msg[0], 124); // MotorRunForDegreesCommand
-        assert_eq!(msg[1], 2);   // Right
+        assert_eq!(msg[1], 2); // Right
         // 360 as i32 LE
         assert_eq!(msg[2], 0x68);
         assert_eq!(msg[3], 0x01);
-        assert_eq!(msg[6], 1);   // Counterclockwise
+        assert_eq!(msg[6], 1); // Counterclockwise
     }
 
     #[test]
@@ -577,8 +624,8 @@ mod tests {
         data.push(75); // reflection
         data.extend_from_slice(&200u16.to_le_bytes()); // raw_red
         data.extend_from_slice(&100u16.to_le_bytes()); // raw_green
-        data.extend_from_slice(&50u16.to_le_bytes());  // raw_blue
-        data.extend_from_slice(&30u16.to_le_bytes());  // hue
+        data.extend_from_slice(&50u16.to_le_bytes()); // raw_blue
+        data.extend_from_slice(&30u16.to_le_bytes()); // hue
         data.push(80); // saturation
         data.push(90); // value
 
@@ -665,8 +712,12 @@ mod tests {
     #[test]
     fn test_cache_key() {
         let motor = DeviceSensorPayload::Motor(MotorNotificationPayload {
-            motor_bit_mask: 1, state: MotorState::Ready,
-            absolute_position: 0, power: 0, speed: 0, position: 0,
+            motor_bit_mask: 1,
+            state: MotorState::Ready,
+            absolute_position: 0,
+            power: 0,
+            speed: 0,
+            position: 0,
         });
         assert_eq!(motor.cache_key(), "motor:1");
 

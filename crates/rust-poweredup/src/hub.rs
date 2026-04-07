@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use crate::constants::*;
 use crate::devices::{self, SensorReading, build_mode_lookup};
 use crate::protocol::*;
+use std::collections::HashMap;
 
 /// A device attached to a hub port.
 #[derive(Debug, Clone)]
@@ -73,21 +73,38 @@ impl Hub {
             MessageType::HubAttachedIo => {
                 if let Some(io_event) = parse_attached_io(msg) {
                     match io_event {
-                        AttachedIoEvent::Attached { port_id, device_type } => {
+                        AttachedIoEvent::Attached {
+                            port_id,
+                            device_type,
+                        } => {
                             let device = AttachedDevice::new(port_id, device_type);
                             self.devices.insert(port_id, device);
-                            events.push(HubEvent::DeviceAttached { port_id, device_type });
+                            events.push(HubEvent::DeviceAttached {
+                                port_id,
+                                device_type,
+                            });
                         }
                         AttachedIoEvent::Detached { port_id } => {
                             if let Some(device) = self.devices.remove(&port_id) {
-                                events.push(HubEvent::DeviceDetached { port_id, device_type: device.device_type });
+                                events.push(HubEvent::DeviceDetached {
+                                    port_id,
+                                    device_type: device.device_type,
+                                });
                             }
                         }
-                        AttachedIoEvent::AttachedVirtual { port_id, device_type, first_port, second_port } => {
+                        AttachedIoEvent::AttachedVirtual {
+                            port_id,
+                            device_type,
+                            first_port,
+                            second_port,
+                        } => {
                             let device = AttachedDevice::new(port_id, device_type);
                             self.devices.insert(port_id, device);
                             events.push(HubEvent::VirtualDeviceAttached {
-                                port_id, device_type, first_port, second_port,
+                                port_id,
+                                device_type,
+                                first_port,
+                                second_port,
                             });
                         }
                     }
@@ -99,7 +116,10 @@ impl Hub {
                     if let Some(device) = self.devices.get_mut(&port_id) {
                         if let Some(mode) = device.current_mode {
                             let reading = devices::parse_sensor_data(
-                                device.device_type, mode, data, self.hub_type.is_wedo2()
+                                device.device_type,
+                                mode,
+                                data,
+                                self.hub_type.is_wedo2(),
                             );
                             if let Some(ref r) = reading {
                                 device.last_reading = Some(r.clone());
@@ -127,8 +147,12 @@ impl Hub {
             MessageType::HubProperties => {
                 if let Some(prop) = parse_hub_property(msg) {
                     match prop {
-                        HubPropertyValue::BatteryVoltage(v) => { self.battery = v; }
-                        HubPropertyValue::Name(ref n) => { self.name = n.clone(); }
+                        HubPropertyValue::BatteryVoltage(v) => {
+                            self.battery = v;
+                        }
+                        HubPropertyValue::Name(ref n) => {
+                            self.name = n.clone();
+                        }
                         _ => {}
                     }
                     events.push(HubEvent::PropertyUpdate(prop));
@@ -144,23 +168,33 @@ impl Hub {
     /// Process a WeDo 2.0 port type message (attach/detach).
     pub fn process_wedo2_port_type(&mut self, msg: &[u8]) -> Vec<HubEvent> {
         let mut events = Vec::new();
-        if msg.len() < 2 { return events; }
+        if msg.len() < 2 {
+            return events;
+        }
 
         let port_id = msg[0];
         let event = msg[1];
 
         match event {
-            0x01 => { // attached
+            0x01 => {
+                // attached
                 if msg.len() >= 4 {
                     let device_type = DeviceType::from_u16(msg[3] as u16);
                     let device = AttachedDevice::new(port_id, device_type);
                     self.devices.insert(port_id, device);
-                    events.push(HubEvent::DeviceAttached { port_id, device_type });
+                    events.push(HubEvent::DeviceAttached {
+                        port_id,
+                        device_type,
+                    });
                 }
             }
-            0x00 => { // detached
+            0x00 => {
+                // detached
                 if let Some(device) = self.devices.remove(&port_id) {
-                    events.push(HubEvent::DeviceDetached { port_id, device_type: device.device_type });
+                    events.push(HubEvent::DeviceDetached {
+                        port_id,
+                        device_type: device.device_type,
+                    });
                 }
             }
             _ => {}
@@ -175,9 +209,7 @@ impl Hub {
         if let Some((port_id, data)) = parse_wedo2_sensor_value(msg) {
             if let Some(device) = self.devices.get_mut(&port_id) {
                 if let Some(mode) = device.current_mode {
-                    let reading = devices::parse_sensor_data(
-                        device.device_type, mode, data, true
-                    );
+                    let reading = devices::parse_sensor_data(device.device_type, mode, data, true);
                     if let Some(ref r) = reading {
                         device.last_reading = Some(r.clone());
                         events.push(HubEvent::SensorValue {
@@ -213,7 +245,8 @@ impl Hub {
 
     /// Get the device on a named port.
     pub fn get_device_at_port(&self, port_name: &str) -> Option<&AttachedDevice> {
-        self.port_id_by_name(port_name).and_then(|id| self.devices.get(&id))
+        self.port_id_by_name(port_name)
+            .and_then(|id| self.devices.get(&id))
     }
 
     /// Find the first device matching a type.
@@ -232,24 +265,46 @@ impl Hub {
 
     /// Get the mode number for an event name on a port.
     pub fn mode_for_event(&self, port_id: u8, event: &str) -> Option<u8> {
-        self.devices.get(&port_id)
+        self.devices
+            .get(&port_id)
             .and_then(|d| d.mode_lookup.get(event).copied())
     }
 
     /// Get the last reading from a port.
     pub fn last_reading(&self, port_id: u8) -> Option<&SensorReading> {
-        self.devices.get(&port_id).and_then(|d| d.last_reading.as_ref())
+        self.devices
+            .get(&port_id)
+            .and_then(|d| d.last_reading.as_ref())
     }
 }
 
 /// Events produced by processing hub messages.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HubEvent {
-    DeviceAttached { port_id: u8, device_type: DeviceType },
-    DeviceDetached { port_id: u8, device_type: DeviceType },
-    VirtualDeviceAttached { port_id: u8, device_type: DeviceType, first_port: u8, second_port: u8 },
-    SensorValue { port_id: u8, device_type: DeviceType, reading: SensorReading },
-    CommandFeedback { port_id: u8, completed: bool, discarded: bool },
+    DeviceAttached {
+        port_id: u8,
+        device_type: DeviceType,
+    },
+    DeviceDetached {
+        port_id: u8,
+        device_type: DeviceType,
+    },
+    VirtualDeviceAttached {
+        port_id: u8,
+        device_type: DeviceType,
+        first_port: u8,
+        second_port: u8,
+    },
+    SensorValue {
+        port_id: u8,
+        device_type: DeviceType,
+        reading: SensorReading,
+    },
+    CommandFeedback {
+        port_id: u8,
+        completed: bool,
+        discarded: bool,
+    },
     PropertyUpdate(HubPropertyValue),
 }
 
@@ -320,14 +375,19 @@ mod tests {
         hub.on_connected();
 
         // Attach a Technic Color Sensor on port 0
-        let msg = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let msg = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         let events = hub.process_message(&msg);
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], HubEvent::DeviceAttached {
-            port_id: 0,
-            device_type: DeviceType::TechnicColorSensor,
-        });
+        assert_eq!(
+            events[0],
+            HubEvent::DeviceAttached {
+                port_id: 0,
+                device_type: DeviceType::TechnicColorSensor,
+            }
+        );
 
         let device = hub.get_device(0).unwrap();
         assert_eq!(device.device_type, DeviceType::TechnicColorSensor);
@@ -340,7 +400,9 @@ mod tests {
         hub.on_connected();
 
         // Attach
-        let msg = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let msg = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&msg);
         assert!(hub.get_device(0).is_some());
 
@@ -348,7 +410,10 @@ mod tests {
         let msg = vec![5, 0x00, 0x04, 0x00, 0x00];
         let events = hub.process_message(&msg);
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], HubEvent::DeviceDetached { port_id: 0, .. }));
+        assert!(matches!(
+            events[0],
+            HubEvent::DeviceDetached { port_id: 0, .. }
+        ));
         assert!(hub.get_device(0).is_none());
     }
 
@@ -358,7 +423,9 @@ mod tests {
         hub.on_connected();
 
         // Attach color sensor on port 0
-        let attach = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let attach = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&attach);
 
         // Subscribe to color mode
@@ -369,7 +436,10 @@ mod tests {
         let events = hub.process_message(&msg);
 
         assert_eq!(events.len(), 1);
-        if let HubEvent::SensorValue { port_id, reading, .. } = &events[0] {
+        if let HubEvent::SensorValue {
+            port_id, reading, ..
+        } = &events[0]
+        {
             assert_eq!(*port_id, 0);
             assert_eq!(*reading, SensorReading::Number(3.0));
         } else {
@@ -386,7 +456,9 @@ mod tests {
         hub.on_connected();
 
         // Attach angular motor on port 0
-        let attach = vec![15, 0x00, 0x04, 0x00, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let attach = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&attach);
 
         // Subscribe to rotation mode
@@ -394,7 +466,16 @@ mod tests {
 
         // Sensor value: 720 degrees (0x000002D0 LE)
         let deg_bytes = 720_i32.to_le_bytes();
-        let msg = vec![9, 0x00, 0x45, 0x00, deg_bytes[0], deg_bytes[1], deg_bytes[2], deg_bytes[3]];
+        let msg = vec![
+            9,
+            0x00,
+            0x45,
+            0x00,
+            deg_bytes[0],
+            deg_bytes[1],
+            deg_bytes[2],
+            deg_bytes[3],
+        ];
         let events = hub.process_message(&msg);
 
         assert_eq!(events.len(), 1);
@@ -412,7 +493,12 @@ mod tests {
         let events = hub.process_message(&msg);
 
         assert_eq!(events.len(), 1);
-        if let HubEvent::CommandFeedback { port_id, completed, discarded } = &events[0] {
+        if let HubEvent::CommandFeedback {
+            port_id,
+            completed,
+            discarded,
+        } = &events[0]
+        {
             assert_eq!(*port_id, 0);
             assert!(*completed);
             assert!(!*discarded);
@@ -450,7 +536,9 @@ mod tests {
         let mut hub = Hub::new(HubType::Hub);
         hub.on_connected();
 
-        let attach = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let attach = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&attach);
 
         assert_eq!(hub.mode_for_event(0, "color"), Some(0x00));
@@ -465,11 +553,15 @@ mod tests {
         hub.on_connected();
 
         // Attach motor on port 0
-        let motor_attach = vec![15, 0x00, 0x04, 0x00, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let motor_attach = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&motor_attach);
 
         // Attach color sensor on port 2
-        let color_attach = vec![15, 0x00, 0x04, 0x02, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let color_attach = vec![
+            15, 0x00, 0x04, 0x02, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&color_attach);
 
         let motor = hub.find_device_by_type(DeviceType::TechnicMediumAngularMotor);
@@ -480,7 +572,10 @@ mod tests {
         assert!(color.is_some());
         assert_eq!(color.unwrap().port_id, 2);
 
-        assert!(hub.find_device_by_type(DeviceType::TechnicForceSensor).is_none());
+        assert!(
+            hub.find_device_by_type(DeviceType::TechnicForceSensor)
+                .is_none()
+        );
     }
 
     #[test]
@@ -488,7 +583,9 @@ mod tests {
         let mut hub = Hub::new(HubType::TechnicMediumHub);
         hub.on_connected();
 
-        let attach = vec![15, 0x00, 0x04, 0x02, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let attach = vec![
+            15, 0x00, 0x04, 0x02, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&attach);
 
         let device = hub.get_device_at_port("C");
@@ -508,10 +605,13 @@ mod tests {
         let events = hub.process_wedo2_port_type(&msg);
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], HubEvent::DeviceAttached {
-            port_id: 1,
-            device_type: DeviceType::TiltSensor,
-        });
+        assert_eq!(
+            events[0],
+            HubEvent::DeviceAttached {
+                port_id: 1,
+                device_type: DeviceType::TiltSensor,
+            }
+        );
     }
 
     #[test]
@@ -519,7 +619,9 @@ mod tests {
         let mut hub = Hub::new(HubType::TechnicMediumHub);
         hub.on_connected();
 
-        let attach = vec![15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let attach = vec![
+            15, 0x00, 0x04, 0x00, 0x01, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         hub.process_message(&attach);
 
         // Don't subscribe — sensor value should produce no events
@@ -537,7 +639,13 @@ mod tests {
         let events = hub.process_message(&msg);
 
         assert_eq!(events.len(), 1);
-        if let HubEvent::VirtualDeviceAttached { port_id, first_port, second_port, .. } = &events[0] {
+        if let HubEvent::VirtualDeviceAttached {
+            port_id,
+            first_port,
+            second_port,
+            ..
+        } = &events[0]
+        {
             assert_eq!(*port_id, 0x10);
             assert_eq!(*first_port, 0x00);
             assert_eq!(*second_port, 0x01);

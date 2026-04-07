@@ -1,12 +1,14 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, mpsc};
-use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::driver::{self, DeviceSlot};
-use rust_wedo::wedo::{WeDoSensorPayload, DistanceSensorPayload, TiltSensorPayload, wedo_usb_present};
-use rust_wedo::protocol::{encode_motor_command, normalize_power, decode_sensor_notification};
-use rust_wedo::constants::*;
+use bricklogo_lang::value::LogoValue;
 use hidapi::{HidApi, HidDevice};
+use rust_wedo::constants::*;
+use rust_wedo::protocol::{decode_sensor_notification, encode_motor_command, normalize_power};
+use rust_wedo::wedo::{
+    DistanceSensorPayload, TiltSensorPayload, WeDoSensorPayload, wedo_usb_present,
+};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, mpsc};
 
 fn to_signed_power(direction: PortDirection, power: u8) -> i32 {
     let p = power as i32;
@@ -60,20 +62,26 @@ impl DeviceSlot for WeDoSlot {
                                 SensorType::Distance => {
                                     let distance = get_distance(sample.raw_value);
                                     let key = format!("distance:{}", sample.port);
-                                    shared.last_payloads.insert(key, WeDoSensorPayload::Distance(DistanceSensorPayload {
-                                        port: sample.port.clone(),
-                                        raw_value: sample.raw_value,
-                                        distance,
-                                    }));
+                                    shared.last_payloads.insert(
+                                        key,
+                                        WeDoSensorPayload::Distance(DistanceSensorPayload {
+                                            port: sample.port.clone(),
+                                            raw_value: sample.raw_value,
+                                            distance,
+                                        }),
+                                    );
                                 }
                                 SensorType::Tilt => {
                                     let tilt = get_tilt_event(sample.raw_value);
                                     let key = format!("tilt:{}", sample.port);
-                                    shared.last_payloads.insert(key, WeDoSensorPayload::Tilt(TiltSensorPayload {
-                                        port: sample.port.clone(),
-                                        raw_value: sample.raw_value,
-                                        tilt,
-                                    }));
+                                    shared.last_payloads.insert(
+                                        key,
+                                        WeDoSensorPayload::Tilt(TiltSensorPayload {
+                                            port: sample.port.clone(),
+                                            raw_value: sample.raw_value,
+                                            tilt,
+                                        }),
+                                    );
                                 }
                                 SensorType::Unknown => {}
                             }
@@ -94,7 +102,8 @@ impl DeviceSlot for WeDoSlot {
         if let Some(cmd) = last_cmd {
             self.motor_values[0] = cmd.motor_a;
             self.motor_values[1] = cmd.motor_b;
-            let encoded = encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
+            let encoded =
+                encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
             let _ = self.device.write(&encoded);
         }
     }
@@ -138,7 +147,9 @@ impl WeDoAdapter {
     }
 
     fn send_motor_state(&self) -> Result<(), String> {
-        self.tx.as_ref().ok_or("Not connected")?
+        self.tx
+            .as_ref()
+            .ok_or("Not connected")?
             .send(WeDoMotorCommand {
                 motor_a: self.motor_values[0],
                 motor_b: self.motor_values[1],
@@ -148,10 +159,18 @@ impl WeDoAdapter {
 }
 
 impl HardwareAdapter for WeDoAdapter {
-    fn display_name(&self) -> &str { &self.display_name }
-    fn output_ports(&self) -> &[String] { &self.output_ports }
-    fn input_ports(&self) -> &[String] { &[] }
-    fn connected(&self) -> bool { self.tx.is_some() }
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    fn output_ports(&self) -> &[String] {
+        &self.output_ports
+    }
+    fn input_ports(&self) -> &[String] {
+        &[]
+    }
+    fn connected(&self) -> bool {
+        self.tx.is_some()
+    }
 
     fn connect(&mut self) -> Result<(), String> {
         if !wedo_usb_present() {
@@ -163,22 +182,29 @@ impl HardwareAdapter for WeDoAdapter {
         let device = if let Some(ref id) = self.identifier {
             if id.starts_with('/') || id.contains('\\') {
                 let c_path = std::ffi::CString::new(id.as_str()).map_err(|e| e.to_string())?;
-                api.open_path(&c_path).map_err(|e| format!("Failed to open WeDo at {}: {}", id, e))?
+                api.open_path(&c_path)
+                    .map_err(|e| format!("Failed to open WeDo at {}: {}", id, e))?
             } else {
                 // Find by serial number or other identifier
-                let dev_info = api.device_list()
+                let dev_info = api
+                    .device_list()
                     .find(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
                     .ok_or("No WeDo device found")?;
-                api.open_path(dev_info.path()).map_err(|e| format!("Failed to open WeDo: {}", e))?
+                api.open_path(dev_info.path())
+                    .map_err(|e| format!("Failed to open WeDo: {}", e))?
             }
         } else {
-            let dev_info = api.device_list()
+            let dev_info = api
+                .device_list()
                 .find(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
                 .ok_or("No WeDo device found")?;
-            api.open_path(dev_info.path()).map_err(|e| format!("Failed to open WeDo: {}", e))?
+            api.open_path(dev_info.path())
+                .map_err(|e| format!("Failed to open WeDo: {}", e))?
         };
 
-        device.set_blocking_mode(false).map_err(|e| format!("Failed to set non-blocking: {}", e))?;
+        device
+            .set_blocking_mode(false)
+            .map_err(|e| format!("Failed to set non-blocking: {}", e))?;
 
         let (tx, rx) = mpsc::channel();
         let shared = Arc::new(Mutex::new(WeDoShared::new()));
@@ -227,7 +253,12 @@ impl HardwareAdapter for WeDoAdapter {
         }
     }
 
-    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+    fn start_port(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+    ) -> Result<(), String> {
         let idx = self.normalize_port(port)?;
         self.motor_values[idx] = normalize_power(to_signed_power(direction, power));
         self.send_motor_state()
@@ -239,17 +270,35 @@ impl HardwareAdapter for WeDoAdapter {
         self.send_motor_state()
     }
 
-    fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
+    fn run_port_for_time(
+        &mut self,
+        port: &str,
+        direction: PortDirection,
+        power: u8,
+        tenths: u32,
+    ) -> Result<(), String> {
         self.start_port(port, direction, power)?;
         std::thread::sleep(std::time::Duration::from_millis(tenths as u64 * 100));
         self.stop_port(port)
     }
 
-    fn rotate_port_by_degrees(&mut self, _port: &str, _direction: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> {
+    fn rotate_port_by_degrees(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+        _degrees: i32,
+    ) -> Result<(), String> {
         Err("WeDo does not support rotation by degrees".to_string())
     }
 
-    fn rotate_port_to_position(&mut self, _port: &str, _direction: PortDirection, _power: u8, _position: i32) -> Result<(), String> {
+    fn rotate_port_to_position(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+        _position: i32,
+    ) -> Result<(), String> {
         Err("WeDo does not support rotation to position".to_string())
     }
 
@@ -257,7 +306,12 @@ impl HardwareAdapter for WeDoAdapter {
         Err("WeDo does not support position reset".to_string())
     }
 
-    fn rotate_to_home(&mut self, _port: &str, _direction: PortDirection, _power: u8) -> Result<(), String> {
+    fn rotate_to_home(
+        &mut self,
+        _port: &str,
+        _direction: PortDirection,
+        _power: u8,
+    ) -> Result<(), String> {
         Err("WeDo does not support absolute positioning".to_string())
     }
 
@@ -267,28 +321,35 @@ impl HardwareAdapter for WeDoAdapter {
 
         let shared = self.shared.lock().unwrap();
         match effective_mode {
-            "distance" => {
-                match shared.last_payloads.get(&format!("distance:{}", hub_port)) {
-                    Some(WeDoSensorPayload::Distance(d)) => Ok(Some(LogoValue::Number(d.distance as f64))),
-                    _ => Ok(Some(LogoValue::Number(0.0))),
+            "distance" => match shared.last_payloads.get(&format!("distance:{}", hub_port)) {
+                Some(WeDoSensorPayload::Distance(d)) => {
+                    Ok(Some(LogoValue::Number(d.distance as f64)))
                 }
-            }
-            "tilt" => {
-                match shared.last_payloads.get(&format!("tilt:{}", hub_port)) {
-                    Some(WeDoSensorPayload::Tilt(t)) => Ok(Some(LogoValue::Number(t.tilt as u8 as f64))),
-                    _ => Ok(Some(LogoValue::Number(0.0))),
+                _ => Ok(Some(LogoValue::Number(0.0))),
+            },
+            "tilt" => match shared.last_payloads.get(&format!("tilt:{}", hub_port)) {
+                Some(WeDoSensorPayload::Tilt(t)) => {
+                    Ok(Some(LogoValue::Number(t.tilt as u8 as f64)))
                 }
-            }
+                _ => Ok(Some(LogoValue::Number(0.0))),
+            },
             "raw" => {
-                if let Some(WeDoSensorPayload::Distance(d)) = shared.last_payloads.get(&format!("distance:{}", hub_port)) {
+                if let Some(WeDoSensorPayload::Distance(d)) =
+                    shared.last_payloads.get(&format!("distance:{}", hub_port))
+                {
                     return Ok(Some(LogoValue::Number(d.raw_value as f64)));
                 }
-                if let Some(WeDoSensorPayload::Tilt(t)) = shared.last_payloads.get(&format!("tilt:{}", hub_port)) {
+                if let Some(WeDoSensorPayload::Tilt(t)) =
+                    shared.last_payloads.get(&format!("tilt:{}", hub_port))
+                {
                     return Ok(Some(LogoValue::Number(t.raw_value as f64)));
                 }
                 Ok(Some(LogoValue::Number(0.0)))
             }
-            _ => Err(format!("Unsupported sensor mode \"{}\" for WeDo", effective_mode)),
+            _ => Err(format!(
+                "Unsupported sensor mode \"{}\" for WeDo",
+                effective_mode
+            )),
         }
     }
 

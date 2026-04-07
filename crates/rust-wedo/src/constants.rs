@@ -41,26 +41,58 @@ pub enum TiltEvent {
 
 pub const fn get_sensor_type(type_id: u8) -> SensorType {
     // Ranges from the Linux WeDo driver
-    if type_id <= 9 { return SensorType::Unknown; }
-    if type_id <= 27 { return SensorType::Unknown; }
-    if type_id <= 47 { return SensorType::Tilt; }
-    if type_id <= 67 { return SensorType::Unknown; }
-    if type_id <= 87 { return SensorType::Unknown; }
-    if type_id <= 100 { return SensorType::Unknown; }
-    if type_id <= 109 { return SensorType::Unknown; }
-    if type_id <= 131 { return SensorType::Unknown; }
-    if type_id <= 152 { return SensorType::Unknown; }
-    if type_id <= 169 { return SensorType::Unknown; }
-    if type_id <= 190 { return SensorType::Distance; }
+    if type_id <= 9 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 27 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 47 {
+        return SensorType::Tilt;
+    }
+    if type_id <= 67 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 87 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 100 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 109 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 131 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 152 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 169 {
+        return SensorType::Unknown;
+    }
+    if type_id <= 190 {
+        return SensorType::Distance;
+    }
     SensorType::Unknown
 }
 
 pub const fn get_tilt_event(raw_value: u8) -> TiltEvent {
-    if raw_value == 0 { return TiltEvent::Unknown; }
-    if raw_value <= 48 { return TiltEvent::Back; }
-    if raw_value <= 99 { return TiltEvent::Right; }
-    if raw_value <= 153 { return TiltEvent::Level; }
-    if raw_value <= 204 { return TiltEvent::Front; }
+    if raw_value == 0 {
+        return TiltEvent::Unknown;
+    }
+    if raw_value <= 48 {
+        return TiltEvent::Back;
+    }
+    if raw_value <= 99 {
+        return TiltEvent::Right;
+    }
+    if raw_value <= 153 {
+        return TiltEvent::Level;
+    }
+    if raw_value <= 204 {
+        return TiltEvent::Front;
+    }
     TiltEvent::Left
 }
 
@@ -68,7 +100,9 @@ pub fn get_distance(raw_value: u8) -> u8 {
     let raw_min = DISTANCE_SENSOR_RAW_MIN as f64;
     let raw_max = DISTANCE_SENSOR_RAW_MAX as f64;
     let span = raw_max - raw_min;
-    if span <= 0.0 { return 0; }
+    if span <= 0.0 {
+        return 0;
+    }
     let clamped = (raw_value as f64).clamp(raw_min, raw_max);
     let normalized = (clamped - raw_min) / span;
     (normalized * DISTANCE_SENSOR_MAPPED_MAX as f64).round() as u8
@@ -98,10 +132,10 @@ mod tests {
 
     #[test]
     fn test_distance_conversion() {
-        assert_eq!(get_distance(71), 0);     // min
-        assert_eq!(get_distance(219), 100);  // max
-        assert_eq!(get_distance(145), 50);   // midpoint
-        assert_eq!(get_distance(0), 0);      // below min clamps
-        assert_eq!(get_distance(255), 100);  // above max clamps
+        assert_eq!(get_distance(71), 0); // min
+        assert_eq!(get_distance(219), 100); // max
+        assert_eq!(get_distance(145), 50); // midpoint
+        assert_eq!(get_distance(0), 0); // below min clamps
+        assert_eq!(get_distance(255), 100); // above max clamps
     }
 }

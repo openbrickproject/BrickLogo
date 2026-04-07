@@ -107,7 +107,11 @@ impl Parser {
                     }
                     args.push(self.parse_expression()?);
                 }
-                Ok(AstNode::Call { name: name.to_string(), args, token })
+                Ok(AstNode::Call {
+                    name: name.to_string(),
+                    args,
+                    token,
+                })
             }
         }
     }
@@ -153,7 +157,10 @@ impl Parser {
     fn parse_repeat(&mut self) -> LogoResult<AstNode> {
         let count = self.parse_expression()?;
         let body = self.parse_list_body()?;
-        Ok(AstNode::Repeat { count: Box::new(count), body })
+        Ok(AstNode::Repeat {
+            count: Box::new(count),
+            body,
+        })
     }
 
     fn parse_forever(&mut self) -> LogoResult<AstNode> {
@@ -164,14 +171,21 @@ impl Parser {
     fn parse_if(&mut self) -> LogoResult<AstNode> {
         let condition = self.parse_expression()?;
         let body = self.parse_list_body()?;
-        Ok(AstNode::If { condition: Box::new(condition), body })
+        Ok(AstNode::If {
+            condition: Box::new(condition),
+            body,
+        })
     }
 
     fn parse_ifelse(&mut self) -> LogoResult<AstNode> {
         let condition = self.parse_expression()?;
         let then_body = self.parse_list_body()?;
         let else_body = self.parse_list_body()?;
-        Ok(AstNode::IfElse { condition: Box::new(condition), then_body, else_body })
+        Ok(AstNode::IfElse {
+            condition: Box::new(condition),
+            then_body,
+            else_body,
+        })
     }
 
     fn parse_waituntil(&mut self) -> LogoResult<AstNode> {
@@ -303,7 +317,8 @@ impl Parser {
     }
 
     fn skip_newlines(&mut self) {
-        while self.pos < self.tokens.len() && self.tokens[self.pos].token_type == TokenType::Newline {
+        while self.pos < self.tokens.len() && self.tokens[self.pos].token_type == TokenType::Newline
+        {
             self.pos += 1;
         }
     }
@@ -356,7 +371,9 @@ mod tests {
     #[test]
     fn test_procedure_call() {
         let ast = parse_str("print \"hello");
-        assert!(matches!(&ast[0], AstNode::Call { name, args, .. } if name == "print" && args.len() == 1));
+        assert!(
+            matches!(&ast[0], AstNode::Call { name, args, .. } if name == "print" && args.len() == 1)
+        );
     }
 
     #[test]
@@ -413,7 +430,8 @@ mod tests {
 
     #[test]
     fn test_recursive_procedure() {
-        let tokens = tokenize("to countdown :n if :n = 0 [stop] print :n countdown :n - 1 end").unwrap();
+        let tokens =
+            tokenize("to countdown :n if :n = 0 [stop] print :n countdown :n - 1 end").unwrap();
         let mut parser = Parser::new(HashMap::new());
         parser.set_arity("print", 1);
         let ast = parser.parse(tokens).unwrap();

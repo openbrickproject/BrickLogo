@@ -1,7 +1,7 @@
-pub mod wedo_adapter;
 pub mod controllab_adapter;
 pub mod coral_adapter;
 pub mod poweredup_adapter;
+pub mod wedo_adapter;
 
 /// Retry a BLE connect operation that may panic due to bluez-async D-Bus race conditions.
 /// Catches panics and retries up to `max_attempts` times.
@@ -16,7 +16,9 @@ where
             Ok(Err(e)) => return Err(e), // Real error, don't retry
             Err(_panic) => {
                 if attempt == max_attempts {
-                    return Err("BLE connection failed (D-Bus error, retries exhausted)".to_string());
+                    return Err(
+                        "BLE connection failed (D-Bus error, retries exhausted)".to_string()
+                    );
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }

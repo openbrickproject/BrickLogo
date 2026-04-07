@@ -11,7 +11,9 @@ impl LogoValue {
     pub fn as_number(&self) -> Result<f64, String> {
         match self {
             LogoValue::Number(n) => Ok(*n),
-            LogoValue::Word(s) => s.parse::<f64>().map_err(|_| format!("Expected a number, got {}", s)),
+            LogoValue::Word(s) => s
+                .parse::<f64>()
+                .map_err(|_| format!("Expected a number, got {}", s)),
             _ => Err(format!("Expected a number, got {}", self)),
         }
     }
@@ -26,7 +28,11 @@ impl LogoValue {
                 }
             }
             LogoValue::Word(s) => s.clone(),
-            LogoValue::List(items) => items.iter().map(|v| v.as_string()).collect::<Vec<_>>().join(" "),
+            LogoValue::List(items) => items
+                .iter()
+                .map(|v| v.as_string())
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
