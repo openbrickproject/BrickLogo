@@ -43,7 +43,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8), // header + blank line
+            Constraint::Length(9), // header + version + blank line
             Constraint::Length(1), // status bar
             Constraint::Length(1), // blank line
             Constraint::Min(1),   // repl
@@ -67,6 +67,11 @@ fn draw_header(frame: &mut Frame, area: Rect) {
         "A modern LEGO/Logo REPL, by the Open Brick Project",
         Style::default().fg(Color::DarkGray),
     )));
+    lines.push(Line::from(Span::styled(
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
 
     let header = Paragraph::new(lines);
     frame.render_widget(header, area);
