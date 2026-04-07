@@ -9,3 +9,4 @@ bricklogo-lang = { path = "../bricklogo-lang" }
 rust-wedo = { path = "../rust-wedo" }
 rust-controllab = { path = "../rust-controllab" }
 rust-coral = { path = "../rust-coral" }
+rust-poweredup = { path = "../rust-poweredup" }

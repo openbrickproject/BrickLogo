@@ -7,6 +7,7 @@ use bricklogo_hal::port_manager::PortManager;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
+use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use std::sync::Mutex;
 
 /// Config for device connections.
@@ -139,9 +140,14 @@ pub fn register_hardware_primitives(
                     Ok(None)
                 }
                 "pup" => {
-                    Err(LogoError::Runtime(
-                        "PoweredUP BLE devices are not yet supported in the Rust version".to_string()
-                    ))
+                    let mut adapter = PoweredUpAdapter::new();
+                    adapter.set_stop_flag(stop_flag.clone());
+                    output_fn("Scanning for Powered UP hub...");
+                    adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                    let display = adapter.display_name().to_string();
+                    pm.add_device(&name, Box::new(adapter));
+                    output_fn(&format!("Connected to {} as \"{}\"", display, name));
+                    Ok(None)
                 }
                 _ => {
                     Err(LogoError::Runtime("Type must be \"science\", \"pup\", \"wedo\", or \"controllab\"".to_string()))

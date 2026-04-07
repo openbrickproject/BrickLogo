@@ -91,6 +91,7 @@ dependencies = [
  "bricklogo-lang",
  "rust-controllab",
  "rust-coral",
+ "rust-poweredup",
  "rust-wedo",
 ]
 
@@ -891,6 +892,12 @@ dependencies = [
 [[package]]
 name = "rust-poweredup"
 version = "0.1.0"
+dependencies = [
+ "btleplug",
+ "futures",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "rust-wedo"
