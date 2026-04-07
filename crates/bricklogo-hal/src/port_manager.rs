@@ -72,6 +72,17 @@ impl PortManager {
     }
 
     pub fn remove_device(&mut self, name: &str) {
+        // Cancel flash timers for this device
+        let keys_to_remove: Vec<String> = self.flash_timers.keys()
+            .filter(|k| k.starts_with(&format!("{}:", name)))
+            .cloned()
+            .collect();
+        for key in keys_to_remove {
+            if let Some(flag) = self.flash_timers.remove(&key) {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+
         if let Some(mut entry) = self.devices.remove(name) {
             if entry.adapter.connected() {
                 entry.adapter.disconnect();
@@ -85,6 +96,11 @@ impl PortManager {
     }
 
     pub fn remove_all(&mut self) {
+        for flag in self.flash_timers.values() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        self.flash_timers.clear();
+
         let names: Vec<String> = self.devices.keys().cloned().collect();
         for name in names {
             if let Some(mut entry) = self.devices.remove(&name) {
@@ -96,10 +112,6 @@ impl PortManager {
         self.active_device = None;
         self.selected_outputs.clear();
         self.selected_inputs.clear();
-        for flag in self.flash_timers.values() {
-            flag.store(true, Ordering::Relaxed);
-        }
-        self.flash_timers.clear();
     }
 
     pub fn set_active_device(&mut self, name: &str) -> Result<(), String> {

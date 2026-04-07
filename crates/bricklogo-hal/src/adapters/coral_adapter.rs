@@ -283,6 +283,51 @@ impl HardwareAdapter for CoralAdapter {
 
     // ── Batch overrides using motor bitmask ──────
 
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        // Set speed — batch if all same power
+        let powers: Vec<i8> = commands.iter().map(|c| c.power as i8).collect();
+        if powers.windows(2).all(|w| w[0] == w[1]) {
+            let combined_bits: u8 = commands.iter()
+                .map(|c| motor_bits_for_port(c.port).unwrap())
+                .fold(0u8, |acc, b| acc | b);
+            let cmd = self.ble.coral.cmd_set_motor_speed(combined_bits, powers[0]);
+            self.ble.send(&cmd)?;
+        } else {
+            for cmd in commands {
+                let bits = motor_bits_for_port(cmd.port)?;
+                let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+                self.ble.send(&speed_cmd)?;
+            }
+        }
+
+        // Run — batch if all same direction
+        let dirs: Vec<MotorDirection> = commands.iter()
+            .map(|c| map_direction(c.direction, c.port))
+            .collect();
+        if dirs.windows(2).all(|w| w[0] == w[1]) {
+            let combined_bits: u8 = commands.iter()
+                .map(|c| motor_bits_for_port(c.port).unwrap())
+                .fold(0u8, |acc, b| acc | b);
+            let cmd = self.ble.coral.cmd_motor_run(combined_bits, dirs[0]);
+            self.ble.send(&cmd)
+        } else {
+            for cmd in commands {
+                let bits = motor_bits_for_port(cmd.port)?;
+                let run_cmd = self.ble.coral.cmd_motor_run(bits, map_direction(cmd.direction, cmd.port));
+                self.ble.send(&run_cmd)?;
+            }
+            Ok(())
+        }
+    }
+
+    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        let combined_bits: u8 = ports.iter()
+            .map(|p| motor_bits_for_port(p).unwrap_or(0))
+            .fold(0u8, |acc, b| acc | b);
+        let cmd = self.ble.coral.cmd_motor_stop(combined_bits);
+        self.ble.send(&cmd)
+    }
+
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
         // Set speed per motor
         for cmd in commands {
