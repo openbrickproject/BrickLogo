@@ -1,0 +1,67 @@
+; Turtle procedures from the original LEGO TC Logo distribution (1989)
+; - Adapted for use out-of-the-box with the LEGO Education Science Double Motor
+; - Adjust below if your turtle is turning the wrong way, or veering one way or the other
+
+to tfd :time
+  fix
+  gofd
+  onfor :time
+end
+
+to tbk :time
+  fix
+  gobk
+  onfor :time
+end
+
+to trt :time
+  fix
+  gort
+  onfor :time
+end
+
+to tlt :time
+  fix
+  golt
+  onfor :time
+end
+
+to gofd
+  talkto [a b]
+  seteven
+end
+
+to gobk
+  talkto [a b]
+  setodd
+end
+
+to gort
+  talkto "a
+  seteven ; Adjust if your turtle is turning the wrong way
+  talkto "b
+  setodd ; Adjust if your turtle is turning the wrong way
+  talkto [a b]
+end
+
+to golt
+  talkto "a
+  setodd ; Adjust if your turtle is turning the wrong way
+  talkto "b
+  seteven ; Adjust if your turtle is turning the wrong way
+  talkto [a b]
+end
+
+to offturtle
+  talkto [a b]
+  off
+end
+
+to ot
+  offturtle
+end
+
+to fix
+  talkto "b
+  setpower 4 ; Adjust if your turtle is veering one way or the other
+end
