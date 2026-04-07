@@ -58,11 +58,12 @@ pub fn register_hardware_primitives(
             let device_type = args[0].as_string().to_lowercase();
             let name = args[1].as_string().to_lowercase();
 
-            let mut pm = pm_ref.lock().unwrap();
-
-            // Check if name already exists
-            if pm.get_connected_device_names().contains(&name) {
-                return Err(LogoError::Runtime(format!("Device \"{}\" already exists", name)));
+            // Check if name already exists (brief lock)
+            {
+                let pm = pm_ref.lock().unwrap();
+                if pm.get_connected_device_names().contains(&name) {
+                    return Err(LogoError::Runtime(format!("Device \"{}\" already exists", name)));
+                }
             }
 
             let config = config_ref.lock().unwrap();
@@ -78,16 +79,14 @@ pub fn register_hardware_primitives(
                 }
             }
 
-            match device_type.as_str() {
+            // Connect outside the port manager lock so the UI can redraw
+            let adapter: Box<dyn HardwareAdapter> = match device_type.as_str() {
                 "wedo" => {
                     let identifier = next_config_entry(&config.wedo, &mut indices, "wedo");
                     let mut adapter = WeDoAdapter::new(identifier.as_deref());
                     output_fn("Scanning for LEGO WeDo...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                    let display = adapter.display_name().to_string();
-                    pm.add_device(&name, Box::new(adapter));
-                    output_fn(&format!("Connected to {} as \"{}\"", display, name));
-                    Ok(None)
+                    Box::new(adapter)
                 }
                 "controllab" => {
                     let serial_path = next_config_entry(&config.controllab, &mut indices, "controllab")
@@ -95,35 +94,32 @@ pub fn register_hardware_primitives(
                     let mut adapter = ControlLabAdapter::new(&serial_path);
                     output_fn("Scanning for LEGO Control Lab...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                    let display = adapter.display_name().to_string();
-                    pm.add_device(&name, Box::new(adapter));
-                    output_fn(&format!("Connected to {} as \"{}\"", display, name));
-                    Ok(None)
+                    Box::new(adapter)
                 }
                 "science" => {
                     let mut adapter = CoralAdapter::new();
                     adapter.set_stop_flag(stop_flag.clone());
                     output_fn("Scanning for LEGO Education Science...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                    let display = adapter.display_name().to_string();
-                    pm.add_device(&name, Box::new(adapter));
-                    output_fn(&format!("Connected to {} as \"{}\"", display, name));
-                    Ok(None)
+                    Box::new(adapter)
                 }
                 "pup" => {
                     let mut adapter = PoweredUpAdapter::new();
                     adapter.set_stop_flag(stop_flag.clone());
                     output_fn("Scanning for Powered UP hub...");
                     adapter.connect().map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                    let display = adapter.display_name().to_string();
-                    pm.add_device(&name, Box::new(adapter));
-                    output_fn(&format!("Connected to {} as \"{}\"", display, name));
-                    Ok(None)
+                    Box::new(adapter)
                 }
                 _ => {
-                    Err(LogoError::Runtime("Type must be \"science\", \"pup\", \"wedo\", or \"controllab\"".to_string()))
+                    return Err(LogoError::Runtime("Type must be \"science\", \"pup\", \"wedo\", or \"controllab\"".to_string()));
                 }
-            }
+            };
+
+            // Brief lock to register the connected adapter
+            let display = adapter.display_name().to_string();
+            pm_ref.lock().unwrap().add_device(&name, adapter);
+            output_fn(&format!("Connected to {} as \"{}\"", display, name));
+            Ok(None)
         }),
     });
 
