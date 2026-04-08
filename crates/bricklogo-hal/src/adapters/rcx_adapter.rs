@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::Instant;
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
@@ -33,20 +33,10 @@ enum RcxCommand {
     MotorOff { mask: u8 },
     SetSensorType { sensor: u8, sensor_type: u8 },
     SetSensorMode { sensor: u8, mode: u8 },
-    ClearSensor { sensor: u8 },
     ReadSensor { sensor: u8, source: u8, reply_tx: mpsc::Sender<Result<i16, String>> },
 }
 
 /// Shared state between the adapter and the driver slot.
-pub struct RcxShared {
-    pub connected: bool,
-}
-
-impl RcxShared {
-    fn new() -> Self {
-        RcxShared { connected: false }
-    }
-}
 
 /// Trait for RCX tower transport (serial or USB).
 pub trait RcxTransport: Send {
@@ -179,7 +169,6 @@ impl RcxTransport for SerialTransport {
 struct RcxSlot {
     transport: Box<dyn RcxTransport>,
     rx: mpsc::Receiver<RcxCommand>,
-    shared: Arc<Mutex<RcxShared>>,
     alive: bool,
 }
 
@@ -223,10 +212,6 @@ impl DeviceSlot for RcxSlot {
                     let msg = protocol::cmd_set_sensor_mode(sensor, mode);
                     self.send_with_retry(&msg);
                 }
-                RcxCommand::ClearSensor { sensor } => {
-                    let msg = protocol::cmd_clear_sensor(sensor);
-                    self.send_with_retry(&msg);
-                }
                 RcxCommand::ReadSensor { sensor, source, reply_tx } => {
                     let msg = protocol::cmd_get_value(source, sensor);
                     let result = self.transport.request(&msg)
@@ -249,7 +234,6 @@ impl DeviceSlot for RcxSlot {
 
 pub struct RcxAdapter {
     tx: Option<mpsc::Sender<RcxCommand>>,
-    shared: Arc<Mutex<RcxShared>>,
     slot_id: Option<usize>,
     display_name: String,
     output_ports: Vec<String>,
@@ -262,7 +246,6 @@ impl RcxAdapter {
     pub fn new(serial_path: Option<&str>) -> Self {
         RcxAdapter {
             tx: None,
-            shared: Arc::new(Mutex::new(RcxShared::new())),
             slot_id: None,
             display_name: "LEGO Mindstorms RCX".to_string(),
             output_ports: OUTPUT_PORTS.iter().map(|s| s.to_string()).collect(),
@@ -324,18 +307,15 @@ impl HardwareAdapter for RcxAdapter {
         }
 
         let (tx, rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(RcxShared { connected: true }));
 
         let slot = RcxSlot {
             transport: test_transport,
             rx,
-            shared: shared.clone(),
             alive: true,
         };
 
         let slot_id = driver::register(Box::new(slot));
         self.tx = Some(tx);
-        self.shared = shared;
         self.slot_id = Some(slot_id);
         Ok(())
     }
@@ -345,7 +325,6 @@ impl HardwareAdapter for RcxAdapter {
             driver::deregister(id);
         }
         self.tx = None;
-        self.shared = Arc::new(Mutex::new(RcxShared::new()));
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
