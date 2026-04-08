@@ -21,10 +21,10 @@ The full user guide will come later. This README is the front door.
 
 | Type | `connect` command | Devices |
 | --- | --- | --- |
-| LEGO Education Science | `connect "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
-| LEGO Powered UP | `connect "pup "name` | Boost Move Hub, Powered Up Hub, Remote, Control+ Hub, WeDo 2.0 Smart Hub, and other devices that use the Powered Up protocol |
-| LEGO Education WeDo 1.0 | `connect "wedo "name` | WeDo USB Hub |
-| LEGO DACTA Control Lab | `connect "controllab "name` | Interface B / Control Lab over serial |
+| LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
+| LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered Up Hub, Remote, Control+ Hub, WeDo 2.0 Smart Hub, and other devices that use the Powered Up protocol |
+| LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
+| LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B / Control Lab over serial |
 
 Multiple devices can be connected at the same time and addressed either through the active device or by qualified port names such as `"mybot.a`.
 
@@ -41,7 +41,7 @@ For example:
 Example session:
 
 ```text
-? connect "pup "mybot
+? connectto "pup "mybot
 Scanning for Powered UP hub...
 Connected to Move Hub as "mybot"
 
@@ -59,7 +59,7 @@ Connected to Move Hub as "mybot"
 You can also work in the older TC Logo style:
 
 ```text
-? connect "controllab "lab
+? connectto "controllab "lab
 ? talkto "a
 ? on
 ? off
@@ -88,7 +88,7 @@ For Control Lab, the configured serial paths are used in order as devices are co
 
 Connection:
 
-- `connect "type "name`
+- `connectto "type "name`
 - `use "name`
 - `disconnect`
 - `disconnect "name`

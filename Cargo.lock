@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "bricklogo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bricklogo-hal",
  "bricklogo-lang",
@@ -106,7 +106,7 @@ version = "0.1.0"
 
 [[package]]
 name = "bricklogo-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bricklogo-hal",
  "bricklogo-lang",
