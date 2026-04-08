@@ -408,34 +408,35 @@ impl HardwareAdapter for RcxAdapter {
         let idx = sensor_index(port)
             .ok_or_else(|| format!("Unknown sensor port \"{}\"", port))?;
 
-        // Configure sensor type/mode if needed
+        // Configure sensor type and mode.
+        // Always send type to force the RCX to refresh its sensor hardware —
+        // without a running program, the RCX won't poll sensors on its own.
+        let is_rotation = mode == Some("rotation");
         if let Some(m) = mode {
             let (stype, smode) = match m {
-                "touch" => (SENSOR_TYPE_TOUCH, SENSOR_MODE_BOOLEAN),
-                "light" => (SENSOR_TYPE_LIGHT, SENSOR_MODE_PERCENT),
-                "temperature" => (SENSOR_TYPE_TEMPERATURE, SENSOR_MODE_CELSIUS),
-                "rotation" => (SENSOR_TYPE_ROTATION, SENSOR_MODE_ANGLE),
+                "touch" => (SENSOR_TYPE_TOUCH, SENSOR_MODE_RAW),
+                "light" => (SENSOR_TYPE_LIGHT, SENSOR_MODE_RAW),
+                "temperature" => (SENSOR_TYPE_TEMPERATURE, SENSOR_MODE_RAW),
+                // Rotation needs angle mode with slope for continuous polling
+                "rotation" => (SENSOR_TYPE_ROTATION, SENSOR_MODE_ANGLE | 1),
                 "raw" => (SENSOR_TYPE_RAW, SENSOR_MODE_RAW),
                 _ => return Err(format!("Unsupported sensor mode \"{}\"", m)),
             };
 
             let current = self.sensor_types.get(&(idx as usize));
-            if current != Some(&stype) {
+            if current != Some(&stype) || !is_rotation {
                 self.send_cmd(RcxCommand::SetSensorType { sensor: idx, sensor_type: stype })?;
                 self.send_cmd(RcxCommand::SetSensorMode { sensor: idx, mode: smode })?;
                 self.sensor_types.insert(idx as usize, stype);
-                // Give the RCX time to configure
+                // Give the RCX time to read the sensor
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
 
-        // Read sensor via synchronous request through the driver
+        // Rotation uses the RCX's processed value (accumulated count).
+        // Other sensors read raw to get fresh values.
         let (reply_tx, reply_rx) = mpsc::channel();
-        let source = match mode {
-            Some("raw") => SOURCE_RAW_SENSOR,
-            Some("touch") => SOURCE_SENSOR_BOOLEAN,
-            _ => SOURCE_SENSOR_VALUE,
-        };
+        let source = if is_rotation { SOURCE_SENSOR_VALUE } else { SOURCE_RAW_SENSOR };
 
         self.send_cmd(RcxCommand::ReadSensor { sensor: idx, source, reply_tx })?;
 
@@ -445,7 +446,23 @@ impl HardwareAdapter for RcxAdapter {
 
         match mode {
             Some("touch") => {
-                Ok(Some(LogoValue::Word(if result != 0 { "true" } else { "false" }.to_string())))
+                // Raw touch sensor: low value = pressed, high = released
+                let pressed = result < 500;
+                Ok(Some(LogoValue::Word(if pressed { "true" } else { "false" }.to_string())))
+            }
+            Some("light") => {
+                // Convert raw (0-1023) to percentage (0-100), inverted (higher raw = less light)
+                let percent = ((1023 - result.max(0) as u16) as f64 / 1023.0 * 100.0).round();
+                Ok(Some(LogoValue::Number(percent)))
+            }
+            Some("temperature") => {
+                // Convert raw to Celsius (corrected formula from Gaston project)
+                let celsius = ((817.6 - result as f64) / 10.27 * 10.0).round() / 10.0;
+                Ok(Some(LogoValue::Number(celsius)))
+            }
+            Some("rotation") => {
+                // Raw rotation value
+                Ok(Some(LogoValue::Number(result as f64)))
             }
             _ => Ok(Some(LogoValue::Number(result as f64))),
         }
