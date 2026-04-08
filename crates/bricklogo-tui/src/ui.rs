@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 const PINK: Color = Color::Rgb(255, 20, 147);
@@ -18,7 +18,7 @@ const LOGO_BOTTOM: &str = r#"| |_) | |  | | (__|   <| |__| (_) | (_| | (_) |
 |____/|_|  |_|\___|_|\_\_____\___/ \__, |\___/
                                    |___/"#;
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
 
     let inner = Rect {
@@ -38,6 +38,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(9), // header + blank lines
             Constraint::Min(1),    // repl
+            Constraint::Length(1), // blank line
             Constraint::Length(1), // divider
             Constraint::Length(1), // status bar
         ])
@@ -45,8 +46,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_header(frame, chunks[0]);
     draw_repl(frame, app, chunks[1]);
-    draw_divider(frame, chunks[2]);
-    draw_status_bar(frame, app, chunks[3]);
+    // chunks[2] is the blank line
+    draw_divider(frame, chunks[3]);
+    draw_status_bar(frame, app, chunks[4]);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect) {
@@ -259,17 +261,49 @@ fn draw_repl(frame: &mut Frame, app: &App, area: Rect) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
     let lines_data = app.help_lines();
     let available = area.height.saturating_sub(1) as usize; // 1 for status line
     let max_scroll = lines_data.len().saturating_sub(available);
-    let scroll = app.help_scroll.min(max_scroll);
+    if app.help_scroll > max_scroll {
+        app.help_scroll = max_scroll;
+    }
+    let scroll = app.help_scroll;
 
     let visible = &lines_data[scroll..];
     let lines: Vec<Line> = visible
         .iter()
         .take(available)
-        .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(Color::Cyan))))
+        .map(|l| {
+            let s = l.as_str();
+            if s.is_empty() {
+                Line::from("")
+            } else if s.starts_with("      ") {
+                // Sub-description — cyan
+                Line::from(Span::styled(s, Style::default().fg(Color::Cyan)))
+            } else if s.starts_with("    ") {
+                // Command line — split at description (2+ spaces followed by uppercase letter)
+                let mut split_pos = None;
+                let bytes = s.as_bytes();
+                for i in 4..s.len().saturating_sub(1) {
+                    if bytes[i] == b' ' && bytes[i + 1].is_ascii_uppercase() && i > 4 && bytes[i - 1] == b' ' {
+                        split_pos = Some(i);
+                        break;
+                    }
+                }
+                if let Some(pos) = split_pos {
+                    Line::from(vec![
+                        Span::styled(s[..pos].to_string(), Style::default().fg(Color::White)),
+                        Span::styled(s[pos..].to_string(), Style::default().fg(Color::Cyan)),
+                    ])
+                } else {
+                    Line::from(Span::styled(s, Style::default().fg(Color::White)))
+                }
+            } else {
+                // Section header
+                Line::from(Span::styled(s, Style::default().fg(Color::Cyan)))
+            }
+        })
         .collect();
 
     let mut all_lines = lines;

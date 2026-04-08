@@ -155,7 +155,7 @@ fn test_bridge_disconnect_removes_active_device() {
 #[test]
 fn test_bridge_connect_rejects_unknown_type() {
     let (mut eval, _) = setup_eval();
-    let err = eval.evaluate("connect \"nope \"bot").unwrap_err();
+    let err = eval.evaluate("connectto \"nope \"bot").unwrap_err();
     assert_eq!(
         err.to_string(),
         "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", or \"rcx\""

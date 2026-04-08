@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Main loop
     loop {
         if needs_draw {
-            terminal.draw(|frame| ui::draw(frame, &app))?;
+            terminal.draw(|frame| ui::draw(frame, &mut app))?;
             needs_draw = false;
         }
 

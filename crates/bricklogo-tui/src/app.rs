@@ -445,14 +445,14 @@ impl App {
         let mut lines = vec![
             String::new(),
             "  Connection".to_string(),
-            "    connect \"type \"name                  Connect to a device".to_string(),
+            "    connectto \"type \"name                Connect to a device".to_string(),
+            "      Device types: \"science \"pup \"wedo \"controllab \"rcx".to_string(),
             "    use \"name                            Set active device".to_string(),
             "    disconnect                           Disconnect active device".to_string(),
             "    disconnect \"name                     Disconnect specific device".to_string(),
             "    disconnect \"all                      Disconnect all devices".to_string(),
             String::new(),
-            "    firmware \"device \"file.lgo            Upload RCX firmware".to_string(),
-            "    Device types: \"science \"pup \"wedo \"controllab \"rcx".to_string(),
+            "    firmware \"device \"file.lgo           Upload RCX firmware".to_string(),
             String::new(),
             "  Motor Control".to_string(),
             "    talkto \"port  /  talkto [a b]        Select output port(s)".to_string(),
@@ -517,14 +517,17 @@ impl App {
             }
         }
 
-        lines.push("  setdisk \"path                          Set file directory".to_string());
-        lines.push("  disk                                   Show current directory".to_string());
-        lines.push("  namepage \"name / np \"name              Set page name for save".to_string());
-        lines.push("  save                                   Save procedures to page".to_string());
-        lines.push("  load \"name / getpage \"name             Load a page".to_string());
-        lines.push("  clear                                  Clear history".to_string());
-        lines.push("  help                                   Show this help".to_string());
-        lines.push("  bye / exit                             Quit BrickLogo".to_string());
+        lines.push("  Pages and Files".to_string());
+        lines.push("    setdisk \"path                        Set file directory".to_string());
+        lines.push("    disk                                 Show current directory".to_string());
+        lines.push("    namepage \"name / np \"name            Set page name for save".to_string());
+        lines.push("    save                                 Save procedures to page".to_string());
+        lines.push("    load \"name / getpage \"name           Load a page".to_string());
+        lines.push(String::new());
+        lines.push("  REPL".to_string());
+        lines.push("    clear                                Clear history".to_string());
+        lines.push("    help                                 Show this help".to_string());
+        lines.push("    bye / exit                           Quit BrickLogo".to_string());
         lines.push(String::new());
 
         lines

@@ -58,7 +58,7 @@ pub fn register_hardware_primitives(
     let system_fn_ref = system_fn.clone();
     let stop_flag = eval.stop_flag();
     eval.register_primitive(
-        "connect",
+        "connectto",
         PrimitiveSpec {
             min_args: 2,
             max_args: 2,
