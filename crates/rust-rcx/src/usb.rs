@@ -28,10 +28,20 @@ impl RcxUsb {
         let handle = device.open()
             .map_err(|e| format!("Failed to open USB tower: {}", e))?;
 
-        // Claim interface 0
+        // Detach kernel driver if present and claim interface
         let _ = handle.set_auto_detach_kernel_driver(true);
         handle.claim_interface(0)
             .map_err(|e| format!("Failed to claim USB interface: {}", e))?;
+
+        // Reset the tower (required before it will transmit)
+        let mut reset_reply = [0u8; 2];
+        handle.read_control(
+            rusb::request_type(rusb::Direction::In, rusb::RequestType::Vendor, rusb::Recipient::Device),
+            0x04, // LEGO_USB_TOWER_REQUEST_RESET
+            0, 0,
+            &mut reset_reply,
+            Duration::from_millis(USB_TIMEOUT_MS),
+        ).map_err(|e| format!("Tower reset failed: {}", e))?;
 
         // Find interrupt endpoints
         let config = device.active_config_descriptor()
