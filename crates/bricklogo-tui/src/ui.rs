@@ -21,18 +21,11 @@ const LOGO_BOTTOM: &str = r#"| |_) | |  | | (__|   <| |__| (_) | (_| | (_) |
 pub fn draw(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(PINK))
-        .style(Style::default().bg(Color::Reset));
-
-    frame.render_widget(outer_block, size);
-
     let inner = Rect {
-        x: size.x + 2,
-        y: size.y + 1,
-        width: size.width.saturating_sub(4),
-        height: size.height.saturating_sub(2),
+        x: size.x + 1,
+        y: size.y,
+        width: size.width.saturating_sub(2),
+        height: size.height,
     };
 
     if app.help_mode {
@@ -43,16 +36,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9), // header + version + blank line
-            Constraint::Length(3), // repl context
-            Constraint::Length(1), // blank line
+            Constraint::Length(9), // header + blank lines
             Constraint::Min(1),    // repl
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // status bar
         ])
         .split(inner);
 
     draw_header(frame, chunks[0]);
-    draw_status_bar(frame, app, chunks[1]);
-    draw_repl(frame, app, chunks[3]);
+    draw_repl(frame, app, chunks[1]);
+    draw_divider(frame, chunks[2]);
+    draw_status_bar(frame, app, chunks[3]);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect) {
@@ -63,18 +57,30 @@ fn draw_header(frame: &mut Frame, area: Rect) {
             Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
         )));
     }
-    for line in LOGO_BOTTOM.lines() {
-        lines.push(Line::from(Span::styled(
-            line,
-            Style::default().fg(PINK).add_modifier(Modifier::BOLD),
-        )));
+    let bottom_lines: Vec<&str> = LOGO_BOTTOM.lines().collect();
+    for (i, line) in bottom_lines.iter().enumerate() {
+        if i == bottom_lines.len() - 1 {
+            // Last line of logo — append version
+            lines.push(Line::from(vec![
+                Span::styled(
+                    line.to_string(),
+                    Style::default().fg(PINK).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" v{}", env!("CARGO_PKG_VERSION")),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(PINK).add_modifier(Modifier::BOLD),
+            )));
+        }
     }
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "A modern LEGO/Logo REPL, by the Open Brick Project",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("v{}", env!("CARGO_PKG_VERSION")),
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(""));
@@ -83,19 +89,26 @@ fn draw_header(frame: &mut Frame, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let device_spans = format_device_line(app);
-    let talkto = format_selection_line("talkto", &app.selected_outputs);
-    let listento = format_selection_line("listento", &app.selected_inputs);
+fn draw_divider(frame: &mut Frame, area: Rect) {
+    let line = "─".repeat(area.width as usize);
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        line,
+        Style::default().fg(PINK),
+    )));
+    frame.render_widget(paragraph, area);
+}
 
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(device_spans),
-            Line::from(talkto),
-            Line::from(listento),
-        ]),
-        area,
-    );
+fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+
+    spans.extend(format_device_line(app));
+    spans.push(Span::raw("  "));
+    spans.extend(format_selection_line("talkto", &app.selected_outputs));
+    spans.push(Span::raw("  "));
+    spans.extend(format_selection_line("listento", &app.selected_inputs));
+
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
 }
 
 #[cfg(test)]
