@@ -141,4 +141,17 @@ pub trait HardwareAdapter: Send {
         }
         Ok(())
     }
+
+    // ── Firmware upload (default: unsupported) ──
+
+    /// Prepare for firmware upload by disconnecting the driver slot.
+    /// Returns transport config (e.g. serial path) for opening a fresh transport.
+    fn prepare_firmware_upload(&mut self) -> Result<Option<String>, String> {
+        Err("This device does not support firmware upload".to_string())
+    }
+
+    /// Reconnect after firmware upload.
+    fn reconnect_after_firmware(&mut self) -> Result<(), String> {
+        Err("This device does not support firmware reconnect".to_string())
+    }
 }

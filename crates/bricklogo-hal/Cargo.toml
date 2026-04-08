@@ -10,6 +10,8 @@ rust-wedo = { path = "../rust-wedo" }
 rust-controllab = { path = "../rust-controllab" }
 rust-coral = { path = "../rust-coral" }
 rust-poweredup = { path = "../rust-poweredup" }
+rust-rcx = { path = "../rust-rcx" }
 lazy_static = "1"
 hidapi = "2.6"
 serialport = "4"
+rusb = "0.9"

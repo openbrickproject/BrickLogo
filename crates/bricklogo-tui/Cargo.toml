@@ -7,6 +7,7 @@ description = "Terminal UI for BrickLogo"
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }
 bricklogo-hal = { path = "../bricklogo-hal" }
+rust-rcx = { path = "../rust-rcx" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }

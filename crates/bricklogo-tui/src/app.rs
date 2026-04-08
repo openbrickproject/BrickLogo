@@ -41,6 +41,7 @@ pub struct App {
     pub def_buffer: Option<Vec<String>>,
     evaluator: Option<Evaluator>,
     eval_result_rx: Option<mpsc::Receiver<EvalResult>>,
+    firmware_result_rx: Option<mpsc::Receiver<(Result<(), String>, Result<(), String>)>>,
     stop_flag: Arc<AtomicBool>,
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
@@ -89,6 +90,7 @@ impl App {
             def_buffer: None,
             evaluator: Some(evaluator),
             eval_result_rx: None,
+            firmware_result_rx: None,
             stop_flag,
             port_manager,
             output_buffer: output_lines_ref,
@@ -168,6 +170,32 @@ impl App {
             }
         }
 
+        if let Some(ref rx) = self.firmware_result_rx {
+            match rx.try_recv() {
+                Ok((upload_result, reconnect_result)) => {
+                    self.firmware_result_rx = None;
+                    self.drain_output_buffer();
+                    match upload_result {
+                        Ok(()) => self.add_output("Firmware upload complete", OutputLineType::System),
+                        Err(e) => self.add_output(&format!("Firmware upload failed: {}", e), OutputLineType::Error),
+                    }
+                    match reconnect_result {
+                        Ok(()) => self.add_output("RCX reconnected", OutputLineType::System),
+                        Err(e) => self.add_output(&format!("Reconnect failed: {}", e), OutputLineType::Error),
+                    }
+                    self.busy = false;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.firmware_result_rx = None;
+                    self.add_output("Firmware upload thread failed", OutputLineType::Error);
+                    self.busy = false;
+                    changed = true;
+                }
+            }
+        }
+
         changed
     }
 
@@ -222,6 +250,12 @@ impl App {
 
         self.add_output(&format!("? {}", input), OutputLineType::Input);
 
+        // Handle firmware command (before exact match)
+        if input.to_lowercase().starts_with("firmware ") {
+            self.handle_firmware_command(&input);
+            return;
+        }
+
         // Handle special commands
         match input.to_lowercase().as_str() {
             "clear" => {
@@ -242,6 +276,85 @@ impl App {
         }
 
         self.execute(&input);
+    }
+
+    fn handle_firmware_command(&mut self, input: &str) {
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        if parts.len() != 3 {
+            self.add_output("Usage: firmware \"device \"file.lgo", OutputLineType::Error);
+            return;
+        }
+        let device_name = parts[1].trim_start_matches('"').to_lowercase();
+        let firmware_path = parts[2].trim_start_matches('"').to_string();
+
+        // Resolve path relative to disk path if evaluator is available
+        let resolved_path = if let Some(ref eval) = self.evaluator {
+            let disk = eval.disk_path();
+            let candidate = disk.join(&firmware_path);
+            if candidate.exists() {
+                candidate.to_string_lossy().to_string()
+            } else {
+                firmware_path
+            }
+        } else {
+            firmware_path
+        };
+
+        // Prepare: disconnect device, get transport config
+        let prepare_result = self.port_manager.lock().unwrap()
+            .prepare_firmware_upload(&device_name);
+        let serial_path = match prepare_result {
+            Ok(path) => path,
+            Err(e) => {
+                self.add_output(&format!("Error: {}", e), OutputLineType::Error);
+                return;
+            }
+        };
+
+        self.add_output("Starting firmware upload...", OutputLineType::System);
+        self.busy = true;
+
+        let pm = self.port_manager.clone();
+        let output_buffer = self.output_buffer.clone();
+        let device_name_owned = device_name.clone();
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let upload_result = (|| -> Result<(), String> {
+                // Read and parse S-Record file
+                let content = std::fs::read_to_string(&resolved_path)
+                    .map_err(|e| format!("Cannot read firmware file: {}", e))?;
+                let image = rust_rcx::srec::parse_srec(&content)?;
+
+                // Open a fresh transport
+                let mut transport = bricklogo_hal::adapters::rcx_adapter::open_transport(
+                    serial_path.as_deref()
+                )?;
+
+                // Upload with progress
+                let ob = output_buffer.clone();
+                let progress: rust_rcx::firmware::ProgressFn = Box::new(move |current, total, phase| {
+                    ob.lock().unwrap().push(OutputLine {
+                        text: format!("{} ({}/{})", phase, current, total),
+                        line_type: OutputLineType::System,
+                    });
+                });
+
+                rust_rcx::firmware::upload_firmware(
+                    &image,
+                    &mut |msg| transport.request_firmware(msg),
+                    &progress,
+                )
+            })();
+
+            // Reconnect
+            let reconnect_result = pm.lock().unwrap()
+                .reconnect_after_firmware(&device_name_owned);
+
+            let _ = tx.send((upload_result, reconnect_result));
+        });
+
+        self.firmware_result_rx = Some(rx);
     }
 
     fn execute(&mut self, input: &str) {
@@ -338,7 +451,8 @@ impl App {
             "    disconnect \"name                     Disconnect specific device".to_string(),
             "    disconnect \"all                      Disconnect all devices".to_string(),
             String::new(),
-            "    Device types: \"science \"pup \"wedo \"controllab".to_string(),
+            "    firmware \"device \"file.lgo            Upload RCX firmware".to_string(),
+            "    Device types: \"science \"pup \"wedo \"controllab \"rcx".to_string(),
             String::new(),
             "  Motor Control".to_string(),
             "    talkto \"port  /  talkto [a b]        Select output port(s)".to_string(),

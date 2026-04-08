@@ -8,5 +8,6 @@ members = [
     "crates/rust-coral",
     "crates/rust-wedo",
     "crates/rust-controllab",
+    "crates/rust-rcx",
 ]
 resolver = "2"

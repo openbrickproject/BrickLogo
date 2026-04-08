@@ -1,0 +1,9 @@
+[package]
+name = "rust-rcx"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Mindstorms RCX protocol library"
+
+[dependencies]
+serialport = "4"
+rusb = "0.9"

@@ -2,6 +2,7 @@ use bricklogo_hal::adapter::HardwareAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
+use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
 use bricklogo_hal::port_manager::PortManager;
 use bricklogo_lang::error::LogoError;
@@ -21,6 +22,8 @@ pub struct BrickLogoConfig {
     pub pup: Vec<String>,
     #[serde(default)]
     pub science: Vec<String>,
+    #[serde(default)]
+    pub rcx: Vec<String>,
 }
 
 impl BrickLogoConfig {
@@ -136,9 +139,18 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "rcx" => {
+                        let serial_path = next_config_entry(&config.rcx, &mut indices, "rcx");
+                        let mut adapter = RcxAdapter::new(serial_path.as_deref());
+                        system_fn_ref("Scanning for LEGO Mindstorms RCX...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", or \"controllab\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", or \"rcx\""
                                 .to_string(),
                         ));
                     }

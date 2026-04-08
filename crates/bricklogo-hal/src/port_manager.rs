@@ -723,6 +723,23 @@ impl PortManager {
         }
         Ok(Some(LogoValue::List(results)))
     }
+
+    // ── Firmware upload ─────────────────────────
+
+    /// Prepare a device for firmware upload. Disconnects its driver slot
+    /// and returns transport config (serial path or None for USB).
+    pub fn prepare_firmware_upload(&mut self, name: &str) -> Result<Option<String>, String> {
+        let entry = self.devices.get_mut(name)
+            .ok_or_else(|| format!("No device named \"{}\"", name))?;
+        entry.adapter.prepare_firmware_upload()
+    }
+
+    /// Reconnect a device after firmware upload.
+    pub fn reconnect_after_firmware(&mut self, name: &str) -> Result<(), String> {
+        let entry = self.devices.get_mut(name)
+            .ok_or_else(|| format!("No device named \"{}\"", name))?;
+        entry.adapter.reconnect_after_firmware()
+    }
 }
 
 #[cfg(test)]
