@@ -298,18 +298,10 @@ impl HardwareAdapter for RcxAdapter {
             Box::new(UsbTransport { handle, endpoint_in: ep_in, endpoint_out: ep_out })
         };
 
-        // Ping the RCX to verify it's there
-        let ping_msg = protocol::cmd_alive();
-        let mut test_transport = transport;
-        match test_transport.request(&ping_msg) {
-            Ok(_) => {}
-            Err(_) => return Err("No RCX responded (is it turned on?)".to_string()),
-        }
-
         let (tx, rx) = mpsc::channel();
 
         let slot = RcxSlot {
-            transport: test_transport,
+            transport,
             rx,
             alive: true,
         };
