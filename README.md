@@ -1,6 +1,6 @@
 # BrickLogo - A modern LEGO/Logo REPL
 
-![BrickLogo screenshot](assets/screenshots/v0.1.0.png)
+![BrickLogo screenshot](screenshots/v0.2.0.png)
 
 BrickLogo brings the classic LEGO computer-control model into a modern workspace. It is a terminal Logo environment that can talk to LEGO motors, hubs, and sensors across several generations of hardware, while keeping the direct, command-driven feel of LEGO TC Logo and Control Lab.
 
@@ -19,12 +19,13 @@ The full user guide will come later. This README is the front door.
 
 ## Supported Devices
 
-| Type | `connect` command | Devices |
+| Type | `connectto` command | Devices |
 | --- | --- | --- |
 | LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
 | LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered Up Hub, Remote, Control+ Hub, WeDo 2.0 Smart Hub, and other devices that use the Powered Up protocol |
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B / Control Lab over serial |
+| LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
 
 Multiple devices can be connected at the same time and addressed either through the active device or by qualified port names such as `"mybot.a`.
 
@@ -73,16 +74,12 @@ This is mainly useful when a device needs a stable identifier, especially Contro
 
 ```json
 {
-  "controllab": [
-    "/dev/tty.usbserial-AC018HBC"
-  ],
-  "wedo": [],
-  "pup": [],
-  "science": []
+  "controllab": ["/dev/tty.usbserial-AC018HBC"],
+  "rcx": ["/dev/ttyS0"]
 }
 ```
 
-For Control Lab, the configured serial paths are used in order as devices are connected.
+For Control Lab and RCX serial towers, the configured serial paths are used in order as devices are connected. RCX USB towers are detected automatically and do not need a config entry.
 
 ## Basic Commands
 
@@ -93,6 +90,7 @@ Connection:
 - `disconnect`
 - `disconnect "name`
 - `disconnect "all`
+- `firmware "device "file.lgo` (RCX only)
 
 Motor control:
 

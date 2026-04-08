@@ -40,6 +40,7 @@ mkdir -p "$STAGING/bricklogo"
 cp "target/release/${BINARY}" "$STAGING/bricklogo/"
 cp bricklogo.config.json.example "$STAGING/bricklogo/"
 cp -r examples "$STAGING/bricklogo/"
+cp -r assets "$STAGING/bricklogo/"
 
 cd "$STAGING"
 zip -r "${ZIP_NAME}" bricklogo/
