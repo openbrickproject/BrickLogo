@@ -9,5 +9,6 @@ members = [
     "crates/rust-wedo",
     "crates/rust-controllab",
     "crates/rust-rcx",
+    "crates/rust-buildhat",
 ]
 resolver = "2"

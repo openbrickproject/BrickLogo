@@ -1,4 +1,5 @@
 use bricklogo_hal::adapter::HardwareAdapter;
+use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
@@ -24,6 +25,8 @@ pub struct BrickLogoConfig {
     pub science: Vec<String>,
     #[serde(default)]
     pub rcx: Vec<String>,
+    #[serde(default)]
+    pub buildhat: Vec<String>,
 }
 
 impl BrickLogoConfig {
@@ -148,9 +151,18 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "buildhat" => {
+                        let serial_path = next_config_entry(&config.buildhat, &mut indices, "buildhat");
+                        let mut adapter = BuildHATAdapter::new(serial_path.as_deref());
+                        system_fn_ref("Connecting to Raspberry Pi Build HAT...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", or \"rcx\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", or \"buildhat\""
                                 .to_string(),
                         ));
                     }

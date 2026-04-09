@@ -153,6 +153,6 @@ fn test_bridge_connect_rejects_unknown_type() {
     let err = eval.evaluate("connectto \"nope \"bot").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", or \"rcx\""
+        "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", or \"buildhat\""
     );
 }

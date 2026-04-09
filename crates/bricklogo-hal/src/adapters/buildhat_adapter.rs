@@ -1,0 +1,506 @@
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
+use bricklogo_lang::value::LogoValue;
+use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::driver::{self, DeviceSlot};
+use rust_buildhat::constants::*;
+use rust_buildhat::protocol::*;
+use rust_buildhat::firmware;
+
+const SENSOR_POLL_INTERVAL_MS: u32 = 50;
+
+// ── Commands queued for the driver slot ─────────
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum BuildHATCommand {
+    Raw(String),
+    MotorSet { port: u8, speed: i32 },
+    MotorCoast { port: u8 },
+    MotorOff { port: u8 },
+    MotorPulse { port: u8, speed: i32, seconds: f64 },
+    MotorRamp { port: u8, from: f64, to: f64, duration: f64 },
+    SelectMode { port: u8, mode: u8 },
+}
+
+// ── Shared state ────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct PortInfo {
+    pub type_id: u16,
+    #[allow(dead_code)]
+    pub connected: bool,
+}
+
+impl Default for PortInfo {
+    fn default() -> Self {
+        PortInfo { type_id: 0, connected: false }
+    }
+}
+
+pub struct BuildHATShared {
+    pub ports: [PortInfo; PORT_COUNT],
+    pub sensor_data: HashMap<String, Vec<f64>>,
+    pub completions: [bool; PORT_COUNT],
+}
+
+impl BuildHATShared {
+    fn new() -> Self {
+        BuildHATShared {
+            ports: Default::default(),
+            sensor_data: HashMap::new(),
+            completions: [false; PORT_COUNT],
+        }
+    }
+}
+
+// ── Driver slot ─────────────────────────────────
+
+struct BuildHATSlot {
+    port: Box<dyn serialport::SerialPort>,
+    rx: mpsc::Receiver<BuildHATCommand>,
+    shared: Arc<Mutex<BuildHATShared>>,
+    read_buffer: String,
+    alive: bool,
+}
+
+impl BuildHATSlot {
+    fn write_cmd(&mut self, cmd: &str) {
+        let _ = self.port.write_all(cmd.as_bytes());
+        let _ = self.port.flush();
+    }
+}
+
+impl DeviceSlot for BuildHATSlot {
+    fn tick(&mut self) {
+        // ── Read serial data ──────────────────
+        let mut buf = [0u8; 512];
+        match self.port.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                self.read_buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            _ => {}
+        }
+
+        // Process complete lines
+        while let Some(newline_pos) = self.read_buffer.find('\n') {
+            let line = self.read_buffer[..newline_pos].trim().to_string();
+            self.read_buffer = self.read_buffer[newline_pos + 1..].to_string();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut shared = self.shared.lock().unwrap();
+
+            // Check for sensor data
+            if let Some(data) = parse_sensor_data(&line) {
+                let key = format!("{}:{}", data.port, data.mode);
+                shared.sensor_data.insert(key, data.values);
+            }
+
+            // Check for command completion
+            if let Some((port, _kind)) = parse_completion(&line) {
+                if (port as usize) < PORT_COUNT {
+                    shared.completions[port as usize] = true;
+                }
+            }
+
+            // Check for device attach/detach
+            if let Some(dev) = parse_device_line(&line) {
+                if (dev.port as usize) < PORT_COUNT {
+                    shared.ports[dev.port as usize] = PortInfo {
+                        type_id: dev.type_id,
+                        connected: true,
+                    };
+                }
+            }
+
+            if line.starts_with('P') && (line.contains("no device") || line.contains("disconnected")) {
+                if let Some(port_byte) = line.as_bytes().get(1) {
+                    let port = port_byte.wrapping_sub(b'0') as usize;
+                    if port < PORT_COUNT {
+                        shared.ports[port] = PortInfo::default();
+                    }
+                }
+            }
+        }
+
+        // ── Drain command queue ───────────────
+        while let Ok(cmd) = self.rx.try_recv() {
+            match cmd {
+                BuildHATCommand::Raw(s) => self.write_cmd(&s),
+                BuildHATCommand::MotorSet { port, speed } => {
+                    self.write_cmd(&cmd_motor_set(port, speed));
+                }
+                BuildHATCommand::MotorCoast { port } => {
+                    self.write_cmd(&cmd_motor_coast(port));
+                }
+                BuildHATCommand::MotorOff { port } => {
+                    self.write_cmd(&cmd_motor_off(port));
+                }
+                BuildHATCommand::MotorPulse { port, speed, seconds } => {
+                    {
+                        let mut shared = self.shared.lock().unwrap();
+                        shared.completions[port as usize] = false;
+                    }
+                    self.write_cmd(&cmd_motor_pulse(port, speed, seconds));
+                }
+                BuildHATCommand::MotorRamp { port, from, to, duration } => {
+                    {
+                        let mut shared = self.shared.lock().unwrap();
+                        shared.completions[port as usize] = false;
+                    }
+                    self.write_cmd(&cmd_motor_ramp(port, from, to, duration));
+                }
+                BuildHATCommand::SelectMode { port, mode } => {
+                    self.write_cmd(&cmd_select_mode(port, mode, SENSOR_POLL_INTERVAL_MS));
+                }
+            }
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        self.alive
+    }
+}
+
+// ── Helper: speed from direction + power ────────
+
+fn to_signed_speed(direction: PortDirection, power: u8) -> i32 {
+    let speed = power.min(100) as i32;
+    match direction {
+        PortDirection::Even => speed,
+        PortDirection::Odd => -speed,
+    }
+}
+
+// ── Adapter ─────────────────────────────────────
+
+pub struct BuildHATAdapter {
+    tx: Option<mpsc::Sender<BuildHATCommand>>,
+    shared: Arc<Mutex<BuildHATShared>>,
+    slot_id: Option<usize>,
+    serial_path: String,
+    display_name: String,
+    output_ports: Vec<String>,
+    input_ports: Vec<String>,
+}
+
+impl BuildHATAdapter {
+    pub fn new(serial_path: Option<&str>) -> Self {
+        BuildHATAdapter {
+            tx: None,
+            shared: Arc::new(Mutex::new(BuildHATShared::new())),
+            slot_id: None,
+            serial_path: serial_path.unwrap_or(DEFAULT_SERIAL_PATH).to_string(),
+            display_name: "Raspberry Pi Build HAT".to_string(),
+            output_ports: Vec::new(),
+            input_ports: Vec::new(),
+        }
+    }
+
+    fn send_cmd(&self, cmd: BuildHATCommand) -> Result<(), String> {
+        self.tx.as_ref().ok_or("Not connected")?
+            .send(cmd).map_err(|_| "Send failed".to_string())
+    }
+
+    fn wait_for_completion(&self, port: u8, timeout_secs: u64) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        loop {
+            if Instant::now() > deadline {
+                return Err("Command timed out".to_string());
+            }
+            {
+                let shared = self.shared.lock().unwrap();
+                if shared.completions[port as usize] {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    fn port_index(&self, port: &str) -> Result<u8, String> {
+        port_index(port)
+            .map(|i| i as u8)
+            .ok_or_else(|| format!("Unknown port \"{}\"", port))
+    }
+}
+
+impl HardwareAdapter for BuildHATAdapter {
+    fn display_name(&self) -> &str { &self.display_name }
+    fn output_ports(&self) -> &[String] { &self.output_ports }
+    fn input_ports(&self) -> &[String] { &self.input_ports }
+    fn connected(&self) -> bool { self.tx.is_some() }
+
+    fn connect(&mut self) -> Result<(), String> {
+        if !cfg!(target_os = "linux") {
+            return Err("Build HAT is only supported on Raspberry Pi (Linux)".to_string());
+        }
+
+        let mut port = serialport::new(&self.serial_path, DEFAULT_BAUD_RATE)
+            .timeout(Duration::from_millis(100))
+            .open()
+            .map_err(|e| format!("Failed to open {}: {}", self.serial_path, e))?;
+
+        // Detect state and upload firmware if needed
+        let state = firmware::detect_state(&mut *port)?;
+        if let HatState::Bootloader = state {
+            // Load bundled firmware
+            let fw_data = std::fs::read("firmware/buildhat/buildhat-firmware-1902784.bin")
+                .map_err(|e| format!("Cannot read Build HAT firmware: {} (is the firmware/ directory present?)", e))?;
+            let sig_data = std::fs::read("firmware/buildhat/buildhat-signature-1902784.bin")
+                .map_err(|e| format!("Cannot read Build HAT signature: {} (is the firmware/ directory present?)", e))?;
+            let progress: firmware::ProgressFn = Box::new(|_| {});
+            firmware::upload_firmware(&mut *port, &fw_data, &sig_data, &progress)?;
+        }
+
+        // Initialize
+        port.write_all(cmd_echo_off().as_bytes()).map_err(|e| e.to_string())?;
+        port.flush().map_err(|e| e.to_string())?;
+        port.write_all(cmd_select_all_ports().as_bytes()).map_err(|e| e.to_string())?;
+        port.flush().map_err(|e| e.to_string())?;
+        port.write_all(cmd_list().as_bytes()).map_err(|e| e.to_string())?;
+        port.flush().map_err(|e| e.to_string())?;
+
+        // Wait for device enumeration
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut buf = [0u8; 512];
+        let mut response = String::new();
+        let mut ports_responded = [false; PORT_COUNT];
+
+        while Instant::now() < deadline {
+            match port.read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    response.push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+                _ => {}
+            }
+
+            for line in response.lines() {
+                if line.starts_with('P') && line.contains(':') {
+                    if let Some(p) = line.as_bytes().get(1) {
+                        let idx = p.wrapping_sub(b'0') as usize;
+                        if idx < PORT_COUNT {
+                            ports_responded[idx] = true;
+                        }
+                    }
+                }
+                if is_init_done(line) {
+                    // All ports have been scanned
+                    ports_responded = [true; PORT_COUNT];
+                }
+            }
+
+            if ports_responded.iter().all(|&r| r) {
+                break;
+            }
+        }
+
+        // Parse discovered devices
+        let shared = Arc::new(Mutex::new(BuildHATShared::new()));
+        let mut output_ports = Vec::new();
+        let mut input_ports = Vec::new();
+
+        for line in response.lines() {
+            if let Some(dev) = parse_device_line(line) {
+                let idx = dev.port as usize;
+                if idx < PORT_COUNT {
+                    shared.lock().unwrap().ports[idx] = PortInfo {
+                        type_id: dev.type_id,
+                        connected: true,
+                    };
+                    let letter = port_letter(idx).to_string();
+                    if is_motor(dev.type_id) {
+                        output_ports.push(letter.clone());
+                    }
+                    if is_sensor(dev.type_id) {
+                        input_ports.push(letter.clone());
+                    }
+                    // Tacho motors can also be read as sensors
+                    if is_tacho_motor(dev.type_id) && !input_ports.contains(&letter) {
+                        input_ports.push(letter);
+                    }
+                }
+            }
+        }
+
+        self.output_ports = output_ports;
+        self.input_ports = input_ports;
+
+        // Create driver slot
+        let (tx, rx) = mpsc::channel();
+        let slot = BuildHATSlot {
+            port,
+            rx,
+            shared: shared.clone(),
+            read_buffer: String::new(),
+            alive: true,
+        };
+
+        let slot_id = driver::register(Box::new(slot));
+        self.tx = Some(tx);
+        self.shared = shared;
+        self.slot_id = Some(slot_id);
+
+        Ok(())
+    }
+
+    fn disconnect(&mut self) {
+        if let Some(id) = self.slot_id.take() {
+            driver::deregister(id);
+        }
+        self.tx = None;
+    }
+
+    fn validate_output_port(&self, port: &str) -> Result<(), String> {
+        if self.output_ports.contains(&port.to_string()) {
+            Ok(())
+        } else {
+            Err(format!("Unknown output port \"{}\"", port))
+        }
+    }
+
+    fn validate_sensor_port(&self, port: &str, _mode: Option<&str>) -> Result<(), String> {
+        if self.input_ports.contains(&port.to_string()) {
+            Ok(())
+        } else {
+            Err(format!("Unknown sensor port \"{}\"", port))
+        }
+    }
+
+    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let speed = to_signed_speed(direction, power);
+        self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
+    }
+
+    fn stop_port(&mut self, port: &str) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        self.send_cmd(BuildHATCommand::MotorCoast { port: idx })
+    }
+
+    fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let speed = to_signed_speed(direction, power);
+        let seconds = tenths as f64 / 10.0;
+        self.send_cmd(BuildHATCommand::MotorPulse { port: idx, speed, seconds })?;
+        self.wait_for_completion(idx, tenths as u64 / 10 + 5)
+    }
+
+    fn rotate_port_by_degrees(&mut self, port: &str, direction: PortDirection, power: u8, degrees: i32) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let speed = to_signed_speed(direction, power).abs().max(1);
+        // Get current position from sensor data
+        let current = {
+            let shared = self.shared.lock().unwrap();
+            shared.sensor_data.get(&format!("{}:1", idx))
+                .and_then(|v| v.first().copied())
+                .unwrap_or(0.0)
+        };
+        let from_rot = current / 360.0;
+        let delta = if direction == PortDirection::Even { degrees } else { -degrees };
+        let to_rot = from_rot + (delta as f64 / 360.0);
+        let duration = (degrees.abs() as f64 / 360.0) / (speed as f64 / 100.0);
+        self.send_cmd(BuildHATCommand::MotorRamp { port: idx, from: from_rot, to: to_rot, duration })?;
+        self.wait_for_completion(idx, duration as u64 + 5)
+    }
+
+    fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let speed = to_signed_speed(direction, power).abs().max(1);
+        let current = {
+            let shared = self.shared.lock().unwrap();
+            shared.sensor_data.get(&format!("{}:1", idx))
+                .and_then(|v| v.first().copied())
+                .unwrap_or(0.0)
+        };
+        let from_rot = current / 360.0;
+        let to_rot = position as f64 / 360.0;
+        let delta = (to_rot - from_rot).abs();
+        let duration = delta / (speed as f64 / 100.0);
+        self.send_cmd(BuildHATCommand::MotorRamp { port: idx, from: from_rot, to: to_rot, duration: duration.max(0.1) })?;
+        self.wait_for_completion(idx, duration as u64 + 5)
+    }
+
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> {
+        Err("Build HAT does not support position reset".to_string())
+    }
+
+    fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+        self.rotate_port_to_position(port, direction, power, 0)
+    }
+
+    fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
+        let idx = self.port_index(port)?;
+        let device_type = {
+            let shared = self.shared.lock().unwrap();
+            shared.ports[idx as usize].type_id
+        };
+
+        // Map mode name to Build HAT mode number
+        let mode_num = match (mode, device_type) {
+            (Some("color"), DEVICE_COLOR_SENSOR) => 0,
+            (Some("light"), DEVICE_COLOR_SENSOR) => 1,
+            (Some("ambient"), DEVICE_COLOR_SENSOR) => 2,
+            (Some("rgb"), DEVICE_COLOR_SENSOR) => 5,
+            (Some("hsv"), DEVICE_COLOR_SENSOR) => 6,
+            (Some("color"), DEVICE_COLOR_DISTANCE_SENSOR) => 0,
+            (Some("distance"), DEVICE_COLOR_DISTANCE_SENSOR) => 1,
+            (Some("light"), DEVICE_COLOR_DISTANCE_SENSOR) => 3,
+            (Some("ambient"), DEVICE_COLOR_DISTANCE_SENSOR) => 4,
+            (Some("rgb"), DEVICE_COLOR_DISTANCE_SENSOR) => 6,
+            (Some("distance"), DEVICE_DISTANCE_SENSOR) => 0,
+            (Some("force"), DEVICE_FORCE_SENSOR) => 0,
+            (Some("touched"), DEVICE_FORCE_SENSOR) => 1,
+            (Some("tapped"), DEVICE_FORCE_SENSOR) => 2,
+            (Some("tilt"), DEVICE_TILT_SENSOR) => 0,
+            (Some("distance"), DEVICE_MOTION_SENSOR) => 0,
+            (Some("rotation"), _) if is_tacho_motor(device_type) => 1,
+            (Some("speed"), _) if is_tacho_motor(device_type) => 0,
+            (Some("absolute"), _) if is_tacho_motor(device_type) => 3,
+            (None, _) => 0, // Default mode
+            _ => return Err(format!("Unsupported sensor mode \"{}\" for this device", mode.unwrap_or("none"))),
+        };
+
+        // Request the mode
+        self.send_cmd(BuildHATCommand::SelectMode { port: idx, mode: mode_num })?;
+
+        // Wait for data to arrive
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let key = format!("{}:{}", idx, mode_num);
+        loop {
+            if Instant::now() > deadline {
+                return Err("Sensor read timed out".to_string());
+            }
+            {
+                let shared = self.shared.lock().unwrap();
+                if let Some(values) = shared.sensor_data.get(&key) {
+                    if values.len() == 1 {
+                        return Ok(Some(LogoValue::Number(values[0])));
+                    } else if values.len() > 1 {
+                        return Ok(Some(LogoValue::List(
+                            values.iter().map(|v| LogoValue::Number(*v)).collect()
+                        )));
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    // ── Firmware upload ─────────────────────────
+
+    fn prepare_firmware_upload(&mut self) -> Result<Option<String>, String> {
+        self.disconnect();
+        Ok(Some(self.serial_path.clone()))
+    }
+
+    fn reconnect_after_firmware(&mut self) -> Result<(), String> {
+        std::thread::sleep(Duration::from_secs(2));
+        self.connect()
+    }
+}
