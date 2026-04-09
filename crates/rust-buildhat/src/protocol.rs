@@ -52,6 +52,14 @@ pub fn cmd_motor_off(port: u8) -> String {
     format!("port {} ; pwm ; set 0\r", port)
 }
 
+/// PID-regulated speed control for tacho motors. Speed: -100 to 100.
+pub fn cmd_motor_speed(port: u8, speed: i32) -> String {
+    format!(
+        "port {} ; select 0 ; selrate 0 ; pid {} 0 0 s1 1 0 0.003 0.01 0 100 0.01 ; set {}\r",
+        port, port, speed
+    )
+}
+
 /// Direct PWM control. Value: -1.0 to 1.0.
 pub fn cmd_motor_pwm(port: u8, value: f64) -> String {
     format!("port {} ; pwm ; set {}\r", port, value)
@@ -326,9 +334,12 @@ mod tests {
 
     #[test]
     fn test_motor_commands() {
-        assert_eq!(cmd_motor_set(0, 50), "port 0 ; set 50\r");
+        assert_eq!(cmd_motor_set(0, 50), "port 0 ; pwm ; set 0.5\r");
+        assert_eq!(cmd_motor_set(1, -100), "port 1 ; pwm ; set -1\r");
         assert_eq!(cmd_motor_coast(1), "port 1 ; coast\r");
-        assert_eq!(cmd_motor_off(2), "port 2 ; off\r");
+        assert_eq!(cmd_motor_off(2), "port 2 ; pwm ; set 0\r");
+        assert!(cmd_motor_speed(0, 75).contains("pid"));
+        assert!(cmd_motor_speed(0, 75).contains("set 75"));
     }
 
     #[test]

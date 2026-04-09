@@ -19,6 +19,7 @@ const ALL_PORTS: [&str; 4] = ["a", "b", "c", "d"];
 enum BuildHATCommand {
     Raw(String),
     MotorSet { port: u8, speed: i32 },
+    MotorSpeed { port: u8, speed: i32 },
     MotorCoast { port: u8 },
     MotorOff { port: u8 },
     MotorPulse { port: u8, speed: i32, seconds: f64 },
@@ -135,6 +136,9 @@ impl DeviceSlot for BuildHATSlot {
                 BuildHATCommand::Raw(s) => self.write_cmd(&s),
                 BuildHATCommand::MotorSet { port, speed } => {
                     self.write_cmd(&cmd_motor_set(port, speed));
+                }
+                BuildHATCommand::MotorSpeed { port, speed } => {
+                    self.write_cmd(&cmd_motor_speed(port, speed));
                 }
                 BuildHATCommand::MotorCoast { port } => {
                     self.write_cmd(&cmd_motor_coast(port));
@@ -355,8 +359,15 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
         let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
         let speed = to_signed_speed(direction, power);
-        self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
+        if is_tacho_motor(type_id) {
+            // Tacho motor: PID-regulated speed
+            self.send_cmd(BuildHATCommand::MotorSpeed { port: idx, speed })
+        } else {
+            // Basic motor: raw PWM
+            self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
+        }
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
