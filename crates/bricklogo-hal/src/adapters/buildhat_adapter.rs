@@ -281,37 +281,21 @@ impl HardwareAdapter for BuildHATAdapter {
         port.write_all(cmd_list().as_bytes()).map_err(|e| e.to_string())?;
         port.flush().map_err(|e| e.to_string())?;
 
-        // Wait for device enumeration
+        // Wait for device enumeration to complete
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut buf = [0u8; 512];
         let mut response = String::new();
-        let mut ports_responded = [false; PORT_COUNT];
+        let mut init_done = false;
 
-        while Instant::now() < deadline {
+        while Instant::now() < deadline && !init_done {
             match port.read(&mut buf) {
                 Ok(n) if n > 0 => {
                     response.push_str(&String::from_utf8_lossy(&buf[..n]));
-                }
-                _ => {}
-            }
-
-            for line in response.lines() {
-                if line.starts_with('P') && line.contains(':') {
-                    if let Some(p) = line.as_bytes().get(1) {
-                        let idx = p.wrapping_sub(b'0') as usize;
-                        if idx < PORT_COUNT {
-                            ports_responded[idx] = true;
-                        }
+                    if response.contains("Done initialising") {
+                        init_done = true;
                     }
                 }
-                if is_init_done(line) {
-                    // All ports have been scanned
-                    ports_responded = [true; PORT_COUNT];
-                }
-            }
-
-            if ports_responded.iter().all(|&r| r) {
-                break;
+                _ => {}
             }
         }
 

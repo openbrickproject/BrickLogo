@@ -150,14 +150,16 @@ pub fn parse_device_line(line: &str) -> Option<DeviceAttach> {
     let active = line.contains("active");
     // Extract hex type ID after "ID"
     if let Some(id_pos) = line.find("ID") {
-        let hex = &line[id_pos + 2..];
-        let hex = hex.trim();
-        if let Ok(type_id) = u16::from_str_radix(hex, 16) {
+        let rest = line[id_pos + 2..].trim();
+        let hex: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        if !hex.is_empty() {
+        if let Ok(type_id) = u16::from_str_radix(&hex, 16) {
             return Some(DeviceAttach {
                 port,
                 type_id,
                 active,
             });
+        }
         }
     }
     None
