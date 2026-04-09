@@ -90,7 +90,13 @@ pub fn is_absolute_motor(type_id: u16) -> bool {
 
 /// Returns true if this device type needs LED initialization (set -1).
 pub fn needs_led_init(type_id: u16) -> bool {
-    matches!(type_id, DEVICE_COLOR_SENSOR | DEVICE_DISTANCE_SENSOR)
+    matches!(
+        type_id,
+        DEVICE_MOTION_SENSOR
+            | DEVICE_COLOR_DISTANCE_SENSOR
+            | DEVICE_COLOR_SENSOR
+            | DEVICE_DISTANCE_SENSOR
+    )
 }
 
 /// Map port index (0-3) to port letter (a-d).
