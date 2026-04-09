@@ -26,6 +26,7 @@ The full user guide will come later. This README is the front door.
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B / Control Lab over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
+| Raspberry Pi Build HAT | `connectto "buildhat "name` | Build HAT with Powered UP / SPIKE motors and sensors |
 
 Multiple devices can be connected at the same time and addressed either through the active device or by qualified port names such as `"mybot.a`.
 
@@ -90,7 +91,7 @@ Connection:
 - `disconnect`
 - `disconnect "name`
 - `disconnect "all`
-- `firmware "device "file.lgo` (RCX only)
+- `firmware "device "file` (RCX firmware upload, Build HAT custom firmware)
 
 Motor control:
 

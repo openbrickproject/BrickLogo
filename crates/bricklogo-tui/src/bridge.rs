@@ -25,8 +25,6 @@ pub struct BrickLogoConfig {
     pub science: Vec<String>,
     #[serde(default)]
     pub rcx: Vec<String>,
-    #[serde(default)]
-    pub buildhat: Vec<String>,
 }
 
 impl BrickLogoConfig {
@@ -152,9 +150,8 @@ pub fn register_hardware_primitives(
                         Box::new(adapter)
                     }
                     "buildhat" => {
-                        let serial_path = next_config_entry(&config.buildhat, &mut indices, "buildhat");
-                        let mut adapter = BuildHATAdapter::new(serial_path.as_deref());
-                        system_fn_ref("Connecting to Raspberry Pi Build HAT...");
+                        let mut adapter = BuildHATAdapter::new();
+                        system_fn_ref("Connecting to Raspberry Pi Build HAT (this may take up to 30 seconds)...");
                         adapter
                             .connect()
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;

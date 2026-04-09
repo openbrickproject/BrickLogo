@@ -261,12 +261,12 @@ pub struct BuildHATAdapter {
 }
 
 impl BuildHATAdapter {
-    pub fn new(serial_path: Option<&str>) -> Self {
+    pub fn new() -> Self {
         BuildHATAdapter {
             tx: None,
             shared: Arc::new(Mutex::new(BuildHATShared::new())),
             slot_id: None,
-            serial_path: serial_path.unwrap_or(DEFAULT_SERIAL_PATH).to_string(),
+            serial_path: DEFAULT_SERIAL_PATH.to_string(),
             display_name: "Raspberry Pi Build HAT".to_string(),
             port_names: ALL_PORTS.iter().map(|s| s.to_string()).collect(),
         }
