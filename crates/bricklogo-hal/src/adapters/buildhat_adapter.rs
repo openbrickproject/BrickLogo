@@ -51,6 +51,7 @@ pub struct BuildHATShared {
     pub ports: [PortInfo; PORT_COUNT],
     pub sensor_data: HashMap<String, Vec<f64>>,
     pub completions: [bool; PORT_COUNT],
+    pub selected_modes: [Option<u8>; PORT_COUNT],
 }
 
 impl BuildHATShared {
@@ -59,6 +60,7 @@ impl BuildHATShared {
             ports: Default::default(),
             sensor_data: HashMap::new(),
             completions: [false; PORT_COUNT],
+            selected_modes: [None; PORT_COUNT],
         }
     }
 }
@@ -142,11 +144,12 @@ impl DeviceSlot for BuildHATSlot {
                 }
             }
 
-            if line.starts_with('P') && (line.contains("no device") || line.contains("disconnected")) {
+            if line.starts_with('P') && (line.contains("no device") || line.contains("disconnected") || line.contains("timeout")) {
                 if let Some(port_byte) = line.as_bytes().get(1) {
                     let port = port_byte.wrapping_sub(b'0') as usize;
                     if port < PORT_COUNT {
                         shared.ports[port] = PortInfo::default();
+                        shared.selected_modes[port] = None;
                     }
                 }
             }
@@ -636,11 +639,26 @@ impl HardwareAdapter for BuildHATAdapter {
             }
         }
 
-        // For sensors, select the specific mode and wait for data
-        self.send_cmd(BuildHATCommand::SelectMode { port: idx, mode: mode_num })?;
+        // Only send SelectMode if the mode changed — avoid flooding the Build HAT
+        let mode_changed = {
+            let shared = self.shared.lock().unwrap();
+            shared.selected_modes[idx as usize] != Some(mode_num)
+        };
 
-        let deadline = Instant::now() + Duration::from_secs(2);
         let key = format!("{}:{}", idx, mode_num);
+
+        if mode_changed {
+            // Clear stale data from previous mode and select the new one
+            {
+                let mut shared = self.shared.lock().unwrap();
+                shared.sensor_data.remove(&key);
+                shared.selected_modes[idx as usize] = Some(mode_num);
+            }
+            self.send_cmd(BuildHATCommand::SelectMode { port: idx, mode: mode_num })?;
+        }
+
+        // Wait for data (fresh if mode just changed, latest from stream otherwise)
+        let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if Instant::now() > deadline {
                 return Err("Sensor read timed out".to_string());
