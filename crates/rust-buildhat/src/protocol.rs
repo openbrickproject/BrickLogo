@@ -94,15 +94,16 @@ pub fn cmd_select_mode(port: u8, mode: u8, interval_ms: u32) -> String {
     format!("port {} ; select {} ; selrate {}\r", port, mode, interval_ms)
 }
 
-/// Select combined sensor modes.
-pub fn cmd_select_combi(port: u8, combi_index: u8, modes: &[(u8, u8)]) -> String {
+/// Select combined sensor modes with reporting interval (ms).
+pub fn cmd_select_combi(port: u8, combi_index: u8, modes: &[(u8, u8)], interval_ms: u32) -> String {
     let mode_str: Vec<String> = modes.iter().map(|(m, s)| format!("{} {}", m, s)).collect();
     format!(
-        "port {} ; combi {} {} ; select {} ; selrate 0\r",
+        "port {} ; combi {} {} ; select {} ; selrate {}\r",
         port,
         combi_index,
         mode_str.join(" "),
-        combi_index
+        combi_index,
+        interval_ms
     )
 }
 

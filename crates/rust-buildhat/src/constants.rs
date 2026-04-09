@@ -12,6 +12,8 @@ pub const PORT_COUNT: usize = 4;
 // ── Device type IDs (LPF2) ──────────────────────
 // Same IDs as Powered UP — these are the same physical devices.
 pub const DEVICE_PASSIVE_MOTOR: u16 = 1;
+pub const DEVICE_TRAIN_MOTOR: u16 = 2;
+pub const DEVICE_TURNTABLE: u16 = 3;
 pub const DEVICE_LIGHT: u16 = 8;
 pub const DEVICE_TILT_SENSOR: u16 = 34;
 pub const DEVICE_MOTION_SENSOR: u16 = 35;
@@ -34,6 +36,7 @@ pub fn is_motor(type_id: u16) -> bool {
     matches!(
         type_id,
         DEVICE_PASSIVE_MOTOR
+            | DEVICE_TRAIN_MOTOR
             | DEVICE_MEDIUM_LINEAR_MOTOR
             | DEVICE_LARGE_MOTOR
             | DEVICE_XL_MOTOR

@@ -26,9 +26,10 @@ enum BuildHATCommand {
     MotorPulse { port: u8, speed: i32, seconds: f64 },
     MotorRamp { port: u8, from: f64, to: f64, duration: f64 },
     SelectMode { port: u8, mode: u8 },
-    SelectCombi { port: u8, combi_index: u8, modes: Vec<(u8, u8)> },
+    SelectCombi { port: u8, combi_index: u8, modes: Vec<(u8, u8)>, interval_ms: u32 },
     SetValue { port: u8, value: i32 },
     Preset { port: u8, mode: u8, value: f64 },
+    Plimit { port: u8, limit: f64 },
 }
 
 // ── Shared state ────────────────────────────────
@@ -129,13 +130,16 @@ impl DeviceSlot for BuildHATSlot {
                         if needs_led_init(dev.type_id) {
                             self.write_cmd(&cmd_set_value(dev.port, -1));
                         }
+                        if is_motor(dev.type_id) {
+                            self.write_cmd(&cmd_plimit(dev.port, 1.0));
+                        }
                         if is_tacho_motor(dev.type_id) {
                             let modes = if is_absolute_motor(dev.type_id) {
                                 vec![(1, 0), (2, 0), (3, 0)]
                             } else {
                                 vec![(1, 0), (2, 0)]
                             };
-                            self.write_cmd(&cmd_select_combi(dev.port, 0, &modes));
+                            self.write_cmd(&cmd_select_combi(dev.port, 0, &modes, 10));
                         }
                         continue; // shared was dropped, skip to next line
                     }
@@ -185,14 +189,17 @@ impl DeviceSlot for BuildHATSlot {
                 BuildHATCommand::SelectMode { port, mode } => {
                     self.write_cmd(&cmd_select_mode(port, mode, SENSOR_POLL_INTERVAL_MS));
                 }
-                BuildHATCommand::SelectCombi { port, combi_index, modes } => {
-                    self.write_cmd(&cmd_select_combi(port, combi_index, &modes));
+                BuildHATCommand::SelectCombi { port, combi_index, modes, interval_ms } => {
+                    self.write_cmd(&cmd_select_combi(port, combi_index, &modes, interval_ms));
                 }
                 BuildHATCommand::SetValue { port, value } => {
                     self.write_cmd(&cmd_set_value(port, value));
                 }
                 BuildHATCommand::Preset { port, mode, value } => {
                     self.write_cmd(&cmd_preset(port, mode, value));
+                }
+                BuildHATCommand::Plimit { port, limit } => {
+                    self.write_cmd(&cmd_plimit(port, limit));
                 }
             }
         }
@@ -290,20 +297,27 @@ impl BuildHATAdapter {
                 self.send_cmd(BuildHATCommand::SetValue { port, value: -1 })?;
             }
 
+            if is_motor(type_id) {
+                // Default plimit is 0.1 (10%) — set to full power
+                self.send_cmd(BuildHATCommand::Plimit { port, limit: 1.0 })?;
+            }
+
             if is_tacho_motor(type_id) {
                 if is_absolute_motor(type_id) {
-                    // Absolute motor: combi mode with speed(1), position(2), absolute(3)
+                    // Absolute motor: combi mode with speed(1), position(2), absolute(3) at 10ms
                     self.send_cmd(BuildHATCommand::SelectCombi {
                         port,
                         combi_index: 0,
                         modes: vec![(1, 0), (2, 0), (3, 0)],
+                        interval_ms: 10,
                     })?;
                 } else {
-                    // Tacho motor (no absolute): combi mode with speed(1), position(2)
+                    // Tacho motor (no absolute): combi mode with speed(1), position(2) at 10ms
                     self.send_cmd(BuildHATCommand::SelectCombi {
                         port,
                         combi_index: 0,
                         modes: vec![(1, 0), (2, 0)],
+                        interval_ms: 10,
                     })?;
                 }
             }
