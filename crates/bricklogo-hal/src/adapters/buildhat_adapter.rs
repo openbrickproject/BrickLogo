@@ -7,6 +7,7 @@ use crate::adapter::{HardwareAdapter, PortDirection};
 use crate::driver::{self, DeviceSlot};
 use rust_buildhat::constants::*;
 use rust_buildhat::protocol::*;
+use rust_buildhat::constants::{is_absolute_motor, needs_led_init};
 use rust_buildhat::firmware;
 
 const SENSOR_POLL_INTERVAL_MS: u32 = 50;
@@ -25,6 +26,9 @@ enum BuildHATCommand {
     MotorPulse { port: u8, speed: i32, seconds: f64 },
     MotorRamp { port: u8, from: f64, to: f64, duration: f64 },
     SelectMode { port: u8, mode: u8 },
+    SelectCombi { port: u8, combi_index: u8, modes: Vec<(u8, u8)> },
+    SetValue { port: u8, value: i32 },
+    Preset { port: u8, mode: u8, value: f64 },
 }
 
 // ── Shared state ────────────────────────────────
@@ -113,10 +117,28 @@ impl DeviceSlot for BuildHATSlot {
             // Check for device attach/detach
             if let Some(dev) = parse_device_line(&line) {
                 if (dev.port as usize) < PORT_COUNT {
+                    let is_new = !shared.ports[dev.port as usize].connected
+                        || shared.ports[dev.port as usize].type_id != dev.type_id;
                     shared.ports[dev.port as usize] = PortInfo {
                         type_id: dev.type_id,
                         connected: true,
                     };
+                    // Initialize newly attached device
+                    if is_new {
+                        drop(shared); // Release lock before writing to serial
+                        if needs_led_init(dev.type_id) {
+                            self.write_cmd(&cmd_set_value(dev.port, -1));
+                        }
+                        if is_tacho_motor(dev.type_id) {
+                            let modes = if is_absolute_motor(dev.type_id) {
+                                vec![(1, 0), (2, 0), (3, 0)]
+                            } else {
+                                vec![(1, 0), (2, 0)]
+                            };
+                            self.write_cmd(&cmd_select_combi(dev.port, 0, &modes));
+                        }
+                        continue; // shared was dropped, skip to next line
+                    }
                 }
             }
 
@@ -162,6 +184,15 @@ impl DeviceSlot for BuildHATSlot {
                 }
                 BuildHATCommand::SelectMode { port, mode } => {
                     self.write_cmd(&cmd_select_mode(port, mode, SENSOR_POLL_INTERVAL_MS));
+                }
+                BuildHATCommand::SelectCombi { port, combi_index, modes } => {
+                    self.write_cmd(&cmd_select_combi(port, combi_index, &modes));
+                }
+                BuildHATCommand::SetValue { port, value } => {
+                    self.write_cmd(&cmd_set_value(port, value));
+                }
+                BuildHATCommand::Preset { port, mode, value } => {
+                    self.write_cmd(&cmd_preset(port, mode, value));
                 }
             }
         }
@@ -239,6 +270,48 @@ impl BuildHATAdapter {
         port_index(port)
             .map(|i| i as u8)
             .ok_or_else(|| format!("Unknown port \"{}\"", port))
+    }
+
+    /// Initialize connected devices after enumeration.
+    /// - Color/Distance sensors: send `set -1` to enable LED
+    /// - Tacho motors: set up combi mode for continuous position/speed data
+    fn init_devices(&self) -> Result<(), String> {
+        let ports_snapshot: Vec<(u8, u16)> = {
+            let shared = self.shared.lock().unwrap();
+            shared.ports.iter().enumerate()
+                .filter(|(_, p)| p.connected)
+                .map(|(i, p)| (i as u8, p.type_id))
+                .collect()
+        };
+
+        for (port, type_id) in ports_snapshot {
+            if needs_led_init(type_id) {
+                // Color and Distance sensors need `set -1` to enable LED
+                self.send_cmd(BuildHATCommand::SetValue { port, value: -1 })?;
+            }
+
+            if is_tacho_motor(type_id) {
+                if is_absolute_motor(type_id) {
+                    // Absolute motor: combi mode with speed(1), position(2), absolute(3)
+                    self.send_cmd(BuildHATCommand::SelectCombi {
+                        port,
+                        combi_index: 0,
+                        modes: vec![(1, 0), (2, 0), (3, 0)],
+                    })?;
+                } else {
+                    // Tacho motor (no absolute): combi mode with speed(1), position(2)
+                    self.send_cmd(BuildHATCommand::SelectCombi {
+                        port,
+                        combi_index: 0,
+                        modes: vec![(1, 0), (2, 0)],
+                    })?;
+                }
+            }
+        }
+
+        // Give devices time to initialize
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
     }
 }
 
@@ -332,6 +405,9 @@ impl HardwareAdapter for BuildHATAdapter {
         self.shared = shared;
         self.slot_id = Some(slot_id);
 
+        // Initialize connected devices
+        self.init_devices()?;
+
         Ok(())
     }
 
@@ -399,11 +475,11 @@ impl HardwareAdapter for BuildHATAdapter {
             return Err("This motor does not support rotation by degrees".to_string());
         }
         let speed = to_signed_speed(direction, power).abs().max(1);
-        // Get current position from sensor data
+        // Get current position from combi data (index 1 = position/mode 2)
         let current = {
             let shared = self.shared.lock().unwrap();
-            shared.sensor_data.get(&format!("{}:1", idx))
-                .and_then(|v| v.first().copied())
+            shared.sensor_data.get(&format!("{}:0", idx))
+                .and_then(|v| v.get(1).copied())
                 .unwrap_or(0.0)
         };
         let from_rot = current / 360.0;
@@ -421,10 +497,11 @@ impl HardwareAdapter for BuildHATAdapter {
             return Err("This motor does not support rotation to position".to_string());
         }
         let speed = to_signed_speed(direction, power).abs().max(1);
+        // Get current position from combi data (index 1 = position/mode 2)
         let current = {
             let shared = self.shared.lock().unwrap();
-            shared.sensor_data.get(&format!("{}:1", idx))
-                .and_then(|v| v.first().copied())
+            shared.sensor_data.get(&format!("{}:0", idx))
+                .and_then(|v| v.get(1).copied())
                 .unwrap_or(0.0)
         };
         let from_rot = current / 360.0;
@@ -435,8 +512,14 @@ impl HardwareAdapter for BuildHATAdapter {
         self.wait_for_completion(idx, duration as u64 + 5)
     }
 
-    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> {
-        Err("Build HAT does not support position reset".to_string())
+    fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
+        if !is_tacho_motor(type_id) {
+            return Err("This device does not support position reset".to_string());
+        }
+        // Reset position (mode 2) to 0 using preset command
+        self.send_cmd(BuildHATCommand::Preset { port: idx, mode: 2, value: 0.0 })
     }
 
     fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
@@ -450,35 +533,76 @@ impl HardwareAdapter for BuildHATAdapter {
             shared.ports[idx as usize].type_id
         };
 
-        // Map mode name to Build HAT mode number
+        // Map mode name to Build HAT mode number (same as Powered UP — same LPF2 devices)
         let mode_num = match (mode, device_type) {
+            // Technic Color Sensor (61)
             (Some("color"), DEVICE_COLOR_SENSOR) => 0,
             (Some("light"), DEVICE_COLOR_SENSOR) => 1,
             (Some("ambient"), DEVICE_COLOR_SENSOR) => 2,
             (Some("rgb"), DEVICE_COLOR_SENSOR) => 5,
             (Some("hsv"), DEVICE_COLOR_SENSOR) => 6,
+            (Some("hsvambient"), DEVICE_COLOR_SENSOR) => 7,
+            // Color Distance Sensor (37)
             (Some("color"), DEVICE_COLOR_DISTANCE_SENSOR) => 0,
             (Some("distance"), DEVICE_COLOR_DISTANCE_SENSOR) => 1,
+            (Some("distanceCount"), DEVICE_COLOR_DISTANCE_SENSOR) => 2,
             (Some("light"), DEVICE_COLOR_DISTANCE_SENSOR) => 3,
             (Some("ambient"), DEVICE_COLOR_DISTANCE_SENSOR) => 4,
             (Some("rgb"), DEVICE_COLOR_DISTANCE_SENSOR) => 6,
+            (Some("colordistance"), DEVICE_COLOR_DISTANCE_SENSOR) => 8,
+            // Technic Distance Sensor (62)
             (Some("distance"), DEVICE_DISTANCE_SENSOR) => 0,
+            (Some("fastDistance"), DEVICE_DISTANCE_SENSOR) => 1,
+            // Technic Force Sensor (63)
             (Some("force"), DEVICE_FORCE_SENSOR) => 0,
             (Some("touched"), DEVICE_FORCE_SENSOR) => 1,
             (Some("tapped"), DEVICE_FORCE_SENSOR) => 2,
+            // Tilt Sensor (34)
             (Some("tilt"), DEVICE_TILT_SENSOR) => 0,
+            (Some("direction"), DEVICE_TILT_SENSOR) => 1,
+            (Some("impactCount"), DEVICE_TILT_SENSOR) => 2,
+            (Some("accel"), DEVICE_TILT_SENSOR) => 3,
+            // Motion Sensor (35)
             (Some("distance"), DEVICE_MOTION_SENSOR) => 0,
-            (Some("rotation"), _) if is_tacho_motor(device_type) => 1,
-            (Some("speed"), _) if is_tacho_motor(device_type) => 0,
-            (Some("absolute"), _) if is_tacho_motor(device_type) => 3,
+            // Tacho/Absolute motors — mode numbers match Powered UP
+            (Some("rotation"), _) if is_tacho_motor(device_type) => 2,
+            (Some("speed"), _) if is_tacho_motor(device_type) => 1,
+            (Some("absolute"), _) if is_absolute_motor(device_type) => 3,
             (None, _) => 0, // Default mode
             _ => return Err(format!("Unsupported sensor mode \"{}\" for this device", mode.unwrap_or("none"))),
         };
 
-        // Request the mode
+        // For tacho motors, data comes from combi mode (already set up in init).
+        // Extract the correct value from the combi data based on which mode was requested.
+        if is_tacho_motor(device_type) {
+            let combi_key = format!("{}:0", idx); // combi index 0
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if Instant::now() > deadline {
+                    return Err("Sensor read timed out".to_string());
+                }
+                {
+                    let shared = self.shared.lock().unwrap();
+                    if let Some(values) = shared.sensor_data.get(&combi_key) {
+                        // Combi layout: [speed(1), position(2)] or [speed(1), position(2), absolute(3)]
+                        let value = match mode_num {
+                            1 => values.first().copied(),     // speed is index 0 in combi
+                            2 => values.get(1).copied(),      // position is index 1
+                            3 => values.get(2).copied(),      // absolute is index 2
+                            _ => None,
+                        };
+                        if let Some(v) = value {
+                            return Ok(Some(LogoValue::Number(v)));
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        }
+
+        // For sensors, select the specific mode and wait for data
         self.send_cmd(BuildHATCommand::SelectMode { port: idx, mode: mode_num })?;
 
-        // Wait for data to arrive
         let deadline = Instant::now() + Duration::from_secs(2);
         let key = format!("{}:{}", idx, mode_num);
         loop {

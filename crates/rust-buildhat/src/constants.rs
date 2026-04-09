@@ -73,6 +73,23 @@ pub fn is_tacho_motor(type_id: u16) -> bool {
     )
 }
 
+/// Returns true if this device type supports absolute position (mode 3).
+pub fn is_absolute_motor(type_id: u16) -> bool {
+    matches!(
+        type_id,
+        DEVICE_MEDIUM_ANGULAR_MOTOR
+            | DEVICE_LARGE_ANGULAR_MOTOR
+            | DEVICE_SMALL_ANGULAR_MOTOR
+            | DEVICE_MEDIUM_ANGULAR_MOTOR_GREY
+            | DEVICE_LARGE_ANGULAR_MOTOR_GREY
+    )
+}
+
+/// Returns true if this device type needs LED initialization (set -1).
+pub fn needs_led_init(type_id: u16) -> bool {
+    matches!(type_id, DEVICE_COLOR_SENSOR | DEVICE_DISTANCE_SENSOR)
+}
+
 /// Map port index (0-3) to port letter (a-d).
 pub fn port_letter(index: usize) -> &'static str {
     match index {

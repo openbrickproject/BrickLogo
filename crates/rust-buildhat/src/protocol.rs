@@ -111,6 +111,16 @@ pub fn cmd_deselect(port: u8) -> String {
     format!("port {} ; select\r", port)
 }
 
+/// Set sensor LED mode (use -1 to enable default LED behavior for color/distance sensors).
+pub fn cmd_set_value(port: u8, value: i32) -> String {
+    format!("port {} ; set {}\r", port, value)
+}
+
+/// Preset a mode value (e.g. reset position counter to 0).
+pub fn cmd_preset(port: u8, mode: u8, value: f64) -> String {
+    format!("port {} ; preset {} {}\r", port, mode, value)
+}
+
 // ── Response parsing ─────────────────────────────
 
 /// Build HAT state detected from version response.
