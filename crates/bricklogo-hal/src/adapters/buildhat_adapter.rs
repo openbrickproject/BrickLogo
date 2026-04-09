@@ -10,6 +10,7 @@ use rust_buildhat::protocol::*;
 use rust_buildhat::firmware;
 
 const SENSOR_POLL_INTERVAL_MS: u32 = 50;
+const ALL_PORTS: [&str; 4] = ["a", "b", "c", "d"];
 
 // ── Commands queued for the driver slot ─────────
 
@@ -185,8 +186,7 @@ pub struct BuildHATAdapter {
     slot_id: Option<usize>,
     serial_path: String,
     display_name: String,
-    output_ports: Vec<String>,
-    input_ports: Vec<String>,
+    port_names: Vec<String>,
 }
 
 impl BuildHATAdapter {
@@ -197,9 +197,17 @@ impl BuildHATAdapter {
             slot_id: None,
             serial_path: serial_path.unwrap_or(DEFAULT_SERIAL_PATH).to_string(),
             display_name: "Raspberry Pi Build HAT".to_string(),
-            output_ports: Vec::new(),
-            input_ports: Vec::new(),
+            port_names: ALL_PORTS.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    fn require_device(&self, port: u8) -> Result<u16, String> {
+        let shared = self.shared.lock().unwrap();
+        let idx = port as usize;
+        if idx >= PORT_COUNT || !shared.ports[idx].connected {
+            return Err(format!("No device on port \"{}\"", port_letter(idx)));
+        }
+        Ok(shared.ports[idx].type_id)
     }
 
     fn send_cmd(&self, cmd: BuildHATCommand) -> Result<(), String> {
@@ -232,8 +240,8 @@ impl BuildHATAdapter {
 
 impl HardwareAdapter for BuildHATAdapter {
     fn display_name(&self) -> &str { &self.display_name }
-    fn output_ports(&self) -> &[String] { &self.output_ports }
-    fn input_ports(&self) -> &[String] { &self.input_ports }
+    fn output_ports(&self) -> &[String] { &self.port_names }
+    fn input_ports(&self) -> &[String] { &self.port_names }
     fn connected(&self) -> bool { self.tx.is_some() }
 
     fn connect(&mut self) -> Result<(), String> {
@@ -307,11 +315,8 @@ impl HardwareAdapter for BuildHATAdapter {
             }
         }
 
-        // Parse discovered devices
+        // Parse initially discovered devices into shared state
         let shared = Arc::new(Mutex::new(BuildHATShared::new()));
-        let mut output_ports = Vec::new();
-        let mut input_ports = Vec::new();
-
         for line in response.lines() {
             if let Some(dev) = parse_device_line(line) {
                 let idx = dev.port as usize;
@@ -320,25 +325,11 @@ impl HardwareAdapter for BuildHATAdapter {
                         type_id: dev.type_id,
                         connected: true,
                     };
-                    let letter = port_letter(idx).to_string();
-                    if is_motor(dev.type_id) {
-                        output_ports.push(letter.clone());
-                    }
-                    if is_sensor(dev.type_id) {
-                        input_ports.push(letter.clone());
-                    }
-                    // Tacho motors can also be read as sensors
-                    if is_tacho_motor(dev.type_id) && !input_ports.contains(&letter) {
-                        input_ports.push(letter);
-                    }
                 }
             }
         }
 
-        self.output_ports = output_ports;
-        self.input_ports = input_ports;
-
-        // Create driver slot
+        // Create driver slot — it will handle ongoing attach/detach events
         let (tx, rx) = mpsc::channel();
         let slot = BuildHATSlot {
             port,
@@ -364,19 +355,18 @@ impl HardwareAdapter for BuildHATAdapter {
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
-        if self.output_ports.contains(&port.to_string()) {
-            Ok(())
-        } else {
-            Err(format!("Unknown output port \"{}\"", port))
+        let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
+        if !is_motor(type_id) {
+            return Err(format!("Device on port \"{}\" is not a motor", port));
         }
+        Ok(())
     }
 
     fn validate_sensor_port(&self, port: &str, _mode: Option<&str>) -> Result<(), String> {
-        if self.input_ports.contains(&port.to_string()) {
-            Ok(())
-        } else {
-            Err(format!("Unknown sensor port \"{}\"", port))
-        }
+        let idx = self.port_index(port)?;
+        self.require_device(idx)?;
+        Ok(())
     }
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
