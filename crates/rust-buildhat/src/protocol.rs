@@ -36,8 +36,10 @@ pub fn cmd_select_all_ports() -> String {
 // ── Motor commands ───────────────────────────────
 
 /// Set motor speed (continuous run). Speed: -100 to 100.
+/// Enables PWM mode and sets the speed as a fraction (-1.0 to 1.0).
 pub fn cmd_motor_set(port: u8, speed: i32) -> String {
-    format!("port {} ; set {}\r", port, speed)
+    let value = speed.clamp(-100, 100) as f64 / 100.0;
+    format!("port {} ; pwm ; set {}\r", port, value)
 }
 
 /// Coast motor (free spin).
@@ -45,9 +47,9 @@ pub fn cmd_motor_coast(port: u8) -> String {
     format!("port {} ; coast\r", port)
 }
 
-/// Hard stop motor.
+/// Hard stop motor (active brake via PWM 0).
 pub fn cmd_motor_off(port: u8) -> String {
-    format!("port {} ; off\r", port)
+    format!("port {} ; pwm ; set 0\r", port)
 }
 
 /// Direct PWM control. Value: -1.0 to 1.0.

@@ -366,14 +366,27 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
         let idx = self.port_index(port)?;
-        let speed = to_signed_speed(direction, power);
-        let seconds = tenths as f64 / 10.0;
-        self.send_cmd(BuildHATCommand::MotorPulse { port: idx, speed, seconds })?;
-        self.wait_for_completion(idx, tenths as u64 / 10 + 5)
+        let type_id = self.require_device(idx)?;
+        if is_tacho_motor(type_id) {
+            // Tacho motor: use PID pulse (firmware handles timing)
+            let speed = to_signed_speed(direction, power);
+            let seconds = tenths as f64 / 10.0;
+            self.send_cmd(BuildHATCommand::MotorPulse { port: idx, speed, seconds })?;
+            self.wait_for_completion(idx, tenths as u64 / 10 + 5)
+        } else {
+            // Basic motor: PWM + sleep + coast
+            self.start_port(port, direction, power)?;
+            std::thread::sleep(Duration::from_millis(tenths as u64 * 100));
+            self.stop_port(port)
+        }
     }
 
     fn rotate_port_by_degrees(&mut self, port: &str, direction: PortDirection, power: u8, degrees: i32) -> Result<(), String> {
         let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
+        if !is_tacho_motor(type_id) {
+            return Err("This motor does not support rotation by degrees".to_string());
+        }
         let speed = to_signed_speed(direction, power).abs().max(1);
         // Get current position from sensor data
         let current = {
@@ -392,6 +405,10 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn rotate_port_to_position(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
         let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
+        if !is_tacho_motor(type_id) {
+            return Err("This motor does not support rotation to position".to_string());
+        }
         let speed = to_signed_speed(direction, power).abs().max(1);
         let current = {
             let shared = self.shared.lock().unwrap();
