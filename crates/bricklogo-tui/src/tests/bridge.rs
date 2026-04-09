@@ -122,14 +122,9 @@ fn test_bridge_primitives_update_port_manager_state() {
 
     let manager = pm.lock().unwrap();
     assert_eq!(manager.get_active_device_name(), Some("bot2"));
-    assert_eq!(
-        manager.get_selected_output_display_ports(),
-        vec!["b".to_string(), "bot1.a".to_string()]
-    );
-    assert_eq!(
-        manager.get_selected_input_display_ports(),
-        vec!["bot1.a".to_string()]
-    );
+    // Port selections are now on the evaluator, not the port manager
+    assert_eq!(eval.selected_outputs(), &["b".to_string(), "bot1.a".to_string()]);
+    assert_eq!(eval.selected_inputs(), &["bot1.a".to_string()]);
 }
 
 #[test]

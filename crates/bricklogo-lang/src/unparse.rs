@@ -66,6 +66,9 @@ fn node_to_source(node: &AstNode) -> String {
         AstNode::Forever { body } => {
             format!("forever [{}]", body_to_source(body))
         }
+        AstNode::Launch { body } => {
+            format!("launch [{}]", body_to_source(body))
+        }
         AstNode::If { condition, body } => {
             format!(
                 "if {} [{}]",

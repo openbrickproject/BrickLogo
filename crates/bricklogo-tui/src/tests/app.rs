@@ -196,9 +196,11 @@ fn test_tick_syncs_device_and_selection_context() {
         let mut pm = app.port_manager.lock().unwrap();
         pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
         pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
-        pm.talk_to(&["a".to_string(), "bot2.b".to_string()])
-            .unwrap();
-        pm.listen_to(&["bot2.b".to_string()]).unwrap();
+    }
+    // Set selections on the evaluator
+    if let Some(ref mut eval) = app.evaluator {
+        eval.set_selected_outputs(vec!["a".to_string(), "bot2.b".to_string()]);
+        eval.set_selected_inputs(vec!["bot2.b".to_string()]);
     }
 
     assert!(app.tick());
