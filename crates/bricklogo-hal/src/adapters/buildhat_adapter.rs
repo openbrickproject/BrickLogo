@@ -65,12 +65,19 @@ impl BuildHATShared {
 
 // ── Driver slot ─────────────────────────────────
 
+struct PendingInit {
+    port: u8,
+    type_id: u16,
+    ready_at: Instant,
+}
+
 struct BuildHATSlot {
     port: Box<dyn serialport::SerialPort>,
     rx: mpsc::Receiver<BuildHATCommand>,
     shared: Arc<Mutex<BuildHATShared>>,
     read_buffer: String,
     alive: bool,
+    pending_inits: Vec<PendingInit>,
 }
 
 impl BuildHATSlot {
@@ -124,24 +131,13 @@ impl DeviceSlot for BuildHATSlot {
                         type_id: dev.type_id,
                         connected: true,
                     };
-                    // Initialize newly attached device
+                    // Queue deferred init for newly attached device (1 sec delay)
                     if is_new {
-                        drop(shared); // Release lock before writing to serial
-                        if needs_led_init(dev.type_id) {
-                            self.write_cmd(&cmd_set_value(dev.port, -1));
-                        }
-                        if is_motor(dev.type_id) {
-                            self.write_cmd(&cmd_plimit(dev.port, 1.0));
-                        }
-                        if is_tacho_motor(dev.type_id) {
-                            let modes = if is_absolute_motor(dev.type_id) {
-                                vec![(1, 0), (2, 0), (3, 0)]
-                            } else {
-                                vec![(1, 0), (2, 0)]
-                            };
-                            self.write_cmd(&cmd_select_combi(dev.port, 0, &modes, 10));
-                        }
-                        continue; // shared was dropped, skip to next line
+                        self.pending_inits.push(PendingInit {
+                            port: dev.port,
+                            type_id: dev.type_id,
+                            ready_at: Instant::now() + Duration::from_secs(1),
+                        });
                     }
                 }
             }
@@ -153,6 +149,36 @@ impl DeviceSlot for BuildHATSlot {
                         shared.ports[port] = PortInfo::default();
                     }
                 }
+            }
+        }
+
+        // ── Process deferred device inits ─────
+        let now = Instant::now();
+        let all_inits: Vec<PendingInit> = self.pending_inits.drain(..).collect();
+        let mut remaining = Vec::new();
+        let mut ready = Vec::new();
+        for init in all_inits {
+            if now >= init.ready_at {
+                ready.push(init);
+            } else {
+                remaining.push(init);
+            }
+        }
+        self.pending_inits = remaining;
+        for init in ready {
+            if needs_led_init(init.type_id) {
+                self.write_cmd(&cmd_set_value(init.port, -1));
+            }
+            if is_motor(init.type_id) {
+                self.write_cmd(&cmd_plimit(init.port, 1.0));
+            }
+            if is_tacho_motor(init.type_id) {
+                let modes = if is_absolute_motor(init.type_id) {
+                    vec![(1, 0), (2, 0), (3, 0)]
+                } else {
+                    vec![(1, 0), (2, 0)]
+                };
+                self.write_cmd(&cmd_select_combi(init.port, 0, &modes, 10));
             }
         }
 
@@ -412,6 +438,7 @@ impl HardwareAdapter for BuildHATAdapter {
             shared: shared.clone(),
             read_buffer: String::new(),
             alive: true,
+            pending_inits: Vec::new(),
         };
 
         let slot_id = driver::register(Box::new(slot));
