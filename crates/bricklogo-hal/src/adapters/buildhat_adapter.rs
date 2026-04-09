@@ -449,15 +449,10 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
         let idx = self.port_index(port)?;
-        let type_id = self.require_device(idx)?;
+        self.require_device(idx)?;
         let speed = to_signed_speed(direction, power);
-        if is_tacho_motor(type_id) {
-            // Tacho motor: PID-regulated speed
-            self.send_cmd(BuildHATCommand::MotorSpeed { port: idx, speed })
-        } else {
-            // Basic motor: raw PWM
-            self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
-        }
+        // Direct PWM for all motors (matches Powered UP behavior)
+        self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
