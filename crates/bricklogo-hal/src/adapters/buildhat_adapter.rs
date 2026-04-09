@@ -247,7 +247,7 @@ impl HardwareAdapter for BuildHATAdapter {
             .map_err(|e| format!("Failed to open {}: {}", self.serial_path, e))?;
 
         // Detect state and upload firmware if needed
-        let state = firmware::detect_state(&mut *port)?;
+        let mut state = firmware::detect_state(&mut *port)?;
         if let HatState::Bootloader = state {
             // Load bundled firmware
             let fw_data = std::fs::read("firmware/buildhat/buildhat-firmware-1902784.bin")
@@ -256,6 +256,13 @@ impl HardwareAdapter for BuildHATAdapter {
                 .map_err(|e| format!("Cannot read Build HAT signature: {} (is the firmware/ directory present?)", e))?;
             let progress: firmware::ProgressFn = Box::new(|_| {});
             firmware::upload_firmware(&mut *port, &fw_data, &sig_data, &progress)?;
+
+            // Verify firmware is now running
+            state = firmware::detect_state(&mut *port)
+                .map_err(|_| "Build HAT firmware uploaded but did not start".to_string())?;
+            if let HatState::Bootloader = state {
+                return Err("Build HAT still in bootloader after firmware upload".to_string());
+            }
         }
 
         // Initialize

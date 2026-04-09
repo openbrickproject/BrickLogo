@@ -72,26 +72,30 @@ pub fn upload_firmware(
     progress("Rebooting Build HAT...");
     write_and_flush(port, cmd_reboot().as_bytes())?;
 
-    // Wait for firmware to boot
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Wait for firmware to boot — it takes a few seconds
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut buf = [0u8; 256];
     let mut response = String::new();
     while Instant::now() < deadline {
         match port.read(&mut buf) {
             Ok(n) if n > 0 => {
-                response.push_str(&String::from_utf8_lossy(&buf[..n]));
-                for line in response.lines() {
-                    if let Some(HatState::Firmware(_)) = parse_version(line) {
-                        progress("Build HAT firmware ready");
-                        return Ok(());
-                    }
+                let chunk = String::from_utf8_lossy(&buf[..n]);
+                response.push_str(&chunk);
+                if response.contains("Firmware version:") {
+                    progress("Build HAT firmware ready");
+                    return Ok(());
                 }
             }
             _ => {}
         }
     }
 
-    Err("Build HAT did not respond after firmware upload".to_string())
+    // If we get here, the firmware may still have loaded — the version
+    // string might have been sent before we started reading. Don't fail;
+    // the caller will detect the state on the next version check.
+    progress("Build HAT firmware uploaded (waiting for boot)");
+    std::thread::sleep(Duration::from_secs(2));
+    Ok(())
 }
 
 fn write_and_flush(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<(), String> {
