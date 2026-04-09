@@ -75,11 +75,11 @@ impl HardwareAdapter for CoralAdapter {
                     self.output_ports = vec!["a".to_string(), "b".to_string()];
                     self.port_modes.insert(
                         "a".into(),
-                        vec!["rotate".into(), "angle".into(), "speed".into()],
+                        vec!["rotation".into(), "speed".into()],
                     );
                     self.port_modes.insert(
                         "b".into(),
-                        vec!["rotate".into(), "angle".into(), "speed".into()],
+                        vec!["rotation".into(), "speed".into()],
                     );
                     self.port_modes.insert("tilt".into(), vec!["tilt".into()]);
                     self.port_modes.insert("gyro".into(), vec!["gyro".into()]);
@@ -90,7 +90,7 @@ impl HardwareAdapter for CoralAdapter {
                     self.output_ports = vec!["a".to_string()];
                     self.port_modes.insert(
                         "a".into(),
-                        vec!["rotate".into(), "angle".into(), "speed".into()],
+                        vec!["rotation".into(), "speed".into()],
                     );
                     self.port_modes.insert("tilt".into(), vec!["tilt".into()]);
                     self.port_modes.insert("gyro".into(), vec!["gyro".into()]);
@@ -101,7 +101,7 @@ impl HardwareAdapter for CoralAdapter {
                     self.output_ports = Vec::new();
                     self.port_modes.insert("color".into(), vec!["color".into()]);
                     self.port_modes
-                        .insert("reflect".into(), vec!["reflect".into()]);
+                        .insert("light".into(), vec!["light".into()]);
                     self.port_modes.insert("rgb".into(), vec!["rgb".into()]);
                 }
                 CoralDeviceKind::Controller => {
@@ -246,7 +246,7 @@ impl HardwareAdapter for CoralAdapter {
         let valid_modes = self.port_modes.get(port);
         let default_mode = valid_modes
             .and_then(|v| v.first().map(|s| s.as_str()))
-            .unwrap_or("rotate");
+            .unwrap_or("rotation");
         let effective_mode = mode.unwrap_or(default_mode);
 
         let motor_bit_mask: Option<u8> = match port {
@@ -260,7 +260,7 @@ impl HardwareAdapter for CoralAdapter {
                 Some(DeviceSensorPayload::Color(c)) => Ok(Some(LogoValue::Number(c.color as f64))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "reflect" => match self.ble.coral.read("color") {
+            "light" => match self.ble.coral.read("color") {
                 Some(DeviceSensorPayload::Color(c)) => {
                     Ok(Some(LogoValue::Number(c.reflection as f64)))
                 }
@@ -274,7 +274,7 @@ impl HardwareAdapter for CoralAdapter {
                 ]))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "rotate" | "angle" => {
+            "rotation" => {
                 if let Some(mask) = motor_bit_mask {
                     match self.ble.coral.read_motor(mask) {
                         Some(DeviceSensorPayload::Motor(m)) => {

@@ -436,7 +436,16 @@ pub fn register_hardware_primitives(
     });
 
     // Typed sensor readers
-    for (name, mode) in &[("color", "color"), ("light", "reflect"), ("force", "force"), ("angle", "rotate")] {
+    for (name, mode) in &[
+        ("color", "color"),
+        ("light", "light"),
+        ("force", "force"),
+        ("rotation", "rotation"),
+        ("tilt", "tilt"),
+        ("distance", "distance"),
+        ("touch", "touch"),
+        ("temperature", "temperature"),
+    ] {
         let pm_ref = pm.clone();
         let mode = mode.to_string();
         eval.register_primitive(name, PrimitiveSpec {

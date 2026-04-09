@@ -6,7 +6,7 @@ fn test_mode_map_technic_color_sensor() {
     assert_eq!(map.len(), 6);
     assert_eq!(map[0].event, "color");
     assert_eq!(map[0].mode, 0x00);
-    assert_eq!(map[1].event, "reflect");
+    assert_eq!(map[1].event, "light");
     assert_eq!(map[1].mode, 0x01);
 }
 
@@ -17,7 +17,7 @@ fn test_mode_for_event() {
         Some(0x00)
     );
     assert_eq!(
-        mode_for_event(DeviceType::TechnicColorSensor, "reflect"),
+        mode_for_event(DeviceType::TechnicColorSensor, "light"),
         Some(0x01)
     );
     assert_eq!(
@@ -37,7 +37,7 @@ fn test_default_event() {
 fn test_mode_map_absolute_motor() {
     let map = mode_map_for_device(DeviceType::TechnicMediumAngularMotor);
     assert_eq!(map.len(), 2);
-    assert_eq!(map[0].event, "rotate");
+    assert_eq!(map[0].event, "rotation");
     assert_eq!(map[1].event, "absolute");
 }
 
@@ -45,7 +45,7 @@ fn test_mode_map_absolute_motor() {
 fn test_mode_map_tacho_motor() {
     let map = mode_map_for_device(DeviceType::MediumLinearMotor);
     assert_eq!(map.len(), 1);
-    assert_eq!(map[0].event, "rotate");
+    assert_eq!(map[0].event, "rotation");
 }
 
 #[test]

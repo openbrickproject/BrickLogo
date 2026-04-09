@@ -32,7 +32,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
         | DeviceType::MoveHubMediumLinearMotor
         | DeviceType::TechnicLargeLinearMotor
         | DeviceType::TechnicXLargeLinearMotor => vec![ModeMapEntry {
-            event: "rotate",
+            event: "rotation",
             mode: 0x02,
         }],
 
@@ -43,7 +43,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
         | DeviceType::TechnicMediumAngularMotorGrey
         | DeviceType::TechnicLargeAngularMotorGrey => vec![
             ModeMapEntry {
-                event: "rotate",
+                event: "rotation",
                 mode: 0x02,
             },
             ModeMapEntry {
@@ -59,7 +59,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
                 mode: 0x00,
             },
             ModeMapEntry {
-                event: "reflect",
+                event: "light",
                 mode: 0x01,
             },
             ModeMapEntry {
@@ -67,15 +67,15 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
                 mode: 0x02,
             },
             ModeMapEntry {
-                event: "rgbIntensity",
+                event: "rgb",
                 mode: 0x05,
             },
             ModeMapEntry {
-                event: "hsvIntensity",
+                event: "hsv",
                 mode: 0x06,
             },
             ModeMapEntry {
-                event: "hsvAmbient",
+                event: "hsvambient",
                 mode: 0x07,
             },
         ],
@@ -95,7 +95,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
                 mode: 0x02,
             },
             ModeMapEntry {
-                event: "reflect",
+                event: "light",
                 mode: 0x03,
             },
             ModeMapEntry {
@@ -103,11 +103,11 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
                 mode: 0x04,
             },
             ModeMapEntry {
-                event: "rgbIntensity",
+                event: "rgb",
                 mode: 0x06,
             },
             ModeMapEntry {
-                event: "colorAndDistance",
+                event: "colordistance",
                 mode: 0x08,
             },
         ],
@@ -225,7 +225,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
                 mode: 0x01,
             },
             ModeMapEntry {
-                event: "reflect",
+                event: "light",
                 mode: 0x02,
             },
             ModeMapEntry {
