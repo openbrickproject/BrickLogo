@@ -109,6 +109,15 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::raw("  "));
     spans.extend(format_selection_line("listento", &app.selected_inputs));
 
+    if let Some(ref status) = app.net_status {
+        let text = status.lock().unwrap().clone();
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[net: {}]", text),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
     let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
 }

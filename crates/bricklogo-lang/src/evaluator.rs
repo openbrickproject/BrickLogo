@@ -125,6 +125,7 @@ pub struct Evaluator {
     launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
     selected_outputs: Vec<String>,
     selected_inputs: Vec<String>,
+    var_broadcast: Option<std::sync::mpsc::Sender<(String, LogoValue)>>,
 }
 
 impl Evaluator {
@@ -142,6 +143,7 @@ impl Evaluator {
             launched_stops: Arc::new(Mutex::new(Vec::new())),
             selected_outputs: Vec::new(),
             selected_inputs: Vec::new(),
+            var_broadcast: None,
         }
     }
 
@@ -211,11 +213,23 @@ impl Evaluator {
     }
 
     pub fn set_global(&self, name: &str, value: LogoValue) {
-        self.global_vars.write().unwrap().insert(name.to_lowercase(), value);
+        let normalized = name.to_lowercase();
+        self.global_vars.write().unwrap().insert(normalized.clone(), value.clone());
+        if let Some(ref tx) = self.var_broadcast {
+            let _ = tx.send((normalized, value));
+        }
     }
 
     pub fn get_global(&self, name: &str) -> Option<LogoValue> {
         self.global_vars.read().unwrap().get(&name.to_lowercase()).cloned()
+    }
+
+    pub fn set_var_broadcast(&mut self, tx: std::sync::mpsc::Sender<(String, LogoValue)>) {
+        self.var_broadcast = Some(tx);
+    }
+
+    pub fn global_vars_ref(&self) -> Arc<RwLock<HashMap<String, LogoValue>>> {
+        self.global_vars.clone()
     }
 
     fn spawn_child(&self) -> (Evaluator, Arc<AtomicBool>) {
@@ -233,6 +247,7 @@ impl Evaluator {
             launched_stops: Arc::new(Mutex::new(Vec::new())),
             selected_outputs: self.selected_outputs.clone(),
             selected_inputs: self.selected_inputs.clone(),
+            var_broadcast: self.var_broadcast.clone(),
         };
         (child, stop)
     }
@@ -613,8 +628,8 @@ impl Evaluator {
             for node in body {
                 self.eval_node(node, env)?;
             }
-            // Yield briefly
-            std::thread::sleep(std::time::Duration::from_millis(0));
+            // Yield at ~60hz to avoid CPU spinning and lock starvation
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
     }
 

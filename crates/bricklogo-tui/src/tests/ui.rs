@@ -6,7 +6,7 @@ fn app_with_status(
     outputs: &[&str],
     inputs: &[&str],
 ) -> App {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
     app.connected_devices = devices.iter().map(|s| s.to_string()).collect();
     app.active_device = active.map(|s| s.to_string());
     app.selected_outputs = outputs.iter().map(|s| s.to_string()).collect();

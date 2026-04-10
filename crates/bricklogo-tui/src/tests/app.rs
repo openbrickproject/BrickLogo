@@ -111,7 +111,7 @@ fn run_until_idle(app: &mut App) {
 
 #[test]
 fn test_help_clear_and_bye_are_repl_commands() {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
 
     app.input = "help".to_string();
     app.submit_input();
@@ -132,7 +132,7 @@ fn test_help_clear_and_bye_are_repl_commands() {
 
 #[test]
 fn test_multiline_definition_mode_executes_definition() {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
 
     app.input = "to greet".to_string();
     app.submit_input();
@@ -158,7 +158,7 @@ fn test_multiline_definition_mode_executes_definition() {
 
 #[test]
 fn test_cancel_definition_clears_buffer() {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
     app.input = "to greet".to_string();
     app.submit_input();
     app.cancel_definition();
@@ -172,7 +172,7 @@ fn test_cancel_definition_clears_buffer() {
 
 #[test]
 fn test_history_navigation_round_trips() {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
     for cmd in ["print \"one", "print \"two"] {
         app.input = cmd.to_string();
         app.submit_input();
@@ -191,7 +191,7 @@ fn test_history_navigation_round_trips() {
 
 #[test]
 fn test_tick_syncs_device_and_selection_context() {
-    let mut app = App::new();
+    let mut app = App::new(None).unwrap();
     {
         let mut pm = app.port_manager.lock().unwrap();
         pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));

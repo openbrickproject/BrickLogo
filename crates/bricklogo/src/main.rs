@@ -8,6 +8,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::time::Duration;
 
+use bricklogo_net::{NetRole, DEFAULT_PORT};
 use bricklogo_tui::app::App;
 use bricklogo_tui::ui;
 
@@ -66,7 +67,41 @@ impl TerminalRestorer for CrosstermRestorer<'_> {
     }
 }
 
+fn parse_net_role() -> Option<NetRole> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--host" => {
+                let port = args.get(i + 1)
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(DEFAULT_PORT);
+                return Some(NetRole::Host(port));
+            }
+            "--join" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    let addr = &args[i];
+                    let full_addr = if addr.contains(':') {
+                        addr.to_string()
+                    } else {
+                        format!("{}:{}", addr, DEFAULT_PORT)
+                    };
+                    return Some(NetRole::Client(full_addr));
+                } else {
+                    eprintln!("--join requires an address");
+                    std::process::exit(1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let net_role = parse_net_role();
     let mut lifecycle = TerminalLifecycle::default();
 
     // Setup terminal
@@ -78,7 +113,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = match App::new(net_role) {
+        Ok(app) => app,
+        Err(e) => {
+            let mut restorer = CrosstermRestorer { terminal: &mut terminal };
+            lifecycle.restore(&mut restorer)?;
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
     let mut needs_draw = true;
 
     // Main loop

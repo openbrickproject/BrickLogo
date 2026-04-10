@@ -75,6 +75,7 @@ version = "0.2.0"
 dependencies = [
  "bricklogo-hal",
  "bricklogo-lang",
+ "bricklogo-net",
  "bricklogo-tui",
  "crossterm",
  "ratatui",
@@ -104,6 +105,19 @@ dependencies = [
 [[package]]
 name = "bricklogo-lang"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bricklogo-net"
+version = "0.1.0"
+dependencies = [
+ "bricklogo-lang",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bricklogo-tui"
@@ -111,6 +125,7 @@ version = "0.2.0"
 dependencies = [
  "bricklogo-hal",
  "bricklogo-lang",
+ "bricklogo-net",
  "crossterm",
  "ratatui",
  "rust-rcx",

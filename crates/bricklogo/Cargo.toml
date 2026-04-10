@@ -12,5 +12,6 @@ rust-poweredup = { path = "../rust-poweredup" }
 rust-coral = { path = "../rust-coral" }
 rust-wedo = { path = "../rust-wedo" }
 rust-controllab = { path = "../rust-controllab" }
+bricklogo-net = { path = "../bricklogo-net" }
 crossterm = "0.28"
 ratatui = "0.29"
