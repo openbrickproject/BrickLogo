@@ -4,6 +4,7 @@ use bricklogo_lang::error::LogoError;
 use bricklogo_lang::evaluator::Evaluator;
 use bricklogo_lang::primitives::register_core_primitives;
 use bricklogo_lang::value::LogoValue;
+use bricklogo_net::NetRole;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -46,10 +47,11 @@ pub struct App {
     launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
+    pub net_status: Option<Arc<Mutex<String>>>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(net_role: Option<NetRole>) -> Result<Self, String> {
         let output_lines: Vec<OutputLine> = Vec::new();
         let output_lines_ref = Arc::new(Mutex::new(Vec::<OutputLine>::new()));
         let output_clone = output_lines_ref.clone();
@@ -73,9 +75,31 @@ impl App {
             });
         });
         evaluator.set_system_fn(system_fn.clone());
-        register_hardware_primitives(&mut evaluator, port_manager.clone(), system_fn);
+        register_hardware_primitives(&mut evaluator, port_manager.clone(), system_fn.clone());
 
-        App {
+        // Set up networking if requested
+        let mut net_status_arc: Option<Arc<Mutex<String>>> = None;
+        let mut net_init_msg: Option<String> = None;
+        if let Some(role) = net_role {
+            let (tx, rx) = mpsc::channel();
+            evaluator.set_var_broadcast(tx);
+            let global_vars = evaluator.global_vars_ref();
+
+            let init_msg = match &role {
+                NetRole::Host(port) => format!("Hosting on port {}", port),
+                NetRole::Client(addr) => format!("Joined {}", addr),
+            };
+            let status = match &role {
+                NetRole::Host(_) => Arc::new(Mutex::new("hosting (0 clients)".to_string())),
+                NetRole::Client(_) => Arc::new(Mutex::new("connected".to_string())),
+            };
+
+            bricklogo_net::start_network(role, global_vars, rx, system_fn, status.clone())?;
+            net_status_arc = Some(status);
+            net_init_msg = Some(init_msg);
+        }
+
+        let mut app = App {
             output_lines,
             input: String::new(),
             input_history: Vec::new(),
@@ -97,7 +121,17 @@ impl App {
             launched_stops,
             port_manager,
             output_buffer: output_lines_ref,
+            net_status: net_status_arc,
+        };
+
+        if let Some(msg) = net_init_msg {
+            app.output_lines.push(OutputLine {
+                text: msg,
+                line_type: OutputLineType::System,
+            });
         }
+
+        Ok(app)
     }
 
     /// Drain any output produced by the evaluator's print/show/type callbacks.

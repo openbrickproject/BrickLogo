@@ -1,6 +1,8 @@
+use serde::{Serialize, Deserialize};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum LogoValue {
     Number(f64),
     Word(String),
