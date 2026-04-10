@@ -187,4 +187,4 @@ Plug a second motor into port B. Select both ports with `talkto [a b]` and try t
 
 Plug in a sensor. Use `listento` to select it and `sensor` to read it. Use `waituntil` to make your program react to what the sensor sees.
 
-The [Reference Guide](05-reference.md) describes every command.
+The [Advanced Usage](04-advanced.md) guide covers concurrent tasks, multiple devices, and networking. The [Reference Guide](05-reference.md) describes every command.

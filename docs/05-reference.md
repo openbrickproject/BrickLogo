@@ -1,6 +1,6 @@
-# BrickLogo Reference Guide
+# Reference Guide
 
-*v0.2.0 — A modern LEGO/Logo programming environment*
+This is the complete command reference for BrickLogo. Each command is listed with its syntax, a description, and examples. For a guided introduction, see the [Tutorial](03-tutorial.md).
 
 ## Contents
 
@@ -26,7 +26,7 @@
 
 ## 1. Connecting to Devices
 
-Before you can control motors or read sensors, you must connect to a device. BrickLogo supports six families of LEGO hardware. Each connected device is given a name that you choose, and that name is how you refer to it for the rest of the session.
+Before you can control motors or read sensors, you must connect to a device. Each connected device is given a name that you choose. That name is how you refer to it for the rest of the session.
 
 ### `connectto`
 
@@ -1529,7 +1529,3 @@ Sensor modes depend on which device is attached to each port. Common modes inclu
 | Tilt Sensor | tilt |
 | Internal Voltage | voltage |
 
----
-
-*BrickLogo — by the Open Brick Project*
-*A modern LEGO/Logo programming environment*

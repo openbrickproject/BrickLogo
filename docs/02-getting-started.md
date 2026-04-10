@@ -10,7 +10,7 @@
 
 ## Download
 
-Download the latest release for your platform from the Codeberg releases page. The release is a zip containing the `bricklogo` binary and example programs. Unpack it anywhere.
+Download the latest release for your platform from the GitHub releases page. The release is a zip containing the `bricklogo` binary and example programs. Unpack it anywhere.
 
 ## Running
 
@@ -100,4 +100,5 @@ Type `bye` or `exit` at the prompt. You can also press Ctrl+C. All devices are d
 ## See also
 
 - [Tutorial](03-tutorial.md) for a guided first session.
+- [Advanced Usage](04-advanced.md) for tasks, networking, and multiple devices.
 - [Reference Guide](05-reference.md) for the complete list of commands.

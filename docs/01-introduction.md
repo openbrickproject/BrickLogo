@@ -81,4 +81,5 @@ To define your own command:
 
 - [Getting Started](02-getting-started.md) for download and setup.
 - [Tutorial](03-tutorial.md) for a guided first session.
+- [Advanced Usage](04-advanced.md) for tasks, networking, and multiple devices.
 - [Reference Guide](05-reference.md) for the complete list of commands.
