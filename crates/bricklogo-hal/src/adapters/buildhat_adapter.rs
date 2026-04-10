@@ -497,6 +497,10 @@ impl HardwareAdapter for BuildHATAdapter {
             // Tacho motor: use PID pulse (firmware handles timing)
             let speed = to_signed_speed(direction, power);
             let seconds = tenths as f64 / 10.0;
+            {
+                let mut shared = self.shared.lock().unwrap();
+                shared.completions[idx as usize] = false;
+            }
             self.send_cmd(BuildHATCommand::MotorPulse { port: idx, speed, seconds })?;
             self.wait_for_completion(idx, tenths as u64 / 10 + 5)
         } else {
@@ -525,6 +529,10 @@ impl HardwareAdapter for BuildHATAdapter {
         let delta = if direction == PortDirection::Even { degrees } else { -degrees };
         let to_rot = from_rot + (delta as f64 / 360.0);
         let duration = (degrees.abs() as f64 / 360.0) / (speed as f64 / 100.0);
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.completions[idx as usize] = false;
+        }
         self.send_cmd(BuildHATCommand::MotorRamp { port: idx, from: from_rot, to: to_rot, duration })?;
         self.wait_for_completion(idx, duration as u64 + 5)
     }
@@ -547,6 +555,10 @@ impl HardwareAdapter for BuildHATAdapter {
         let to_rot = position as f64 / 360.0;
         let delta = (to_rot - from_rot).abs();
         let duration = delta / (speed as f64 / 100.0);
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.completions[idx as usize] = false;
+        }
         self.send_cmd(BuildHATCommand::MotorRamp { port: idx, from: from_rot, to: to_rot, duration: duration.max(0.1) })?;
         self.wait_for_completion(idx, duration as u64 + 5)
     }
