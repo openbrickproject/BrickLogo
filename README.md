@@ -1,48 +1,35 @@
-# BrickLogo - A modern LEGO/Logo REPL
+# BrickLogo
 
 ![BrickLogo screenshot](screenshots/v0.2.0.png)
 
-BrickLogo brings the classic LEGO computer-control model into a modern workspace. It is a terminal Logo environment that can talk to LEGO motors, hubs, and sensors across several generations of hardware, while keeping the direct, command-driven feel of LEGO TC Logo and Control Lab.
+BrickLogo is a Logo programming environment for controlling LEGO motors and sensors. It runs in a terminal and works with hardware from the original DACTA Control Lab through to current Powered UP and LEGO Education Science devices.
 
-This repository contains the BrickLogo application, the Logo language runtime, a hardware abstraction layer, and the lower-level protocols used to speak to supported devices.
-
-The full user guide will come later. This README is the front door.
-
-## What It Does
-
-- Runs a terminal REPL for LEGO/Logo programming
-- Implements a Logo parser, evaluator, procedures, variables, lists, control flow, and error handling
-- Connects to multiple LEGO devices at once
-- Controls motors with TC Logo style commands such as `talkto`, `on`, `off`, `onfor`, and `setpower`
-- Reads sensors with `listento`, `sensor`, `sensor?`, and typed sensor readers
-- Saves and loads Logo procedures using the classic page model
+The language is considered a spiritual evolution of LEGO TC Logo and Control Lab Logo. If you have used either, the commands should be familiar.
 
 ## Supported Devices
 
-| Type | `connectto` command | Devices |
+| Type | Command | Devices |
 | --- | --- | --- |
 | LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
-| LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered Up Hub, Remote, Control+ Hub, WeDo 2.0 Smart Hub, and other devices that use the Powered Up protocol |
+| LEGO Powered UP | `connectto "pup "name` | Move Hub, Powered UP Hub, Technic Hub, Remote, Duplo Train |
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
-| LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B / Control Lab over serial |
+| LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
-| Raspberry Pi Build HAT | `connectto "buildhat "name` | Build HAT with Powered UP / SPIKE motors and sensors |
+| Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
 
-Multiple devices can be connected at the same time and addressed either through the active device or by qualified port names such as `"mybot.a`.
+Multiple devices can be connected at the same time. Each is given a name and addressed by that name or by qualified port names (for example `"mybot.a`).
 
 ## Quick Start
 
-Download the latest release for your platform from the Codeberg releases page, unpack it, and run the `bricklogo` binary.
+Download the latest release for your platform, unpack it, and run the binary.
 
-For example:
-
-```bash
+```
 ./bricklogo
 ```
 
 Example session:
 
-```text
+```
 ? connectto "pup "mybot
 Scanning for Powered UP hub...
 Connected to Move Hub as "mybot"
@@ -51,27 +38,16 @@ Connected to Move Hub as "mybot"
 ? setpower 5
 ? onfor 10
 
-? to square
+? to backandforward
 > repeat 4 [onfor 5 wait 5 rd]
 > end
 
-? square
-```
-
-You can also work in the older TC Logo style:
-
-```text
-? connectto "controllab "lab
-? talkto "a
-? on
-? off
+? backandforward
 ```
 
 ## Configuration
 
-BrickLogo looks for `bricklogo.config.json` in the current working directory.
-
-This is mainly useful when a device needs a stable identifier, especially Control Lab serial ports. Example:
+BrickLogo looks for `bricklogo.config.json` in the current working directory. This is needed for devices that connect over serial.
 
 ```json
 {
@@ -80,90 +56,60 @@ This is mainly useful when a device needs a stable identifier, especially Contro
 }
 ```
 
-For Control Lab and RCX serial towers, the configured serial paths are used in order as devices are connected. RCX USB towers are detected automatically and do not need a config entry.
+Serial paths are used in order as devices are connected. RCX USB towers are detected automatically and do not need a config entry.
 
-## Basic Commands
+## Commands
 
 Connection:
 
 - `connectto "type "name`
 - `use "name`
-- `disconnect`
-- `disconnect "name`
-- `disconnect "all`
-- `firmware "device "file` (RCX firmware upload, Build HAT custom firmware)
+- `disconnect`, `disconnect "name`, `disconnect "all`
+- `firmware "device "file` (RCX, Build HAT)
 
 Motor control:
 
-- `talkto "port`
-- `talkto [a b]`
-- `on`
-- `off`
-- `onfor <tenths>`
-- `setpower <0-8>`
-- `setleft` / `seteven`
-- `setright` / `setodd`
-- `rd`
-- `rotate <degrees>`
-- `rotateto <position>`
-- `resetzero`
-- `rotatetohome`
-- `flash <on> <off>`
-- `alloff`
+- `talkto "port` or `talkto [a b]`
+- `on`, `off`, `onfor`, `setpower`
+- `seteven`, `setodd`, `rd`
+- `rotate`, `rotateto`, `resetzero`, `rotatetohome`
+- `flash`, `alloff`
 
 Sensors:
 
 - `listento "port`
-- `sensor "mode`
-- `sensor?`
-- `color`
-- `light`
-- `force`
-- `angle`
+- `sensor "mode`, `sensor?`
+- `color`, `light`, `force`, `angle`
 
-Language and pages:
+Language:
 
-- `make "name <value>`
-- `:name`
-- `print <value>`
-- `show <value>`
-- `repeat <n> [...]`
-- `if <cond> [...]`
-- `ifelse <cond> [...] [...]`
-- `wait <tenths>`
-- `to <name> <:params> ... end`
-- `erase "name`
-- `namepage "name`
-- `save`
-- `load "name`
-- `setdisk "path`
+- `make`, `:variable`, `print`, `show`
+- `repeat`, `forever`, `if`, `ifelse`, `waituntil`
+- `to ... end`, `output`, `stop`, `erase`
+- `launch`
+- `wait`, `timer`, `resett`
+- `namepage`, `save`, `load`, `setdisk`
 
-Inside BrickLogo, type `help` for the built-in command summary.
+Type `help` inside BrickLogo for the built-in command summary.
+
+## Documentation
+
+See the [docs](docs/) folder:
+
+- [Introduction](docs/01-introduction.md)
+- [Getting Started](docs/02-getting-started.md)
+- [Tutorial](docs/03-tutorial.md)
+- [Advanced Usage](docs/04-advanced.md)
+- [Reference Guide](docs/05-reference.md)
 
 ## Development
 
-Build the workspace:
-
-```bash
+```
 cargo check
-```
-
-Run tests:
-
-```bash
 cargo test
-```
-
-Run the application:
-
-```bash
 cargo run -p bricklogo
 ```
 
 ## Status
 
-The documentation is not finished yet. The goal of this repository is not just to expose device protocols, but to rebuild a usable LEGO Logo environment around them.
-
-## Notes On Style
-
-BrickLogo is not trying to imitate the old manuals line for line. But it does take cues from them: direct language, command-first examples, and the assumption that the computer is there to control real things.
+BrickLogo is in active development. The goal is a usable and fun LEGO/Logo environment for automation and learning.
