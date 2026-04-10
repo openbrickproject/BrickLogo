@@ -40,6 +40,7 @@ impl SessionState {
 pub struct Environment {
     variables: HashMap<String, LogoValue>,
     parent: Option<Box<Environment>>,
+    pub in_procedure: bool,
 }
 
 impl Environment {
@@ -47,6 +48,7 @@ impl Environment {
         Environment {
             variables: HashMap::new(),
             parent: None,
+            in_procedure: false,
         }
     }
 
@@ -56,7 +58,9 @@ impl Environment {
             parent: Some(Box::new(Environment {
                 variables: parent_vars.clone(),
                 parent: None,
+                in_procedure: false,
             })),
+            in_procedure: true,
         }
     }
 
@@ -573,9 +577,9 @@ impl Evaluator {
                 })?;
                 args.push(val);
             }
-            let globals_snapshot = self.global_vars.read().unwrap().clone();
-            let mut child_env = Environment::child(&globals_snapshot);
-            // Copy parent env vars
+            let mut child_env = Environment::new();
+            child_env.in_procedure = true;
+            // Copy caller's local variables so they're visible
             for (k, v) in env.all_variables() {
                 child_env.set_local(k, v.clone());
             }
@@ -588,12 +592,6 @@ impl Evaluator {
                     Err(LogoError::Stop) => return Ok(None),
                     Err(LogoError::Output(val)) => return Ok(Some(val)),
                     Err(e) => return Err(e),
-                }
-            }
-            // Copy vars back
-            for (k, v) in child_env.all_variables() {
-                if self.global_vars.read().unwrap().contains_key(k) || env.all_variables().contains_key(k) {
-                    env.set_variable(k, v.clone());
                 }
             }
             return Ok(None);

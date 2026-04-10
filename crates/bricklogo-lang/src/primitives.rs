@@ -578,11 +578,17 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
             func: Arc::new(|args, env, eval| {
                 let name = args[0].as_string();
                 let value = args[1].clone();
-                // If we're inside a procedure and the var is a local, set it locally.
-                // Otherwise set it globally (shared across all tasks).
                 if env.has_local(&name) {
+                    // Exists as a local (parameter or previously make'd in this procedure)
                     env.set_variable(&name, value);
+                } else if eval.get_global(&name).is_some() {
+                    // Exists as a global
+                    eval.set_global(&name, value);
+                } else if env.in_procedure {
+                    // New variable inside a procedure: create local
+                    env.set_local(&name, value);
                 } else {
+                    // New variable at top level: create global
                     eval.set_global(&name, value);
                 }
                 Ok(None)
@@ -594,7 +600,14 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         PrimitiveSpec {
             min_args: 1,
             max_args: 1,
-            func: Arc::new(|args, env, _| Ok(Some(env.get_variable(&args[0].as_string())?))),
+            func: Arc::new(|args, env, eval| {
+                let name = args[0].as_string();
+                let val = env.get_variable(&name).or_else(|_| {
+                    eval.get_global(&name)
+                        .ok_or_else(|| LogoError::Runtime(format!("I don't know about \"{}\"", name)))
+                })?;
+                Ok(Some(val))
+            }),
         },
     );
 

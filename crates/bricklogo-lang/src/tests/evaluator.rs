@@ -423,3 +423,64 @@ fn test_infix_is_left_associative_without_precedence() {
         Some(LogoValue::Number(35.0))
     );
 }
+
+#[test]
+fn test_make_at_top_level_is_global() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"x 42").unwrap();
+    eval.evaluate("print :x").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["42"]);
+    // Should be in global vars
+    assert_eq!(eval.get_global("x"), Some(LogoValue::Number(42.0)));
+}
+
+#[test]
+fn test_make_in_procedure_new_var_is_local() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test make \"localvar 99 print :localvar end").unwrap();
+    eval.evaluate("test").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["99"]);
+    // Should NOT be in global vars
+    assert_eq!(eval.get_global("localvar"), None);
+}
+
+#[test]
+fn test_make_in_procedure_existing_global_updates_global() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"x 1").unwrap();
+    eval.evaluate("to bump make \"x 2 end").unwrap();
+    eval.evaluate("bump").unwrap();
+    eval.evaluate("print :x").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["2"]);
+    assert_eq!(eval.get_global("x"), Some(LogoValue::Number(2.0)));
+}
+
+#[test]
+fn test_make_in_procedure_parameter_stays_local() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("to test :n make \"n 99 end").unwrap();
+    eval.evaluate("test 5").unwrap();
+    // Parameter should not leak to global
+    assert_eq!(eval.get_global("n"), None);
+}
+
+#[test]
+fn test_procedure_local_not_visible_after_return() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("to test make \"secret 42 end").unwrap();
+    eval.evaluate("test").unwrap();
+    // :secret was local to the procedure, should not be readable
+    assert!(eval.evaluate("print :secret").is_err());
+}
+
+#[test]
+fn test_nested_procedure_local_scope() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to inner make \"y 10 end").unwrap();
+    eval.evaluate("to outer make \"x 5 inner print :x end").unwrap();
+    eval.evaluate("outer").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["5"]);
+    // Neither should be global
+    assert_eq!(eval.get_global("x"), None);
+    assert_eq!(eval.get_global("y"), None);
+}
