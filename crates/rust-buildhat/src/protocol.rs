@@ -55,7 +55,7 @@ pub fn cmd_motor_off(port: u8) -> String {
 /// PID-regulated speed control for tacho motors. Speed: -100 to 100.
 pub fn cmd_motor_speed(port: u8, speed: i32) -> String {
     format!(
-        "port {} ; pid {} 0 0 s1 1 0 0.05 0.03 0 100 0.01 ; set {}\r",
+        "port {} ; pid {} 0 0 s1 1 0 0.15 0.06 0 100 0.01 ; set {}\r",
         port, port, speed
     )
 }
@@ -68,7 +68,7 @@ pub fn cmd_motor_pwm(port: u8, value: f64) -> String {
 /// Run motor for a number of seconds using PID control.
 pub fn cmd_motor_pulse(port: u8, speed: i32, seconds: f64) -> String {
     format!(
-        "port {} ; pid {} 0 0 s1 1 0 0.05 0.03 0 100 0.01 ; set pulse {} 0.0 {} 0\r",
+        "port {} ; pid {} 0 0 s1 1 0 0.15 0.06 0 100 0.01 ; set pulse {} 0.0 {} 0\r",
         port, port, speed, seconds
     )
 }
