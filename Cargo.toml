@@ -10,5 +10,6 @@ members = [
     "crates/rust-controllab",
     "crates/rust-rcx",
     "crates/rust-buildhat",
+    "crates/bricklogo-net",
 ]
 resolver = "2"

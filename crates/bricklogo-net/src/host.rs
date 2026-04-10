@@ -9,12 +9,41 @@ use crate::protocol::{self, NetMessage};
 use crate::NetStatus;
 
 type SystemFn = Arc<dyn Fn(&str) + Send + Sync>;
-type Clients = Arc<Mutex<Vec<(String, TcpStream)>>>;
 
-fn update_status(clients: &Clients, status: &NetStatus) {
+const CLIENT_CHANNEL_SIZE: usize = 256;
+
+struct ClientEntry {
+    addr: String,
+    tx: mpsc::SyncSender<String>,
+}
+
+type ClientList = Arc<Mutex<Vec<ClientEntry>>>;
+
+fn update_status(clients: &ClientList, status: &NetStatus) {
     let count = clients.lock().unwrap().len();
     let label = if count == 1 { "client" } else { "clients" };
     *status.lock().unwrap() = format!("hosting ({} {})", count, label);
+}
+
+fn remove_client(clients: &ClientList, addr: &str, system_fn: &SystemFn, status: &NetStatus) {
+    clients.lock().unwrap().retain(|c| c.addr != addr);
+    system_fn(&format!("{} disconnected", addr));
+    update_status(clients, status);
+}
+
+fn broadcast_to_others(clients: &ClientList, sender_addr: &str, msg: &str) {
+    let mut list = clients.lock().unwrap();
+    list.retain(|c| {
+        if c.addr == sender_addr {
+            return true;
+        }
+        c.tx.try_send(msg.to_string()).is_ok()
+    });
+}
+
+fn broadcast_to_all(clients: &ClientList, msg: &str) {
+    let mut list = clients.lock().unwrap();
+    list.retain(|c| c.tx.try_send(msg.to_string()).is_ok());
 }
 
 pub fn start_host(
@@ -27,18 +56,14 @@ pub fn start_host(
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .map_err(|e| format!("Failed to start host on port {}: {}", port, e))?;
 
-    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let clients: ClientList = Arc::new(Mutex::new(Vec::new()));
 
-    // Broadcast thread: reads local variable changes and sends to all clients
+    // Broadcast thread: reads local variable changes and fans out to client channels
     let bc_clients = clients.clone();
     thread::spawn(move || {
         while let Ok((name, value)) = broadcast_rx.recv() {
             let msg = protocol::encode(&NetMessage::Set { name, value });
-            let mut clients = bc_clients.lock().unwrap();
-            clients.retain(|(_, stream)| {
-                let mut s = stream;
-                s.write_all(msg.as_bytes()).is_ok() && s.flush().is_ok()
-            });
+            broadcast_to_all(&bc_clients, &msg);
         }
     });
 
@@ -56,12 +81,31 @@ pub fn start_host(
                         .unwrap_or_else(|_| "unknown".to_string());
                     accept_system(&format!("{} joined", addr));
 
-                    // Clone the stream for the client list (writing) and the reader thread
                     let reader_stream = stream.try_clone().expect("Failed to clone stream");
-                    accept_clients.lock().unwrap().push((addr.clone(), stream));
+                    let (tx, rx) = mpsc::sync_channel::<String>(CLIENT_CHANNEL_SIZE);
+
+                    accept_clients.lock().unwrap().push(ClientEntry {
+                        addr: addr.clone(),
+                        tx,
+                    });
                     update_status(&accept_clients, &accept_status);
 
-                    // Spawn reader thread for this client
+                    // Per-client writer thread: drains channel to TCP
+                    let writer_addr = addr.clone();
+                    let writer_clients = accept_clients.clone();
+                    let writer_system = accept_system.clone();
+                    let writer_status = accept_status.clone();
+                    thread::spawn(move || {
+                        let mut s = stream;
+                        while let Ok(msg) = rx.recv() {
+                            if s.write_all(msg.as_bytes()).is_err() || s.flush().is_err() {
+                                remove_client(&writer_clients, &writer_addr, &writer_system, &writer_status);
+                                break;
+                            }
+                        }
+                    });
+
+                    // Per-client reader thread: reads from TCP
                     let client_vars = accept_vars.clone();
                     let client_clients = accept_clients.clone();
                     let client_system = accept_system.clone();
@@ -90,7 +134,7 @@ fn handle_client(
     stream: TcpStream,
     addr: String,
     global_vars: Arc<RwLock<HashMap<String, LogoValue>>>,
-    clients: Clients,
+    clients: ClientList,
     system_fn: SystemFn,
     status: NetStatus,
 ) {
@@ -114,35 +158,21 @@ fn handle_client(
             NetMessage::Sync => {
                 let vars = global_vars.read().unwrap().clone();
                 let response = protocol::encode(&NetMessage::Snapshot { vars });
-                let mut clients_lock = clients.lock().unwrap();
-                if let Some((_, s)) = clients_lock.iter_mut().find(|(a, _)| *a == addr) {
-                    let _ = s.write_all(response.as_bytes());
-                    let _ = s.flush();
+                let list = clients.lock().unwrap();
+                if let Some(c) = list.iter().find(|c| c.addr == addr) {
+                    let _ = c.tx.try_send(response);
                 }
             }
             NetMessage::Set { name, value } => {
-                // Write directly to global vars (no channel — avoids re-broadcast to self)
                 global_vars.write().unwrap().insert(name.clone(), value.clone());
-
-                // Broadcast to all OTHER clients
                 let msg = protocol::encode(&NetMessage::Set { name, value });
-                let mut clients_lock = clients.lock().unwrap();
-                clients_lock.retain(|(a, s)| {
-                    if *a == addr {
-                        return true; // Keep sender, don't send back to them
-                    }
-                    let mut s = s;
-                    s.write_all(msg.as_bytes()).is_ok() && s.flush().is_ok()
-                });
+                broadcast_to_others(&clients, &addr, &msg);
             }
             NetMessage::Snapshot { .. } => {}
         }
     }
 
-    // Client disconnected
-    system_fn(&format!("{} disconnected", addr));
-    clients.lock().unwrap().retain(|(a, _)| *a != addr);
-    update_status(&clients, &status);
+    remove_client(&clients, &addr, &system_fn, &status);
 }
 
 #[cfg(test)]
