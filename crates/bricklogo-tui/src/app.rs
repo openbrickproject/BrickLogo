@@ -1,5 +1,6 @@
 use crate::bridge::register_hardware_primitives;
 use bricklogo_hal::port_manager::PortManager;
+use bricklogo_lang::check::{self, ParseOutcome};
 use bricklogo_lang::error::LogoError;
 use bricklogo_lang::evaluator::Evaluator;
 use bricklogo_lang::primitives::register_core_primitives;
@@ -25,6 +26,53 @@ pub struct OutputLine {
 
 type EvalResult = (Evaluator, Result<Option<LogoValue>, LogoError>);
 
+pub struct MultiLineBuffer {
+    pub lines: Vec<String>,
+}
+
+impl MultiLineBuffer {
+    fn new(first_line: &str) -> Self {
+        MultiLineBuffer {
+            lines: vec![first_line.to_string()],
+        }
+    }
+
+    fn add_line(&mut self, line: &str) {
+        self.lines.push(line.to_string());
+    }
+
+    fn pop_line(&mut self) {
+        self.lines.pop();
+    }
+
+    fn source(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    fn indent_depth(&self, current_line: &str) -> usize {
+        let mut depth = 0i32;
+        // Check if first line starts with "to"
+        if let Some(first) = self.lines.first() {
+            if first.split_whitespace().next().map(|w| w.to_lowercase() == "to").unwrap_or(false) {
+                depth = 1;
+            }
+        }
+        for line in &self.lines {
+            for ch in line.chars() {
+                if ch == '[' { depth += 1; }
+                if ch == ']' { depth -= 1; }
+            }
+        }
+        if current_line.trim().starts_with(']') {
+            depth -= 1;
+        }
+        if current_line.trim().to_lowercase() == "end" {
+            depth -= 1;
+        }
+        depth.max(0) as usize
+    }
+}
+
 pub struct App {
     pub output_lines: Vec<OutputLine>,
     pub input: String,
@@ -39,7 +87,7 @@ pub struct App {
     pub should_quit: bool,
     pub help_mode: bool,
     pub help_scroll: usize,
-    pub def_buffer: Option<Vec<String>>,
+    pub multi_line: Option<MultiLineBuffer>,
     evaluator: Option<Evaluator>,
     eval_result_rx: Option<mpsc::Receiver<EvalResult>>,
     firmware_result_rx: Option<mpsc::Receiver<(Result<(), String>, Result<(), String>)>>,
@@ -111,7 +159,7 @@ impl App {
             should_quit: false,
             help_mode: false,
             help_scroll: 0,
-            def_buffer: None,
+            multi_line: None,
             evaluator: Some(evaluator),
             eval_result_rx: None,
             firmware_result_rx: None,
@@ -258,43 +306,41 @@ impl App {
         self.input.clear();
         self.cursor_position = 0;
 
-        // Handle multi-line definition mode
-        if self.def_buffer.is_some() {
-            if input.to_lowercase() == "end" {
-                let mut full_source = self.def_buffer.as_ref().unwrap().clone();
-                full_source.push("end".to_string());
-                let source = full_source.join("\n");
-                self.add_output("> end", OutputLineType::Input);
-                self.def_buffer = None;
-                self.execute(&source);
-            } else {
-                let indent = self.calc_def_indent(&input);
-                let display = format!("> {}{}", "  ".repeat(indent), input);
-                self.add_output(&display, OutputLineType::Input);
-                self.def_buffer.as_mut().unwrap().push(input);
+        // Handle multi-line continuation
+        if self.multi_line.is_some() {
+            let indent = self.multi_line.as_ref().unwrap().indent_depth(&input);
+            let display = format!("> {}{}", "  ".repeat(indent), input);
+            self.add_output(&display, OutputLineType::Input);
+            self.multi_line.as_mut().unwrap().add_line(&input);
+
+            let source = self.multi_line.as_ref().unwrap().source();
+            let arities = self.evaluator.as_ref()
+                .map(|e| e.build_arity_map())
+                .unwrap_or_default();
+
+            match check::check_input(&source, arities) {
+                ParseOutcome::Complete(_) => {
+                    self.multi_line = None;
+                    self.execute(&source);
+                }
+                ParseOutcome::Incomplete => {} // Keep accumulating
+                ParseOutcome::Error(e) => {
+                    self.add_output(&format!("{}", e), OutputLineType::Error);
+                    self.multi_line.as_mut().unwrap().pop_line();
+                }
             }
             return;
         }
 
-        // Check for procedure definition start
-        if input.to_lowercase().starts_with("to ") && !input.to_lowercase().contains(" end") {
-            let words: Vec<&str> = input.split_whitespace().collect();
-            if words.last().map(|w| w.to_lowercase()) != Some("end".to_string()) {
-                self.add_output(&format!("? {}", input), OutputLineType::Input);
-                self.def_buffer = Some(vec![input]);
-                return;
-            }
-        }
-
         self.add_output(&format!("? {}", input), OutputLineType::Input);
 
-        // Handle firmware command (before exact match)
+        // Handle firmware command (before parse check)
         if input.to_lowercase().starts_with("firmware ") {
             self.handle_firmware_command(&input);
             return;
         }
 
-        // Handle special commands
+        // Handle special REPL commands
         match input.to_lowercase().as_str() {
             "clear" => {
                 self.output_lines.clear();
@@ -313,7 +359,22 @@ impl App {
             _ => {}
         }
 
-        self.execute(&input);
+        // Check if input is complete, incomplete, or has an error
+        let arities = self.evaluator.as_ref()
+            .map(|e| e.build_arity_map())
+            .unwrap_or_default();
+
+        match check::check_input(&input, arities) {
+            ParseOutcome::Complete(_) => {
+                self.execute(&input);
+            }
+            ParseOutcome::Incomplete => {
+                self.multi_line = Some(MultiLineBuffer::new(&input));
+            }
+            ParseOutcome::Error(e) => {
+                self.add_output(&format!("{}", e), OutputLineType::Error);
+            }
+        }
     }
 
     fn handle_firmware_command(&mut self, input: &str) {
@@ -417,9 +478,9 @@ impl App {
     }
 
     pub fn cancel_definition(&mut self) {
-        if self.def_buffer.is_some() {
-            self.def_buffer = None;
-            self.add_output("Definition cancelled", OutputLineType::System);
+        if self.multi_line.is_some() {
+            self.multi_line = None;
+            self.add_output("Cancelled", OutputLineType::System);
         }
     }
 
@@ -444,36 +505,11 @@ impl App {
         }
     }
 
-    fn calc_def_indent(&self, current_line: &str) -> usize {
-        if current_line.trim().to_lowercase() == "end" {
-            return 0;
-        }
-        if let Some(buffer) = &self.def_buffer {
-            let mut depth: i32 = 1; // inside to...end
-            for line in buffer {
-                for ch in line.chars() {
-                    if ch == '[' {
-                        depth += 1;
-                    }
-                    if ch == ']' {
-                        depth -= 1;
-                    }
-                }
-            }
-            if current_line.trim().starts_with(']') {
-                depth -= 1;
-            }
-            depth.max(0) as usize
-        } else {
-            0
-        }
-    }
-
     pub fn get_prompt(&self) -> &str {
         if self.busy {
             return "... ";
         }
-        if self.def_buffer.is_some() {
+        if self.multi_line.is_some() {
             return "> ";
         }
         "? "

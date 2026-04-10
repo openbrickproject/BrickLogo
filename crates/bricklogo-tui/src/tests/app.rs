@@ -136,14 +136,11 @@ fn test_multiline_definition_mode_executes_definition() {
 
     app.input = "to greet".to_string();
     app.submit_input();
-    assert_eq!(app.def_buffer, Some(vec!["to greet".to_string()]));
+    assert!(app.multi_line.is_some());
 
     app.input = "print \"hi".to_string();
     app.submit_input();
-    assert_eq!(
-        app.def_buffer,
-        Some(vec!["to greet".to_string(), "print \"hi".to_string()])
-    );
+    assert!(app.multi_line.is_some());
 
     app.input = "end".to_string();
     app.submit_input();
@@ -162,12 +159,76 @@ fn test_cancel_definition_clears_buffer() {
     app.input = "to greet".to_string();
     app.submit_input();
     app.cancel_definition();
-    assert!(app.def_buffer.is_none());
+    assert!(app.multi_line.is_none());
     assert!(
         app.output_lines
             .iter()
-            .any(|line| line.text == "Definition cancelled")
+            .any(|line| line.text == "Cancelled")
     );
+}
+
+#[test]
+fn test_multiline_bracket_mode() {
+    let mut app = App::new(None).unwrap();
+
+    app.input = "forever [".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+
+    app.input = "print \"hello".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+
+    app.input = "]".to_string();
+    app.submit_input();
+    // Should have submitted — multi_line cleared, now busy
+    assert!(app.multi_line.is_none());
+}
+
+#[test]
+fn test_multiline_to_with_brackets() {
+    let mut app = App::new(None).unwrap();
+
+    app.input = "to greet [".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+
+    app.input = "print \"hi".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+
+    // Closing bracket but still need end
+    app.input = "] end".to_string();
+    app.submit_input();
+    run_until_idle(&mut app);
+
+    assert!(app.multi_line.is_none());
+}
+
+#[test]
+fn test_syntax_error_no_multiline() {
+    let mut app = App::new(None).unwrap();
+    app.input = "repeat 4 ]".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_none());
+    assert!(app.output_lines.iter().any(|line| matches!(line.line_type, OutputLineType::Error)));
+}
+
+#[test]
+fn test_error_on_continuation_discards_line() {
+    let mut app = App::new(None).unwrap();
+
+    app.input = "forever [".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+
+    // Type a bad line
+    app.input = ")".to_string();
+    app.submit_input();
+    // Error shown but multi_line preserved (bad line discarded)
+    assert!(app.multi_line.is_some());
+    assert_eq!(app.multi_line.as_ref().unwrap().lines.len(), 1); // only "forever ["
+    assert!(app.output_lines.iter().any(|line| matches!(line.line_type, OutputLineType::Error)));
 }
 
 #[test]

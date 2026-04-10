@@ -7,6 +7,11 @@ pub enum LogoError {
         line: usize,
         col: usize,
     },
+    Incomplete {
+        message: String,
+        line: usize,
+        col: usize,
+    },
     Runtime(String),
     Stop,
     Output(super::value::LogoValue),
@@ -16,6 +21,9 @@ impl fmt::Display for LogoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LogoError::Syntax { message, line, col } => {
+                write!(f, "{} (line {}, col {})", message, line, col)
+            }
+            LogoError::Incomplete { message, line, col } => {
                 write!(f, "{} (line {}, col {})", message, line, col)
             }
             LogoError::Runtime(msg) => write!(f, "{}", msg),

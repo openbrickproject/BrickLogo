@@ -99,7 +99,14 @@ impl Parser {
                 let arity = self.arities.get(&name.to_lowercase()).copied().unwrap_or(0);
                 let mut args = Vec::new();
                 for i in 0..arity {
-                    if self.is_at_end() || self.peek().token_type == TokenType::Newline {
+                    if self.is_at_end() {
+                        return Err(LogoError::Incomplete {
+                            message: format!("{} needs {} input(s), but got {}", name, arity, i),
+                            line: token.line,
+                            col: token.col,
+                        });
+                    }
+                    if self.peek().token_type == TokenType::Newline {
                         return Err(LogoError::Syntax {
                             message: format!("{} needs {} input(s), but got {}", name, arity, i),
                             line: token.line,
@@ -148,7 +155,7 @@ impl Parser {
             self.skip_newlines();
         }
 
-        Err(LogoError::Syntax {
+        Err(LogoError::Incomplete {
             message: format!("Missing 'end' for procedure '{}'", name),
             line: token.line,
             col: token.col,
@@ -212,7 +219,7 @@ impl Parser {
         self.skip_newlines();
         while self.peek().token_type != TokenType::CloseBracket {
             if self.is_at_end() {
-                return Err(LogoError::Syntax {
+                return Err(LogoError::Incomplete {
                     message: "Missing ']'".to_string(),
                     line: self.peek().line,
                     col: self.peek().col,
@@ -261,7 +268,7 @@ impl Parser {
         self.skip_newlines();
         while self.peek().token_type != TokenType::CloseBracket {
             if self.is_at_end() {
-                return Err(LogoError::Syntax {
+                return Err(LogoError::Incomplete {
                     message: "Missing ']'".to_string(),
                     line: self.peek().line,
                     col: self.peek().col,
@@ -282,7 +289,7 @@ impl Parser {
             let mut args = Vec::new();
             while self.peek().token_type != TokenType::CloseParen {
                 if self.is_at_end() {
-                    return Err(LogoError::Syntax {
+                    return Err(LogoError::Incomplete {
                         message: "Missing ')'".to_string(),
                         line: name_token.line,
                         col: name_token.col,

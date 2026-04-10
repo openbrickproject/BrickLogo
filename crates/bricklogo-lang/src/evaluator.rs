@@ -387,7 +387,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    fn build_arity_map(&self) -> HashMap<String, usize> {
+    pub fn build_arity_map(&self) -> HashMap<String, usize> {
         let mut arities = HashMap::new();
         for (name, spec) in &self.primitives {
             arities.insert(name.clone(), spec.min_args);

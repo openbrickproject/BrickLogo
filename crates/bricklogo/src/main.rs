@@ -163,7 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if key.code == KeyCode::Esc {
                     if app.busy {
                         app.request_stop();
-                    } else if app.def_buffer.is_some() {
+                    } else if app.multi_line.is_some() {
                         app.cancel_definition();
                     }
                     needs_draw = true;
@@ -207,12 +207,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     KeyCode::Up => {
-                        if !app.busy && app.def_buffer.is_none() {
+                        if !app.busy && app.multi_line.is_none() {
                             app.history_up();
                         }
                     }
                     KeyCode::Down => {
-                        if !app.busy && app.def_buffer.is_none() {
+                        if !app.busy && app.multi_line.is_none() {
                             app.history_down();
                         }
                     }
