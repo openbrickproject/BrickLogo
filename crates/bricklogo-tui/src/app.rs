@@ -44,7 +44,6 @@ pub struct App {
     eval_result_rx: Option<mpsc::Receiver<EvalResult>>,
     firmware_result_rx: Option<mpsc::Receiver<(Result<(), String>, Result<(), String>)>>,
     stop_flag: Arc<AtomicBool>,
-    launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
     pub net_status: Option<Arc<Mutex<String>>>,
@@ -65,7 +64,6 @@ impl App {
         register_core_primitives(&mut evaluator);
 
         let stop_flag = evaluator.stop_flag();
-        let launched_stops = evaluator.launched_stops_ref();
         let port_manager = Arc::new(Mutex::new(PortManager::new()));
         let system_output = output_lines_ref.clone();
         let system_fn: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |text: &str| {
@@ -118,7 +116,6 @@ impl App {
             eval_result_rx: None,
             firmware_result_rx: None,
             stop_flag,
-            launched_stops,
             port_manager,
             output_buffer: output_lines_ref,
             net_status: net_status_arc,
@@ -417,9 +414,6 @@ impl App {
 
     pub fn request_stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
-        for flag in self.launched_stops.lock().unwrap().iter() {
-            flag.store(true, Ordering::SeqCst);
-        }
     }
 
     pub fn cancel_definition(&mut self) {

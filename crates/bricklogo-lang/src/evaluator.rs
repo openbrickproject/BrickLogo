@@ -244,7 +244,7 @@ impl Evaluator {
             system_callback: self.system_callback.clone(),
             timer_start: self.timer_start,
             session: SessionState::new(),
-            launched_stops: Arc::new(Mutex::new(Vec::new())),
+            launched_stops: self.launched_stops.clone(),
             selected_outputs: self.selected_outputs.clone(),
             selected_inputs: self.selected_inputs.clone(),
             var_broadcast: self.var_broadcast.clone(),
