@@ -43,6 +43,7 @@ pub struct App {
     eval_result_rx: Option<mpsc::Receiver<EvalResult>>,
     firmware_result_rx: Option<mpsc::Receiver<(Result<(), String>, Result<(), String>)>>,
     stop_flag: Arc<AtomicBool>,
+    launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
 }
@@ -62,6 +63,7 @@ impl App {
         register_core_primitives(&mut evaluator);
 
         let stop_flag = evaluator.stop_flag();
+        let launched_stops = evaluator.launched_stops_ref();
         let port_manager = Arc::new(Mutex::new(PortManager::new()));
         let system_output = output_lines_ref.clone();
         let system_fn: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |text: &str| {
@@ -92,6 +94,7 @@ impl App {
             eval_result_rx: None,
             firmware_result_rx: None,
             stop_flag,
+            launched_stops,
             port_manager,
             output_buffer: output_lines_ref,
         }
@@ -113,15 +116,19 @@ impl App {
     pub fn tick(&mut self) -> bool {
         let mut changed = self.drain_output_buffer();
 
-        // Sync connected device names from port manager
-        let (devices, active_device, selected_outputs, selected_inputs) = {
+        // Sync connected device names from port manager, port selections from evaluator
+        let (devices, active_device) = {
+            let pm = self.port_manager.lock().unwrap();
+            (pm.get_connected_device_names(), pm.get_active_device_name_owned())
+        };
+        let (selected_outputs, selected_inputs) = if let Some(ref eval) = self.evaluator {
             let pm = self.port_manager.lock().unwrap();
             (
-                pm.get_connected_device_names(),
-                pm.get_active_device_name_owned(),
-                pm.get_selected_output_display_ports(),
-                pm.get_selected_input_display_ports(),
+                pm.format_port_names(eval.selected_outputs()),
+                pm.format_port_names(eval.selected_inputs()),
             )
+        } else {
+            (self.selected_outputs.clone(), self.selected_inputs.clone())
         };
 
         if devices != self.connected_devices {
@@ -376,6 +383,9 @@ impl App {
 
     pub fn request_stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        for flag in self.launched_stops.lock().unwrap().iter() {
+            flag.store(true, Ordering::SeqCst);
+        }
     }
 
     pub fn cancel_definition(&mut self) {
@@ -491,6 +501,8 @@ impl App {
             "    output <value>  /  stop              Return from procedure".to_string(),
             "    erase \"name                          Remove a procedure".to_string(),
             "    carefully [...] [...]                Error handling".to_string(),
+            "    launch [...]                         Run commands in background".to_string(),
+            "    stopall                              Stop all background processes".to_string(),
             String::new(),
         ];
 

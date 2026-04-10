@@ -48,6 +48,9 @@ pub enum AstNode {
         body: Vec<AstNode>,
         handler: Vec<AstNode>,
     },
+    Launch {
+        body: Vec<AstNode>,
+    },
     Output(Box<AstNode>),
     Stop,
 }

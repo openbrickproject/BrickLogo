@@ -83,6 +83,7 @@ impl Parser {
             "to" => self.parse_procedure_def(&token),
             "repeat" => self.parse_repeat(),
             "forever" => self.parse_forever(),
+            "launch" => self.parse_launch(),
             "if" => self.parse_if(),
             "ifelse" => self.parse_ifelse(),
             "waituntil" => self.parse_waituntil(),
@@ -166,6 +167,11 @@ impl Parser {
     fn parse_forever(&mut self) -> LogoResult<AstNode> {
         let body = self.parse_list_body()?;
         Ok(AstNode::Forever { body })
+    }
+
+    fn parse_launch(&mut self) -> LogoResult<AstNode> {
+        let body = self.parse_list_body()?;
+        Ok(AstNode::Launch { body })
     }
 
     fn parse_if(&mut self) -> LogoResult<AstNode> {

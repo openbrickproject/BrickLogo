@@ -1,0 +1,8 @@
+[package]
+name = "rust-buildhat"
+version = "0.1.0"
+edition = "2024"
+description = "Raspberry Pi Build HAT protocol library"
+
+[dependencies]
+serialport = "4"

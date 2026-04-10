@@ -178,7 +178,7 @@ fn test_mode_for_event() {
     hub.process_message(&attach);
 
     assert_eq!(hub.mode_for_event(0, "color"), Some(0x00));
-    assert_eq!(hub.mode_for_event(0, "reflect"), Some(0x01));
+    assert_eq!(hub.mode_for_event(0, "light"), Some(0x01));
     assert_eq!(hub.mode_for_event(0, "nonexistent"), None);
     assert_eq!(hub.mode_for_event(99, "color"), None);
 }

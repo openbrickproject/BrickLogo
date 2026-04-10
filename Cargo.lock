@@ -92,6 +92,7 @@ dependencies = [
  "hidapi",
  "lazy_static",
  "rusb",
+ "rust-buildhat",
  "rust-controllab",
  "rust-coral",
  "rust-poweredup",
@@ -906,6 +907,13 @@ checksum = "ab9f9ff05b63a786553a4c02943b74b34a988448671001e9a27e2f0565cc05a4"
 dependencies = [
  "libc",
  "libusb1-sys",
+]
+
+[[package]]
+name = "rust-buildhat"
+version = "0.1.0"
+dependencies = [
+ "serialport",
 ]
 
 [[package]]

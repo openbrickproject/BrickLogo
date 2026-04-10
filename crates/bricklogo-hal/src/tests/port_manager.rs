@@ -19,30 +19,14 @@ impl MockAdapter {
 }
 
 impl HardwareAdapter for MockAdapter {
-    fn display_name(&self) -> &str {
-        "Mock"
-    }
-    fn output_ports(&self) -> &[String] {
-        &self.ports
-    }
-    fn input_ports(&self) -> &[String] {
-        &[]
-    }
-    fn connected(&self) -> bool {
-        self.connected
-    }
-    fn connect(&mut self) -> Result<(), String> {
-        Ok(())
-    }
-    fn disconnect(&mut self) {
-        self.connected = false;
-    }
-    fn validate_output_port(&self, _port: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> {
-        Ok(())
-    }
+    fn display_name(&self) -> &str { "Mock" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { self.connected }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) { self.connected = false; }
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
     fn start_port(&mut self, port: &str, dir: PortDirection, power: u8) -> Result<(), String> {
         self.start_calls.push((port.to_string(), dir, power));
         Ok(())
@@ -51,51 +35,12 @@ impl HardwareAdapter for MockAdapter {
         self.stop_calls.push(port.to_string());
         Ok(())
     }
-    fn run_port_for_time(
-        &mut self,
-        _port: &str,
-        _dir: PortDirection,
-        _power: u8,
-        _tenths: u32,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    fn rotate_port_by_degrees(
-        &mut self,
-        _port: &str,
-        _dir: PortDirection,
-        _power: u8,
-        _degrees: i32,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    fn rotate_port_to_position(
-        &mut self,
-        _port: &str,
-        _dir: PortDirection,
-        _power: u8,
-        _pos: i32,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn rotate_to_home(
-        &mut self,
-        _port: &str,
-        _dir: PortDirection,
-        _power: u8,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    fn read_sensor(
-        &mut self,
-        _port: &str,
-        _mode: Option<&str>,
-    ) -> Result<Option<LogoValue>, String> {
-        Ok(None)
-    }
+    fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
 }
 
 #[test]
@@ -111,10 +56,7 @@ fn test_second_device_not_active() {
     pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
     pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
     assert_eq!(pm.get_active_device_name(), Some("bot1"));
-    assert_eq!(
-        pm.get_connected_device_names(),
-        vec!["bot1".to_string(), "bot2".to_string()]
-    );
+    assert_eq!(pm.get_connected_device_names(), vec!["bot1".to_string(), "bot2".to_string()]);
 }
 
 #[test]
@@ -137,43 +79,46 @@ fn test_remove_device_fallback() {
 }
 
 #[test]
-fn test_talk_to() {
+fn test_ensure_port_states() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
-    pm.talk_to(&["a".to_string()]).unwrap();
+    pm.ensure_port_states(&["a".to_string()]).unwrap();
 }
 
 #[test]
-fn test_talk_to_qualified() {
+fn test_ensure_port_states_qualified() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
-    pm.talk_to(&["bot.a".to_string()]).unwrap();
+    pm.ensure_port_states(&["bot.a".to_string()]).unwrap();
 }
 
 #[test]
 fn test_on_off() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
-    pm.talk_to(&["a".to_string(), "b".to_string()]).unwrap();
-    pm.on().unwrap();
-    pm.off().unwrap();
+    let ports = vec!["a".to_string(), "b".to_string()];
+    pm.ensure_port_states(&ports).unwrap();
+    pm.on(&ports).unwrap();
+    pm.off(&ports).unwrap();
 }
 
 #[test]
 fn test_set_power() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
-    pm.talk_to(&["a".to_string()]).unwrap();
-    pm.set_power(8);
-    pm.on().unwrap();
+    let ports = vec!["a".to_string()];
+    pm.ensure_port_states(&ports).unwrap();
+    pm.set_power(&ports, 8);
+    pm.on(&ports).unwrap();
 }
 
 #[test]
 fn test_all_off() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
-    pm.talk_to(&["a".to_string(), "b".to_string()]).unwrap();
-    pm.on().unwrap();
+    let ports = vec!["a".to_string(), "b".to_string()];
+    pm.ensure_port_states(&ports).unwrap();
+    pm.on(&ports).unwrap();
     pm.all_off();
 }
 
@@ -181,7 +126,7 @@ fn test_all_off() {
 fn test_read_sensor_no_port() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
-    assert!(pm.read_sensor(None).is_err());
+    assert!(pm.read_sensor(&[], None).is_err());
 }
 
 #[test]
@@ -209,27 +154,21 @@ fn test_connection_order_preserved_after_use_and_remove() {
 
     pm.remove_device("gamma");
     assert_eq!(pm.get_active_device_name(), Some("alpha"));
-    assert_eq!(
-        pm.get_connected_device_names(),
-        vec!["alpha".to_string(), "beta".to_string()]
-    );
+    assert_eq!(pm.get_connected_device_names(), vec!["alpha".to_string(), "beta".to_string()]);
 }
 
 #[test]
-fn test_display_ports_use_active_device_shorthand() {
+fn test_format_port_names() {
     let mut pm = PortManager::new();
     pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
     pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
-    pm.talk_to(&["a".to_string(), "bot2.b".to_string()])
-        .unwrap();
-    pm.listen_to(&["bot2.b".to_string()]).unwrap();
 
-    assert_eq!(
-        pm.get_selected_output_display_ports(),
-        vec!["a".to_string(), "bot2.b".to_string()]
-    );
-    assert_eq!(
-        pm.get_selected_input_display_ports(),
-        vec!["bot2.b".to_string()]
-    );
+    // Active device is bot1, so "a" stays short, "bot2.b" stays qualified
+    let outputs = vec!["a".to_string(), "bot2.b".to_string()];
+    let display = pm.format_port_names(&outputs);
+    assert_eq!(display, vec!["a".to_string(), "bot2.b".to_string()]);
+
+    let inputs = vec!["bot2.b".to_string()];
+    let display = pm.format_port_names(&inputs);
+    assert_eq!(display, vec!["bot2.b".to_string()]);
 }

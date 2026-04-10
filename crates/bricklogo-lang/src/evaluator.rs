@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::ast::{AstNode, UserProcedure};
@@ -15,6 +15,7 @@ type PrimitiveFn = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct PrimitiveSpec {
     pub min_args: usize,
     pub max_args: usize,
@@ -95,13 +96,24 @@ impl Environment {
         self.variables.insert(name.to_lowercase(), value);
     }
 
+    pub fn has_local(&self, name: &str) -> bool {
+        let normalized = name.to_lowercase();
+        if self.variables.contains_key(&normalized) {
+            return true;
+        }
+        if let Some(ref parent) = self.parent {
+            return parent.variables.contains_key(&normalized);
+        }
+        false
+    }
+
     pub fn all_variables(&self) -> &HashMap<String, LogoValue> {
         &self.variables
     }
 }
 
 pub struct Evaluator {
-    global_vars: HashMap<String, LogoValue>,
+    global_vars: Arc<RwLock<HashMap<String, LogoValue>>>,
     procedures: HashMap<String, UserProcedure>,
     primitives: HashMap<String, PrimitiveSpec>,
     aliases: HashMap<String, String>,
@@ -110,12 +122,15 @@ pub struct Evaluator {
     system_callback: Arc<dyn Fn(&str) + Send + Sync>,
     timer_start: std::time::Instant,
     session: SessionState,
+    launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
+    selected_outputs: Vec<String>,
+    selected_inputs: Vec<String>,
 }
 
 impl Evaluator {
     pub fn new(output_callback: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
         Evaluator {
-            global_vars: HashMap::new(),
+            global_vars: Arc::new(RwLock::new(HashMap::new())),
             procedures: HashMap::new(),
             primitives: HashMap::new(),
             aliases: HashMap::new(),
@@ -124,6 +139,9 @@ impl Evaluator {
             system_callback: Arc::new(|_| {}),
             timer_start: std::time::Instant::now(),
             session: SessionState::new(),
+            launched_stops: Arc::new(Mutex::new(Vec::new())),
+            selected_outputs: Vec::new(),
+            selected_inputs: Vec::new(),
         }
     }
 
@@ -162,6 +180,61 @@ impl Evaluator {
 
     pub fn request_stop(&self) {
         self.stop_requested.store(true, Ordering::SeqCst);
+    }
+
+    pub fn launched_stops_ref(&self) -> Arc<Mutex<Vec<Arc<AtomicBool>>>> {
+        self.launched_stops.clone()
+    }
+
+    pub fn set_selected_outputs(&mut self, ports: Vec<String>) {
+        self.selected_outputs = ports;
+    }
+
+    pub fn set_selected_inputs(&mut self, ports: Vec<String>) {
+        self.selected_inputs = ports;
+    }
+
+    pub fn selected_outputs(&self) -> &[String] {
+        &self.selected_outputs
+    }
+
+    pub fn selected_inputs(&self) -> &[String] {
+        &self.selected_inputs
+    }
+
+    pub fn stop_all_launched(&self) {
+        let mut stops = self.launched_stops.lock().unwrap();
+        for flag in stops.iter() {
+            flag.store(true, Ordering::SeqCst);
+        }
+        stops.clear();
+    }
+
+    pub fn set_global(&self, name: &str, value: LogoValue) {
+        self.global_vars.write().unwrap().insert(name.to_lowercase(), value);
+    }
+
+    pub fn get_global(&self, name: &str) -> Option<LogoValue> {
+        self.global_vars.read().unwrap().get(&name.to_lowercase()).cloned()
+    }
+
+    fn spawn_child(&self) -> (Evaluator, Arc<AtomicBool>) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let child = Evaluator {
+            global_vars: self.global_vars.clone(),
+            procedures: self.procedures.clone(),
+            primitives: self.primitives.clone(),
+            aliases: self.aliases.clone(),
+            stop_requested: stop.clone(),
+            output_callback: self.output_callback.clone(),
+            system_callback: self.system_callback.clone(),
+            timer_start: self.timer_start,
+            session: SessionState::new(),
+            launched_stops: Arc::new(Mutex::new(Vec::new())),
+            selected_outputs: self.selected_outputs.clone(),
+            selected_inputs: self.selected_inputs.clone(),
+        };
+        (child, stop)
     }
 
     pub fn define_procedure(&mut self, name: &str, params: Vec<String>, body: Vec<AstNode>) {
@@ -284,10 +357,6 @@ impl Evaluator {
         let ast = parser.parse(tokens)?;
         let mut result = None;
         let mut env = Environment::new();
-        // Copy global vars into env
-        for (k, v) in &self.global_vars {
-            env.set_local(k, v.clone());
-        }
         for node in &ast {
             match self.eval_node(node, &mut env) {
                 Ok(val) => result = val,
@@ -295,10 +364,6 @@ impl Evaluator {
                 Err(LogoError::Output(val)) => return Ok(Some(val)),
                 Err(e) => return Err(e),
             }
-        }
-        // Copy env vars back to global
-        for (k, v) in env.all_variables() {
-            self.global_vars.insert(k.clone(), v.clone());
         }
         Ok(result)
     }
@@ -340,9 +405,7 @@ impl Evaluator {
             AstNode::Word(s) => Ok(Some(LogoValue::Word(s.clone()))),
             AstNode::Variable(name) => {
                 let val = env.get_variable(name).or_else(|_| {
-                    self.global_vars
-                        .get(&name.to_lowercase())
-                        .cloned()
+                    self.get_global(name)
                         .ok_or_else(|| {
                             LogoError::Runtime(format!("I don't know about \"{}\"", name))
                         })
@@ -379,6 +442,7 @@ impl Evaluator {
             }
             AstNode::Repeat { count, body } => self.eval_repeat(count, body, env),
             AstNode::Forever { body } => self.eval_forever(body, env),
+            AstNode::Launch { body } => self.eval_launch(body),
             AstNode::If { condition, body } => self.eval_if(condition, body, env),
             AstNode::IfElse {
                 condition,
@@ -494,7 +558,8 @@ impl Evaluator {
                 })?;
                 args.push(val);
             }
-            let mut child_env = Environment::child(&self.global_vars);
+            let globals_snapshot = self.global_vars.read().unwrap().clone();
+            let mut child_env = Environment::child(&globals_snapshot);
             // Copy parent env vars
             for (k, v) in env.all_variables() {
                 child_env.set_local(k, v.clone());
@@ -512,7 +577,7 @@ impl Evaluator {
             }
             // Copy vars back
             for (k, v) in child_env.all_variables() {
-                if self.global_vars.contains_key(k) || env.all_variables().contains_key(k) {
+                if self.global_vars.read().unwrap().contains_key(k) || env.all_variables().contains_key(k) {
                     env.set_variable(k, v.clone());
                 }
             }
@@ -551,6 +616,25 @@ impl Evaluator {
             // Yield briefly
             std::thread::sleep(std::time::Duration::from_millis(0));
         }
+    }
+
+    fn eval_launch(&mut self, body: &[AstNode]) -> LogoResult<Option<LogoValue>> {
+        let (mut child, stop_flag) = self.spawn_child();
+        let body = body.to_vec();
+
+        self.launched_stops.lock().unwrap().push(stop_flag);
+
+        std::thread::spawn(move || {
+            let mut env = Environment::new();
+            for node in &body {
+                if child.check_stop().is_err() {
+                    return;
+                }
+                let _ = child.eval_node(node, &mut env);
+            }
+        });
+
+        Ok(None)
     }
 
     fn eval_if(

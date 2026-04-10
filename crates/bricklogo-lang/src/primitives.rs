@@ -313,8 +313,9 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         PrimitiveSpec {
             min_args: 1,
             max_args: 1,
-            func: Arc::new(|args, env, _| {
-                let found = env.get_variable(&args[0].as_string()).is_ok();
+            func: Arc::new(|args, env, eval| {
+                let name = args[0].as_string();
+                let found = env.get_variable(&name).is_ok() || eval.get_global(&name).is_some();
                 Ok(Some(LogoValue::Word(
                     if found { "true" } else { "false" }.to_string(),
                 )))
@@ -574,8 +575,16 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         PrimitiveSpec {
             min_args: 2,
             max_args: 2,
-            func: Arc::new(|args, env, _| {
-                env.set_variable(&args[0].as_string(), args[1].clone());
+            func: Arc::new(|args, env, eval| {
+                let name = args[0].as_string();
+                let value = args[1].clone();
+                // If we're inside a procedure and the var is a local, set it locally.
+                // Otherwise set it globally (shared across all tasks).
+                if env.has_local(&name) {
+                    env.set_variable(&name, value);
+                } else {
+                    eval.set_global(&name, value);
+                }
                 Ok(None)
             }),
         },
@@ -708,6 +717,18 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
             max_args: 0,
             func: Arc::new(|_, _, eval| {
                 eval.reset_timer();
+                Ok(None)
+            }),
+        },
+    );
+
+    eval.register_primitive(
+        "stopall",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, eval| {
+                eval.stop_all_launched();
                 Ok(None)
             }),
         },

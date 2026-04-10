@@ -1,4 +1,5 @@
 use bricklogo_hal::adapter::HardwareAdapter;
+use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
@@ -148,9 +149,17 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "buildhat" => {
+                        let mut adapter = BuildHATAdapter::new();
+                        system_fn_ref("Connecting to Raspberry Pi Build HAT (this may take up to 30 seconds)...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", or \"rcx\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", or \"buildhat\""
                                 .to_string(),
                         ));
                     }
@@ -216,13 +225,13 @@ pub fn register_hardware_primitives(
         PrimitiveSpec {
             min_args: 1,
             max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let mut pm = pm_ref.lock().unwrap();
-                let ports = match &args[0] {
+            func: Arc::new(move |args, _, eval| {
+                let ports: Vec<String> = match &args[0] {
                     LogoValue::List(l) => l.iter().map(|v| v.as_string().to_lowercase()).collect(),
                     other => vec![other.as_string().to_lowercase()],
                 };
-                pm.talk_to(&ports).map_err(|e| LogoError::Runtime(e))?;
+                pm_ref.lock().unwrap().ensure_port_states(&ports).map_err(|e| LogoError::Runtime(e))?;
+                eval.set_selected_outputs(ports);
                 Ok(None)
             }),
         },
@@ -230,336 +239,235 @@ pub fn register_hardware_primitives(
     eval.register_alias("tto", "talkto");
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "on",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .on()
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("on", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().on(&ports).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "off",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .off()
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("off", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().off(&ports).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "onfor",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let tenths = args[0].as_number()? as u32;
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .on_for(tenths)
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("onfor", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let tenths = args[0].as_number()? as u32;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().on_for(&ports, tenths).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "setpower",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let level = args[0].as_number()? as u8;
-                pm_ref.lock().unwrap().set_power(level);
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("setpower", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let level = args[0].as_number()? as u8;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_power(&ports, level);
+            Ok(None)
+        }),
+    });
     eval.register_alias("sp", "setpower");
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "seteven",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().set_even();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("seteven", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_even(&ports);
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "setodd",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().set_odd();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("setodd", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_odd(&ports);
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "setleft",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().set_even();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("setleft", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_even(&ports);
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "setright",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().set_odd();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("setright", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_odd(&ports);
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "rd",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().reverse_direction();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("rd", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().reverse_direction(&ports);
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "alloff",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref.lock().unwrap().all_off();
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("alloff", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, _| {
+            pm_ref.lock().unwrap().all_off();
+            Ok(None)
+        }),
+    });
     eval.register_alias("ao", "alloff");
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "rotate",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let degrees = args[0].as_number()? as i32;
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .rotate(degrees)
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("rotate", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let degrees = args[0].as_number()? as i32;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().rotate(&ports, degrees).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "rotateto",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let position = args[0].as_number()? as i32;
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .rotate_to(position)
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("rotateto", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let position = args[0].as_number()? as i32;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().rotate_to(&ports, position).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "resetzero",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .reset_zero()
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("resetzero", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().reset_zero(&ports).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "rotatetohome",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(move |_, _, _| {
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .rotate_to_home()
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("rotatetohome", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().rotate_to_home(&ports).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "flash",
-        PrimitiveSpec {
-            min_args: 2,
-            max_args: 2,
-            func: Arc::new(move |args, _, _| {
-                let on_time = args[0].as_number()? as u32;
-                let off_time = args[1].as_number()? as u32;
-                pm_ref
-                    .lock()
-                    .unwrap()
-                    .flash(on_time, off_time, pm_ref.clone())
-                    .map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("flash", PrimitiveSpec {
+        min_args: 2, max_args: 2,
+        func: Arc::new(move |args, _, eval| {
+            let on_time = args[0].as_number()? as u32;
+            let off_time = args[1].as_number()? as u32;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().flash(&ports, on_time, off_time, pm_ref.clone()).map_err(|e| LogoError::Runtime(e))?;
+            Ok(None)
+        }),
+    });
 
     // ── Sensor primitives ───────────────────────
 
-    let pm_ref = pm.clone();
-    eval.register_primitive(
-        "listento",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let mut pm = pm_ref.lock().unwrap();
-                let ports = match &args[0] {
-                    LogoValue::List(l) => l.iter().map(|v| v.as_string().to_lowercase()).collect(),
-                    other => vec![other.as_string().to_lowercase()],
-                };
-                pm.listen_to(&ports).map_err(|e| LogoError::Runtime(e))?;
-                Ok(None)
-            }),
-        },
-    );
+    eval.register_primitive("listento", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let ports: Vec<String> = match &args[0] {
+                LogoValue::List(l) => l.iter().map(|v| v.as_string().to_lowercase()).collect(),
+                other => vec![other.as_string().to_lowercase()],
+            };
+            eval.set_selected_inputs(ports);
+            Ok(None)
+        }),
+    });
     eval.register_alias("lto", "listento");
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "sensor",
-        PrimitiveSpec {
-            min_args: 1,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
-                let mode = args[0].as_string().to_lowercase();
-                let val = pm_ref
-                    .lock()
-                    .unwrap()
-                    .read_sensor(Some(&mode))
-                    .map_err(|e| LogoError::Runtime(e))?;
-                match val {
-                    Some(v) => Ok(Some(v)),
-                    None => Err(LogoError::Runtime(
-                        "No sensor reading available".to_string(),
-                    )),
-                }
-            }),
-        },
-    );
+    eval.register_primitive("sensor", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let mode = args[0].as_string().to_lowercase();
+            let ports = eval.selected_inputs().to_vec();
+            let val = pm_ref.lock().unwrap().read_sensor(&ports, Some(&mode)).map_err(|e| LogoError::Runtime(e))?;
+            match val {
+                Some(v) => Ok(Some(v)),
+                None => Err(LogoError::Runtime("No sensor reading available".to_string())),
+            }
+        }),
+    });
 
     let pm_ref = pm.clone();
-    eval.register_primitive(
-        "sensor?",
-        PrimitiveSpec {
-            min_args: 0,
-            max_args: 0,
-            func: Arc::new(
-                move |_, _, _| match pm_ref.lock().unwrap().read_sensor(None) {
-                    Ok(Some(val)) => {
-                        let truthy = match &val {
-                            LogoValue::Word(s) if s == "false" => false,
-                            LogoValue::Number(n) if *n == 0.0 => false,
-                            LogoValue::Word(s) if s.is_empty() => false,
-                            _ => true,
-                        };
-                        Ok(Some(LogoValue::Word(
-                            if truthy { "true" } else { "false" }.to_string(),
-                        )))
-                    }
-                    _ => Ok(Some(LogoValue::Word("false".to_string()))),
-                },
-            ),
-        },
-    );
+    eval.register_primitive("sensor?", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_inputs().to_vec();
+            match pm_ref.lock().unwrap().read_sensor(&ports, None) {
+                Ok(Some(val)) => {
+                    let truthy = match &val {
+                        LogoValue::Word(s) if s == "false" => false,
+                        LogoValue::Number(n) if *n == 0.0 => false,
+                        LogoValue::Word(s) if s.is_empty() => false,
+                        _ => true,
+                    };
+                    Ok(Some(LogoValue::Word(if truthy { "true" } else { "false" }.to_string())))
+                }
+                _ => Ok(Some(LogoValue::Word("false".to_string()))),
+            }
+        }),
+    });
 
     // Typed sensor readers
     for (name, mode) in &[
         ("color", "color"),
-        ("light", "reflect"),
+        ("light", "light"),
         ("force", "force"),
-        ("angle", "rotate"),
+        ("rotation", "rotation"),
+        ("tilt", "tilt"),
+        ("distance", "distance"),
+        ("touch", "touch"),
+        ("temperature", "temperature"),
     ] {
         let pm_ref = pm.clone();
         let mode = mode.to_string();
-        eval.register_primitive(
-            name,
-            PrimitiveSpec {
-                min_args: 0,
-                max_args: 0,
-                func: Arc::new(move |_, _, _| {
-                    let val = pm_ref
-                        .lock()
-                        .unwrap()
-                        .read_sensor(Some(&mode))
-                        .map_err(|e| LogoError::Runtime(e))?;
-                    match val {
-                        Some(v) => Ok(Some(v)),
-                        None => Err(LogoError::Runtime(format!("No {} reading available", mode))),
-                    }
-                }),
-            },
-        );
+        eval.register_primitive(name, PrimitiveSpec {
+            min_args: 0, max_args: 0,
+            func: Arc::new(move |_, _, eval| {
+                let ports = eval.selected_inputs().to_vec();
+                let val = pm_ref.lock().unwrap().read_sensor(&ports, Some(&mode)).map_err(|e| LogoError::Runtime(e))?;
+                match val {
+                    Some(v) => Ok(Some(v)),
+                    None => Err(LogoError::Runtime(format!("No {} reading available", mode))),
+                }
+            }),
+        });
     }
 }
 
