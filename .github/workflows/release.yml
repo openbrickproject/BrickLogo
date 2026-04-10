@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: macos
+            arch: arm64
+            binary: bricklogo
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            arch: arm64
+            binary: bricklogo
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            platform: windows
+            arch: x64
+            binary: bricklogo.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config zip
+
+      - name: Build
+        run: cargo build --release --bin bricklogo --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.platform != 'windows'
+        run: |
+          STAGING=$(mktemp -d)
+          mkdir -p "$STAGING/bricklogo"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$STAGING/bricklogo/"
+          cp bricklogo.config.json.example "$STAGING/bricklogo/"
+          cp -r examples "$STAGING/bricklogo/"
+          cp -r firmware "$STAGING/bricklogo/"
+          cp -r docs "$STAGING/bricklogo/"
+          cd "$STAGING"
+          zip -r "bricklogo-${{ github.event.release.tag_name }}-${{ matrix.platform }}-${{ matrix.arch }}.zip" bricklogo/
+          mv *.zip "$GITHUB_WORKSPACE/"
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:TEMP "bricklogo-release"
+          if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+          New-Item -ItemType Directory -Path "$staging\bricklogo" | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.binary }}" "$staging\bricklogo\"
+          Copy-Item "bricklogo.config.json.example" "$staging\bricklogo\"
+          Copy-Item -Recurse "examples" "$staging\bricklogo\examples"
+          Copy-Item -Recurse "firmware" "$staging\bricklogo\firmware"
+          Copy-Item -Recurse "docs" "$staging\bricklogo\docs"
+          Compress-Archive -Path "$staging\bricklogo" -DestinationPath "bricklogo-${{ github.event.release.tag_name }}-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          Remove-Item $staging -Recurse -Force
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bricklogo-*.zip

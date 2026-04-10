@@ -20,6 +20,7 @@ Copy-Item "target\release\bricklogo.exe" "$staging\bricklogo\"
 Copy-Item "bricklogo.config.json.example" "$staging\bricklogo\"
 Copy-Item -Recurse "examples" "$staging\bricklogo\examples"
 Copy-Item -Recurse "firmware" "$staging\bricklogo\firmware"
+Copy-Item -Recurse "docs" "$staging\bricklogo\docs"
 
 if (-not (Test-Path "releases")) { New-Item -ItemType Directory -Path "releases" | Out-Null }
 $zipPath = Join-Path "releases" $zipName
