@@ -21,7 +21,7 @@ Multiple devices can be connected at the same time. Each is given a name and add
 
 ## Quick Start
 
-Download the latest release for your platform, unpack it, and run the binary.
+Download the [latest release](https://github.com/openbrickproject/BrickLogo/releases) for your platform, unpack it, and run the binary.
 
 ```
 ./bricklogo
