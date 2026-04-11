@@ -4,7 +4,7 @@ BrickLogo is a Logo programming environment for controlling LEGO motors and sens
 
 ## LEGO/Logo
 
-Logo is a programming language created by Seymour Papert in the late 1960s. LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert in the 1980s to connect Logo to physical LEGO models through motors and sensors. LEGO produced two implementations: LEGO TC Logo (1988) and LEGO DACTA Control Lab (1993).
+Logo is a programming language created by Seymour Papert in the late 1960s. LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at MIT in the 1980s to connect Logo to physical LEGO models through motors and sensors. LEGO produced two implementations: LEGO TC Logo (1988) and LEGO DACTA Control Lab (1993).
 
 BrickLogo is a spiritual evolution of LEGO/Logo. It draws from both TC Logo and Control Lab, adds support for current hardware, and introduces modern elements like concurrent tasks and networking, in the spirit of the original.
 
