@@ -67,9 +67,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
-          # Sign the binary
+          # Find signing identity
           BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
-          codesign --force --options runtime --sign "Developer ID Application: $(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')" "$BINARY_PATH"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity found. Available identities:"
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+          echo "Signing with: $IDENTITY"
+
+          # Sign the binary
+          codesign --force --options runtime --sign "$IDENTITY" "$BINARY_PATH"
 
           # Notarize: zip the binary, submit, wait, staple
           NOTARIZE_ZIP=$RUNNER_TEMP/notarize.zip
