@@ -180,19 +180,9 @@ impl HardwareAdapter for WeDoAdapter {
         let api = HidApi::new().map_err(|e| format!("Failed to init HID: {}", e))?;
 
         let device = if let Some(ref id) = self.identifier {
-            if id.starts_with('/') || id.contains('\\') {
-                let c_path = std::ffi::CString::new(id.as_str()).map_err(|e| e.to_string())?;
-                api.open_path(&c_path)
-                    .map_err(|e| format!("Failed to open WeDo at {}: {}", id, e))?
-            } else {
-                // Find by serial number or other identifier
-                let dev_info = api
-                    .device_list()
-                    .find(|d| d.vendor_id() == WEDO_VENDOR_ID && d.product_id() == WEDO_PRODUCT_ID)
-                    .ok_or("No WeDo device found")?;
-                api.open_path(dev_info.path())
-                    .map_err(|e| format!("Failed to open WeDo: {}", e))?
-            }
+            let c_path = std::ffi::CString::new(id.as_str()).map_err(|e| e.to_string())?;
+            api.open_path(&c_path)
+                .map_err(|e| format!("Failed to open WeDo at {}: {}", id, e))?
         } else {
             let dev_info = api
                 .device_list()
