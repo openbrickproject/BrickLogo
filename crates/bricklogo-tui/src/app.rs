@@ -99,7 +99,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(net_role: Option<NetRole>, version: &str) -> Result<Self, String> {
+    pub fn new(net_role: Option<NetRole>, version: &str, password: Option<String>) -> Result<Self, String> {
         let output_lines: Vec<OutputLine> = Vec::new();
         let output_lines_ref = Arc::new(Mutex::new(Vec::<OutputLine>::new()));
         let output_clone = output_lines_ref.clone();
@@ -141,7 +141,7 @@ impl App {
                 NetRole::Client(_) => Arc::new(Mutex::new("connected".to_string())),
             };
 
-            bricklogo_net::start_network(role, global_vars, rx, system_fn, status.clone())?;
+            bricklogo_net::start_network(role, global_vars, rx, system_fn, status.clone(), password)?;
             net_status_arc = Some(status);
             net_init_msg = Some(init_msg);
         }

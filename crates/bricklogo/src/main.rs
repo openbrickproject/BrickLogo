@@ -67,8 +67,15 @@ impl TerminalRestorer for CrosstermRestorer<'_> {
     }
 }
 
-fn parse_net_role() -> Option<NetRole> {
+struct NetArgs {
+    role: Option<NetRole>,
+    password: Option<String>,
+}
+
+fn parse_net_args() -> NetArgs {
     let args: Vec<String> = std::env::args().collect();
+    let mut role = None;
+    let mut password: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -76,7 +83,7 @@ fn parse_net_role() -> Option<NetRole> {
                 let port = args.get(i + 1)
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(DEFAULT_PORT);
-                return Some(NetRole::Host(port));
+                role = Some(NetRole::Host(port));
             }
             "--join" => {
                 if i + 1 < args.len() {
@@ -87,9 +94,18 @@ fn parse_net_role() -> Option<NetRole> {
                     } else {
                         format!("{}:{}", addr, DEFAULT_PORT)
                     };
-                    return Some(NetRole::Client(full_addr));
+                    role = Some(NetRole::Client(full_addr));
                 } else {
                     eprintln!("--join requires an address");
+                    std::process::exit(1);
+                }
+            }
+            "--password" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    password = Some(args[i].clone());
+                } else {
+                    eprintln!("--password requires a value");
                     std::process::exit(1);
                 }
             }
@@ -97,11 +113,11 @@ fn parse_net_role() -> Option<NetRole> {
         }
         i += 1;
     }
-    None
+    NetArgs { role, password }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let net_role = parse_net_role();
+    let net_args = parse_net_args();
     let mut lifecycle = TerminalLifecycle::default();
 
     // Setup terminal
@@ -113,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = match App::new(net_role, env!("CARGO_PKG_VERSION")) {
+    let mut app = match App::new(net_args.role, env!("CARGO_PKG_VERSION"), net_args.password) {
         Ok(app) => app,
         Err(e) => {
             let mut restorer = CrosstermRestorer { terminal: &mut terminal };

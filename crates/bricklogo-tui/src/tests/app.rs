@@ -111,7 +111,7 @@ fn run_until_idle(app: &mut App) {
 
 #[test]
 fn test_help_clear_and_bye_are_repl_commands() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
 
     app.input = "help".to_string();
     app.submit_input();
@@ -132,7 +132,7 @@ fn test_help_clear_and_bye_are_repl_commands() {
 
 #[test]
 fn test_multiline_definition_mode_executes_definition() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
 
     app.input = "to greet".to_string();
     app.submit_input();
@@ -155,7 +155,7 @@ fn test_multiline_definition_mode_executes_definition() {
 
 #[test]
 fn test_cancel_definition_clears_buffer() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
     app.input = "to greet".to_string();
     app.submit_input();
     app.cancel_definition();
@@ -169,7 +169,7 @@ fn test_cancel_definition_clears_buffer() {
 
 #[test]
 fn test_multiline_bracket_mode() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
 
     app.input = "forever [".to_string();
     app.submit_input();
@@ -187,7 +187,7 @@ fn test_multiline_bracket_mode() {
 
 #[test]
 fn test_multiline_to_with_brackets() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
 
     app.input = "to greet [".to_string();
     app.submit_input();
@@ -207,7 +207,7 @@ fn test_multiline_to_with_brackets() {
 
 #[test]
 fn test_syntax_error_no_multiline() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
     app.input = "repeat 4 ]".to_string();
     app.submit_input();
     assert!(app.multi_line.is_none());
@@ -216,7 +216,7 @@ fn test_syntax_error_no_multiline() {
 
 #[test]
 fn test_error_on_continuation_discards_line() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
 
     app.input = "forever [".to_string();
     app.submit_input();
@@ -233,7 +233,7 @@ fn test_error_on_continuation_discards_line() {
 
 #[test]
 fn test_history_navigation_round_trips() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
     for cmd in ["print \"one", "print \"two"] {
         app.input = cmd.to_string();
         app.submit_input();
@@ -252,7 +252,7 @@ fn test_history_navigation_round_trips() {
 
 #[test]
 fn test_tick_syncs_device_and_selection_context() {
-    let mut app = App::new(None, "0.0.0").unwrap();
+    let mut app = App::new(None, "0.0.0", None).unwrap();
     {
         let mut pm = app.port_manager.lock().unwrap();
         pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));

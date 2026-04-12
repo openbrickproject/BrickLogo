@@ -93,9 +93,22 @@ bricklogo --join 192.168.1.50:5000
 
 If the host cannot be reached, BrickLogo prints an error and exits.
 
+### Password
+
+The host can require a password. All clients must provide the same password to connect.
+
+```
+bricklogo --host --password secret123
+bricklogo --join 192.168.1.50 --password secret123
+```
+
+If a password is set, clients that do not authenticate within 5 seconds are disconnected. Clients that send the wrong password are disconnected immediately.
+
+Note, the connection is inherently unsecure, with all data being sent in plaintext.
+
 ### How it works
 
-Variables are the only thing shared. Each machine connects to and controls its own hardware. There are no remote motor commands or sensor reads.
+Global variables are the only thing shared. Each machine connects to and controls its own hardware. There are no remote motor commands or sensor reads.
 
 When you run `make "x 42` on one machine, the value appears on every other machine. When you read `:x` on another machine, you get 42. The only variables that are not shared are procedure parameters, which are local to that procedure call.
 
@@ -128,6 +141,14 @@ Machine A reads the sensor and writes the distance to `:dist`. Machine B reads `
 If the connection to the host is lost, BrickLogo continues running with the last known variable values. The status bar shows `[net: disconnected]`. BrickLogo tries to reconnect every few seconds. When it does, it receives a fresh copy of all variables from the host.
 
 Variables written locally while disconnected are not sent to the host. When the host's snapshot arrives, it replaces all local values.
+
+### Browser clients
+
+The host is a WebSocket server. BrickLogo instances connect over WebSocket and use a compact binary protocol. Browser clients can also connect and exchange variables using JSON.
+
+A browser can connect at `ws://host:9750` using the standard WebSocket API. An example web client is included in `examples/webclient/index.html`. Open it in a browser, enter the host address and optional password, and connect. It shows all shared variables in real time and lets you set variables from the browser.
+
+This makes it possible to build custom dashboards, control panels, or visualisations that interact with BrickLogo programs.
 
 ## Firmware upload
 

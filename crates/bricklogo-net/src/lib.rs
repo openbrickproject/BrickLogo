@@ -17,22 +17,20 @@ pub enum NetRole {
 type SystemFn = Arc<dyn Fn(&str) + Send + Sync>;
 pub type NetStatus = Arc<Mutex<String>>;
 
-/// Start the network layer. For Host, this spawns listener threads and returns immediately.
-/// For Client, this blocks until the initial snapshot is received, then spawns background threads.
-/// Returns Err if the connection fails (client can't reach host, or host can't bind port).
 pub fn start_network(
     role: NetRole,
     global_vars: Arc<RwLock<HashMap<String, LogoValue>>>,
     broadcast_rx: mpsc::Receiver<(String, LogoValue)>,
     system_fn: SystemFn,
     status: NetStatus,
+    password: Option<String>,
 ) -> Result<(), String> {
     match role {
         NetRole::Host(port) => {
-            host::start_host(port, global_vars, broadcast_rx, system_fn, status)
+            host::start_host(port, global_vars, broadcast_rx, system_fn, status, password)
         }
         NetRole::Client(addr) => {
-            client::start_client(&addr, global_vars, broadcast_rx, system_fn, status)
+            client::start_client(&addr, global_vars, broadcast_rx, system_fn, status, password)
         }
     }
 }

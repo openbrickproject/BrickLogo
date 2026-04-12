@@ -1,13 +1,24 @@
 use std::collections::HashMap;
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use tungstenite::{connect, Message};
 use bricklogo_lang::value::LogoValue;
-use crate::protocol::{NetMessage, write_message, read_message};
+use crate::protocol::{self, NetMessage};
 
-fn start_test_host(port: u16) -> (
+type WsClient = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+
+fn ws_set_read_timeout(ws: &mut WsClient, timeout: Option<Duration>) {
+    match ws.get_mut() {
+        tungstenite::stream::MaybeTlsStream::Plain(s) => {
+            s.set_read_timeout(timeout).unwrap();
+        }
+        _ => {}
+    }
+}
+
+fn start_test_host(port: u16, password_hash: Option<String>) -> (
     Arc<RwLock<HashMap<String, LogoValue>>>,
     mpsc::Sender<(String, LogoValue)>,
     Arc<Mutex<Vec<String>>>,
@@ -22,82 +33,131 @@ fn start_test_host(port: u16) -> (
     });
     let status = Arc::new(Mutex::new("hosting (0 clients)".to_string()));
 
-    super::start_host(port, global_vars.clone(), rx, system_fn, status.clone()).unwrap();
+    super::start_host(port, global_vars.clone(), rx, system_fn, status.clone(), password_hash).unwrap();
     thread::sleep(Duration::from_millis(50)); // Let listener start
 
     (global_vars, tx, log, status)
 }
 
-fn connect_and_sync(port: u16) -> TcpStream {
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+/// JSON connect: hello then sync (no password)
+fn ws_json_connect(port: u16) -> WsClient {
+    let url = format!("ws://127.0.0.1:{}", port);
+    let (mut ws, _) = connect(&url).unwrap();
+
+    // Send hello
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: None,
+        binary_protocol: false,
+    }).into())).unwrap();
+
+    // Read hi
+    let msg = ws.read().unwrap();
+    match msg {
+        Message::Text(text) => {
+            assert!(matches!(protocol::decode_json(&text).unwrap(), NetMessage::Hi));
+        }
+        _ => panic!("Expected text hi"),
+    }
 
     // Send sync
-    write_message(&mut stream, &NetMessage::Sync).unwrap();
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Sync).into())).unwrap();
 
     // Read snapshot
-    let msg = read_message(&mut stream).unwrap();
-    assert!(matches!(msg, NetMessage::Snapshot { .. }));
+    let msg = ws.read().unwrap();
+    match msg {
+        Message::Text(text) => {
+            assert!(matches!(protocol::decode_json(&text).unwrap(), NetMessage::Snapshot { .. }));
+        }
+        _ => panic!("Expected text snapshot"),
+    }
 
-    stream
+    ws
 }
 
 #[test]
-fn test_host_accepts_connection_and_sends_snapshot() {
-    let (vars, _tx, _log, _status) = start_test_host(19750);
+fn test_host_hello_then_sync_works() {
+    let (_vars, _tx, _log, _status) = start_test_host(19750, None);
+    let _ws = ws_json_connect(19750);
+}
+
+#[test]
+fn test_host_sync_without_hello_disconnects() {
+    let (_vars, _tx, _log, _status) = start_test_host(19770, None);
+    let url = "ws://127.0.0.1:19770";
+    let (mut ws, _) = connect(url).unwrap();
+
+    // Send sync without hello
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Sync).into())).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+    ws_set_read_timeout(&mut ws, Some(Duration::from_millis(200)));
+    assert!(ws.read().is_err());
+}
+
+#[test]
+fn test_host_sends_snapshot_with_vars() {
+    let (vars, _tx, _log, _status) = start_test_host(19751, None);
     vars.write().unwrap().insert("x".to_string(), LogoValue::Number(42.0));
 
-    let mut stream = TcpStream::connect("127.0.0.1:19750").unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let url = "ws://127.0.0.1:19751";
+    let (mut ws, _) = connect(url).unwrap();
 
-    write_message(&mut stream, &NetMessage::Sync).unwrap();
-    let msg = read_message(&mut stream).unwrap();
+    // Hello first
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: None, binary_protocol: false,
+    }).into())).unwrap();
+    let _ = ws.read().unwrap(); // Hi
+
+    // Then sync
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Sync).into())).unwrap();
+    let msg = ws.read().unwrap();
     match msg {
-        NetMessage::Snapshot { vars } => {
-            assert_eq!(vars["x"], LogoValue::Number(42.0));
+        Message::Text(text) => {
+            match protocol::decode_json(&text).unwrap() {
+                NetMessage::Snapshot { vars } => {
+                    assert_eq!(vars["x"], LogoValue::Number(42.0));
+                }
+                _ => panic!("Expected Snapshot"),
+            }
         }
-        _ => panic!("Expected Snapshot"),
+        _ => panic!("Expected text message"),
     }
 }
 
 #[test]
-fn test_host_empty_snapshot() {
-    let (_vars, _tx, _log, _status) = start_test_host(19751);
-    // The snapshot in connect_and_sync was empty — the assert!(matches!) confirms it was a Snapshot
-    let _stream = connect_and_sync(19751);
-}
-
-#[test]
 fn test_host_broadcasts_local_set() {
-    let (_vars, tx, _log, _status) = start_test_host(19752);
-    let mut stream = connect_and_sync(19752);
+    let (_vars, tx, _log, _status) = start_test_host(19752, None);
+    let mut ws = ws_json_connect(19752);
 
     // Broadcast a local variable change
     tx.send(("speed".to_string(), LogoValue::Number(5.0))).unwrap();
 
     // Client should receive it
-    let msg = read_message(&mut stream).unwrap();
+    let msg = ws.read().unwrap();
     match msg {
-        NetMessage::Set { name, value } => {
-            assert_eq!(name, "speed");
-            assert_eq!(value, LogoValue::Number(5.0));
+        Message::Text(text) => {
+            match protocol::decode_json(&text).unwrap() {
+                NetMessage::Set { vars } => {
+                    assert_eq!(vars["speed"], LogoValue::Number(5.0));
+                }
+                _ => panic!("Expected Set"),
+            }
         }
-        _ => panic!("Expected Set"),
+        _ => panic!("Expected text message"),
     }
 }
 
 #[test]
-fn test_host_propagates_client_set_to_other_clients() {
-    let (vars, _tx, _log, _status) = start_test_host(19753);
+fn test_host_propagates_client_set() {
+    let (vars, _tx, _log, _status) = start_test_host(19753, None);
 
-    let mut stream_a = connect_and_sync(19753);
-    let mut stream_b = connect_and_sync(19753);
+    let mut ws_a = ws_json_connect(19753);
+    let mut ws_b = ws_json_connect(19753);
 
     // Client A sends a set
-    write_message(&mut stream_a, &NetMessage::Set {
-        name: "color".to_string(),
-        value: LogoValue::Word("red".to_string()),
-    }).unwrap();
+    let mut set_vars = HashMap::new();
+    set_vars.insert("color".to_string(), LogoValue::Word("red".to_string()));
+    ws_a.send(Message::Text(protocol::encode_json(&NetMessage::Set { vars: set_vars }).into())).unwrap();
 
     thread::sleep(Duration::from_millis(100));
 
@@ -108,44 +168,104 @@ fn test_host_propagates_client_set_to_other_clients() {
     );
 
     // Client B should receive it
-    let msg = read_message(&mut stream_b).unwrap();
+    let msg = ws_b.read().unwrap();
     match msg {
-        NetMessage::Set { name, value } => {
-            assert_eq!(name, "color");
-            assert_eq!(value, LogoValue::Word("red".to_string()));
+        Message::Text(text) => {
+            match protocol::decode_json(&text).unwrap() {
+                NetMessage::Set { vars } => {
+                    assert_eq!(vars["color"], LogoValue::Word("red".to_string()));
+                }
+                _ => panic!("Expected Set"),
+            }
         }
-        _ => panic!("Expected Set"),
+        _ => panic!("Expected text message"),
     }
 
     // Client A should NOT receive its own set back
-    stream_a.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-    assert!(read_message(&mut stream_a).is_err());
+    ws_set_read_timeout(&mut ws_a, Some(Duration::from_millis(200)));
+    assert!(ws_a.read().is_err());
 }
 
 #[test]
-fn test_host_does_not_rebroadcast_duplicate_client_set() {
-    let (vars, _tx, _log, _status) = start_test_host(19755);
-    vars.write().unwrap().insert("color".to_string(), LogoValue::Word("red".to_string()));
+fn test_host_password_correct_auth() {
+    let (_vars, _tx, _log, _status) = start_test_host(19756, Some("secret".to_string()));
 
-    let mut stream_a = connect_and_sync(19755);
-    let mut stream_b = connect_and_sync(19755);
+    let url = "ws://127.0.0.1:19756";
+    let (mut ws, _) = connect(url).unwrap();
 
-    write_message(&mut stream_a, &NetMessage::Set {
-        name: "color".to_string(),
-        value: LogoValue::Word("red".to_string()),
-    }).unwrap();
+    // Send hello with correct password
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: Some("secret".to_string()),
+        binary_protocol: false,
+    }).into())).unwrap();
 
+    // Should get hi back
+    let msg = ws.read().unwrap();
+    match msg {
+        Message::Text(text) => {
+            assert!(matches!(protocol::decode_json(&text).unwrap(), NetMessage::Hi));
+        }
+        _ => panic!("Expected text hi"),
+    }
+}
+
+#[test]
+fn test_host_password_wrong_auth_disconnects() {
+    let (_vars, _tx, _log, _status) = start_test_host(19757, Some("secret".to_string()));
+
+    let url = "ws://127.0.0.1:19757";
+    let (mut ws, _) = connect(url).unwrap();
+
+    // Send hello with wrong password
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: Some("wrong".to_string()),
+        binary_protocol: false,
+    }).into())).unwrap();
+
+    // Connection should be closed
     thread::sleep(Duration::from_millis(100));
+    ws_set_read_timeout(&mut ws, Some(Duration::from_millis(200)));
+    assert!(ws.read().is_err());
+}
 
-    stream_b.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-    assert!(read_message(&mut stream_b).is_err());
+
+#[test]
+fn test_host_binary_mode_switch() {
+    let (_vars, _tx, _log, _status) = start_test_host(19759, None);
+
+    let url = "ws://127.0.0.1:19759";
+    let (mut ws, _) = connect(url).unwrap();
+
+    // Send hello with binaryProtocol=true
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: None,
+        binary_protocol: true,
+    }).into())).unwrap();
+
+    // Should get binary hi back
+    let msg = ws.read().unwrap();
+    assert!(matches!(msg, Message::Binary(_)));
+    match msg {
+        Message::Binary(data) => {
+            assert!(matches!(protocol::decode_binary(&data).unwrap(), NetMessage::Hi));
+        }
+        _ => panic!("Expected binary hi"),
+    }
 }
 
 #[test]
 fn test_host_logs_client_events() {
-    let (_vars, _tx, log, _status) = start_test_host(19754);
+    let (_vars, _tx, log, _status) = start_test_host(19754, None);
 
-    let stream = TcpStream::connect("127.0.0.1:19754").unwrap();
+    let url = "ws://127.0.0.1:19754";
+    let (mut ws, _) = connect(url).unwrap();
+
+    // Send hello to complete connection
+    ws.send(Message::Text(protocol::encode_json(&NetMessage::Hello {
+        password: None, binary_protocol: false,
+    }).into())).unwrap();
+    let _ = ws.read().unwrap(); // Hi
+
     thread::sleep(Duration::from_millis(100));
 
     // Should have logged the connection
@@ -154,7 +274,7 @@ fn test_host_logs_client_events() {
     drop(msgs);
 
     // Disconnect
-    drop(stream);
+    drop(ws);
     thread::sleep(Duration::from_millis(200));
 
     let msgs = log.lock().unwrap();

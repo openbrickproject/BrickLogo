@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>BrickLogo Web Client Example</title>
+</head>
+<body>
+
+<h2>BrickLogo Web Client Example</h2>
+
+<fieldset>
+<legend>Connection</legend>
+<label>Host: <input type="text" id="host" value="127.0.0.1"></label>
+<label>Port: <input type="text" id="port" value="9750" size="5"></label>
+<label>Password: <input type="password" id="password"></label>
+<button id="connectBtn" onclick="doConnect()">Connect</button>
+<button id="disconnectBtn" onclick="doDisconnect()" disabled>Disconnect</button>
+<span id="status">Disconnected</span>
+</fieldset>
+
+<br>
+
+<fieldset>
+<legend>Set Variable</legend>
+<label>Name: <input type="text" id="varName"></label>
+<label>Value: <input type="text" id="varValue"></label>
+<label>Type:
+<select id="varType">
+<option value="string">String</option>
+<option value="number">Number</option>
+</select>
+</label>
+<button onclick="doSet()">Set</button>
+</fieldset>
+
+<br>
+
+<fieldset>
+<legend>Variables</legend>
+<table id="varTable">
+<tr><th>Name</th><th>Value</th></tr>
+</table>
+</fieldset>
+
+<script>
+let ws = null;
+let vars = {};
+
+function doConnect() {
+    const host = document.getElementById("host").value;
+    const port = document.getElementById("port").value;
+    const password = document.getElementById("password").value;
+
+    ws = new WebSocket("ws://" + host + ":" + port);
+
+    ws.onopen = function() {
+        document.getElementById("status").textContent = "Connected";
+        document.getElementById("connectBtn").disabled = true;
+        document.getElementById("disconnectBtn").disabled = false;
+
+        const hello = { type: "hello" };
+        if (password) {
+            hello.password = password;
+        }
+        ws.send(JSON.stringify(hello));
+    };
+
+    ws.onmessage = function(event) {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "hi") {
+            ws.send(JSON.stringify({ type: "sync" }));
+        } else if (msg.type === "snapshot") {
+            vars = msg.vars || {};
+            renderVars();
+        } else if (msg.type === "set") {
+            for (const [k, v] of Object.entries(msg.vars || {})) {
+                vars[k] = v;
+            }
+            renderVars();
+        }
+    };
+
+    ws.onclose = function() {
+        document.getElementById("status").textContent = "Disconnected";
+        document.getElementById("connectBtn").disabled = false;
+        document.getElementById("disconnectBtn").disabled = true;
+        ws = null;
+    };
+
+    ws.onerror = function() {
+        document.getElementById("status").textContent = "Error";
+    };
+}
+
+function doDisconnect() {
+    if (ws) ws.close();
+}
+
+function doSet() {
+    if (!ws) return;
+    const name = document.getElementById("varName").value;
+    const raw = document.getElementById("varValue").value;
+    const type = document.getElementById("varType").value;
+    const value = type === "number" ? parseFloat(raw) : raw;
+    ws.send(JSON.stringify({ type: "set", vars: { [name]: value } }));
+    vars[name] = value;
+    renderVars();
+}
+
+function formatLogoValue(value) {
+    if (typeof value === "number") return String(value);
+    if (typeof value === "string") {
+        if (value.includes(" ")) return '"|' + value + '|';
+        return '"' + value;
+    }
+    if (Array.isArray(value)) return "[" + value.map(formatLogoValue).join(" ") + "]";
+    return String(value);
+}
+
+function renderVars() {
+    const table = document.getElementById("varTable");
+    while (table.rows.length > 1) table.deleteRow(1);
+    for (const [name, value] of Object.entries(vars).sort()) {
+        const row = table.insertRow();
+        row.insertCell().textContent = ":" + name;
+        row.insertCell().textContent = formatLogoValue(value);
+    }
+}
+</script>
+
+</body>
+</html>

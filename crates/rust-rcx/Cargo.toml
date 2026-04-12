@@ -7,3 +7,4 @@ description = "LEGO Mindstorms RCX protocol library"
 [dependencies]
 serialport = "4"
 rusb = "0.9"
+libusb1-sys = { version = "0.7", features = ["vendored"] }

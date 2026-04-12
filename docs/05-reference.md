@@ -19,6 +19,7 @@ This is the complete command reference for BrickLogo. Each command is listed wit
 13. [Pages and Files](#13-pages-and-files)
 14. [REPL Commands](#14-repl-commands)
 15. [Configuration](#15-configuration)
+16. [CLI Flags](#16-cli-flags)
 - [Appendix A: Supported Devices](#appendix-a-supported-devices)
 - [Appendix B: Sensor Modes by Device](#appendix-b-sensor-modes-by-device)
 
@@ -1392,6 +1393,22 @@ The first `connectto "controllab` uses the first path, the second uses the secon
 ### Build HAT
 
 The Build HAT requires no configuration. It always uses `/dev/serial0` on the Raspberry Pi. See [NOTES.md](../NOTES.md) for Raspberry Pi setup instructions.
+
+---
+
+## 16. CLI Flags
+
+These flags are passed when starting BrickLogo from the command line.
+
+| Flag | Description |
+| --- | --- |
+| `--host` | Start as a network host on port 9750 |
+| `--host <port>` | Start as a network host on a custom port |
+| `--join <addr>` | Join a network host at the given address |
+| `--join <addr:port>` | Join a network host at a custom port |
+| `--password <value>` | Require a password for network connections |
+
+See [Advanced Usage](04-advanced.md) for details on networking, passwords, and browser clients.
 
 ---
 
