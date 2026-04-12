@@ -218,9 +218,19 @@ impl Evaluator {
 
     pub fn set_global(&self, name: &str, value: LogoValue) {
         let normalized = name.to_lowercase();
-        self.global_vars.write().unwrap().insert(normalized.clone(), value.clone());
-        if let Some(ref tx) = self.var_broadcast {
+        let changed = {
+            let mut globals = self.global_vars.write().unwrap();
+            if globals.get(&normalized) == Some(&value) {
+                false
+            } else {
+                globals.insert(normalized.clone(), value.clone());
+                true
+            }
+        };
+        if changed {
+            if let Some(ref tx) = self.var_broadcast {
             let _ = tx.send((normalized, value));
+            }
         }
     }
 

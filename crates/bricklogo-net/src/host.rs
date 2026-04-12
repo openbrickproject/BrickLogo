@@ -155,8 +155,18 @@ fn handle_client(
                 }
             }
             NetMessage::Set { name, value } => {
-                global_vars.write().unwrap().insert(name.clone(), value.clone());
-                broadcast_to_others(&clients, &addr, &NetMessage::Set { name, value });
+                let changed = {
+                    let mut vars = global_vars.write().unwrap();
+                    if vars.get(&name) == Some(&value) {
+                        false
+                    } else {
+                        vars.insert(name.clone(), value.clone());
+                        true
+                    }
+                };
+                if changed {
+                    broadcast_to_others(&clients, &addr, &NetMessage::Set { name, value });
+                }
             }
             NetMessage::Snapshot { .. } => {}
         }

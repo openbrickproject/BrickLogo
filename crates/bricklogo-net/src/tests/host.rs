@@ -123,6 +123,25 @@ fn test_host_propagates_client_set_to_other_clients() {
 }
 
 #[test]
+fn test_host_does_not_rebroadcast_duplicate_client_set() {
+    let (vars, _tx, _log, _status) = start_test_host(19755);
+    vars.write().unwrap().insert("color".to_string(), LogoValue::Word("red".to_string()));
+
+    let mut stream_a = connect_and_sync(19755);
+    let mut stream_b = connect_and_sync(19755);
+
+    write_message(&mut stream_a, &NetMessage::Set {
+        name: "color".to_string(),
+        value: LogoValue::Word("red".to_string()),
+    }).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+
+    stream_b.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    assert!(read_message(&mut stream_b).is_err());
+}
+
+#[test]
 fn test_host_logs_client_events() {
     let (_vars, _tx, log, _status) = start_test_host(19754);
 

@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn create_evaluator() -> (Evaluator, Arc<Mutex<Vec<String>>>) {
@@ -76,6 +76,22 @@ fn test_variables() {
     eval.evaluate("make \"x 42").unwrap();
     eval.evaluate("print :x").unwrap();
     assert_eq!(output.lock().unwrap().as_slice(), &["42"]);
+}
+
+#[test]
+fn test_make_does_not_broadcast_unchanged_global() {
+    let (mut eval, _) = create_evaluator();
+    let (tx, rx) = mpsc::channel();
+    eval.set_var_broadcast(tx);
+
+    eval.evaluate("make \"x 42").unwrap();
+    assert_eq!(
+        rx.recv_timeout(std::time::Duration::from_millis(100)).unwrap(),
+        ("x".to_string(), LogoValue::Number(42.0))
+    );
+
+    eval.evaluate("make \"x 42").unwrap();
+    assert!(rx.recv_timeout(std::time::Duration::from_millis(100)).is_err());
 }
 
 #[test]
