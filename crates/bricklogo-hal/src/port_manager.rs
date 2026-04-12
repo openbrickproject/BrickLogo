@@ -458,6 +458,7 @@ impl PortManager {
                 .collect();
             entry.adapter.rotate_ports_by_degrees(&commands, degrees)?;
         }
+        for qp in &ports { self.get_state(qp).is_running = false; }
         Ok(())
     }
 
@@ -478,6 +479,7 @@ impl PortManager {
                 .collect();
             entry.adapter.rotate_ports_to_position(&commands, position)?;
         }
+        for qp in &ports { self.get_state(qp).is_running = false; }
         Ok(())
     }
 
@@ -512,6 +514,7 @@ impl PortManager {
                 .collect();
             entry.adapter.rotate_ports_to_home(&commands)?;
         }
+        for qp in &ports { self.get_state(qp).is_running = false; }
         Ok(())
     }
 
