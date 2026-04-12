@@ -95,10 +95,11 @@ pub struct App {
     port_manager: Arc<Mutex<PortManager>>,
     output_buffer: Arc<Mutex<Vec<OutputLine>>>,
     pub net_status: Option<Arc<Mutex<String>>>,
+    pub version: String,
 }
 
 impl App {
-    pub fn new(net_role: Option<NetRole>) -> Result<Self, String> {
+    pub fn new(net_role: Option<NetRole>, version: &str) -> Result<Self, String> {
         let output_lines: Vec<OutputLine> = Vec::new();
         let output_lines_ref = Arc::new(Mutex::new(Vec::<OutputLine>::new()));
         let output_clone = output_lines_ref.clone();
@@ -167,6 +168,7 @@ impl App {
             port_manager,
             output_buffer: output_lines_ref,
             net_status: net_status_arc,
+            version: version.to_string(),
         };
 
         if let Some(msg) = net_init_msg {

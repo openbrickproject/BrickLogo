@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
@@ -14,7 +13,7 @@ const CLIENT_CHANNEL_SIZE: usize = 256;
 
 struct ClientEntry {
     addr: String,
-    tx: mpsc::SyncSender<String>,
+    tx: mpsc::SyncSender<Vec<u8>>,
 }
 
 type ClientList = Arc<Mutex<Vec<ClientEntry>>>;
@@ -31,19 +30,21 @@ fn remove_client(clients: &ClientList, addr: &str, system_fn: &SystemFn, status:
     update_status(clients, status);
 }
 
-fn broadcast_to_others(clients: &ClientList, sender_addr: &str, msg: &str) {
+fn broadcast_to_others(clients: &ClientList, sender_addr: &str, msg: &NetMessage) {
+    let encoded = protocol::encode(msg);
     let mut list = clients.lock().unwrap();
     list.retain(|c| {
         if c.addr == sender_addr {
             return true;
         }
-        c.tx.try_send(msg.to_string()).is_ok()
+        c.tx.try_send(encoded.clone()).is_ok()
     });
 }
 
-fn broadcast_to_all(clients: &ClientList, msg: &str) {
+fn broadcast_to_all(clients: &ClientList, msg: &NetMessage) {
+    let encoded = protocol::encode(msg);
     let mut list = clients.lock().unwrap();
-    list.retain(|c| c.tx.try_send(msg.to_string()).is_ok());
+    list.retain(|c| c.tx.try_send(encoded.clone()).is_ok());
 }
 
 pub fn start_host(
@@ -62,8 +63,7 @@ pub fn start_host(
     let bc_clients = clients.clone();
     thread::spawn(move || {
         while let Ok((name, value)) = broadcast_rx.recv() {
-            let msg = protocol::encode(&NetMessage::Set { name, value });
-            broadcast_to_all(&bc_clients, &msg);
+            broadcast_to_all(&bc_clients, &NetMessage::Set { name, value });
         }
     });
 
@@ -82,7 +82,7 @@ pub fn start_host(
                     accept_system(&format!("{} joined", addr));
 
                     let reader_stream = stream.try_clone().expect("Failed to clone stream");
-                    let (tx, rx) = mpsc::sync_channel::<String>(CLIENT_CHANNEL_SIZE);
+                    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(CLIENT_CHANNEL_SIZE);
 
                     accept_clients.lock().unwrap().push(ClientEntry {
                         addr: addr.clone(),
@@ -98,7 +98,7 @@ pub fn start_host(
                     thread::spawn(move || {
                         let mut s = stream;
                         while let Ok(msg) = rx.recv() {
-                            if s.write_all(msg.as_bytes()).is_err() || s.flush().is_err() {
+                            if s.write_all(&msg).is_err() || s.flush().is_err() {
                                 remove_client(&writer_clients, &writer_addr, &writer_system, &writer_status);
                                 break;
                             }
@@ -131,42 +131,32 @@ pub fn start_host(
 }
 
 fn handle_client(
-    stream: TcpStream,
+    mut stream: TcpStream,
     addr: String,
     global_vars: Arc<RwLock<HashMap<String, LogoValue>>>,
     clients: ClientList,
     system_fn: SystemFn,
     status: NetStatus,
 ) {
-    let reader = BufReader::new(&stream);
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let msg = match protocol::decode(&line) {
+    let mut reader = protocol::MessageReader::new();
+    loop {
+        let msg = match reader.read(&mut stream) {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(_) => break,
         };
 
         match msg {
             NetMessage::Sync => {
                 let vars = global_vars.read().unwrap().clone();
-                let response = protocol::encode(&NetMessage::Snapshot { vars });
+                let encoded = protocol::encode(&NetMessage::Snapshot { vars });
                 let list = clients.lock().unwrap();
                 if let Some(c) = list.iter().find(|c| c.addr == addr) {
-                    let _ = c.tx.try_send(response);
+                    let _ = c.tx.try_send(encoded);
                 }
             }
             NetMessage::Set { name, value } => {
                 global_vars.write().unwrap().insert(name.clone(), value.clone());
-                let msg = protocol::encode(&NetMessage::Set { name, value });
-                broadcast_to_others(&clients, &addr, &msg);
+                broadcast_to_others(&clients, &addr, &NetMessage::Set { name, value });
             }
             NetMessage::Snapshot { .. } => {}
         }
@@ -174,6 +164,8 @@ fn handle_client(
 
     remove_client(&clients, &addr, &system_fn, &status);
 }
+
+use std::io::Write;
 
 #[cfg(test)]
 #[path = "tests/host.rs"]

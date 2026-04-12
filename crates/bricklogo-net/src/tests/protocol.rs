@@ -1,22 +1,20 @@
 use super::*;
 
 #[test]
-fn test_encode_decode_sync() {
-    let msg = NetMessage::Sync;
-    let encoded = encode(&msg);
-    assert_eq!(encoded.trim(), r#"{"type":"sync"}"#);
-    let decoded = decode(&encoded).unwrap();
+fn test_sync_round_trip() {
+    let encoded = encode(&NetMessage::Sync);
+    let decoded = decode(&encoded[4..]).unwrap();
     assert!(matches!(decoded, NetMessage::Sync));
 }
 
 #[test]
-fn test_encode_decode_set_number() {
+fn test_set_number_round_trip() {
     let msg = NetMessage::Set {
         name: "speed".to_string(),
         value: LogoValue::Number(42.0),
     };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "speed");
@@ -27,13 +25,13 @@ fn test_encode_decode_set_number() {
 }
 
 #[test]
-fn test_encode_decode_set_word() {
+fn test_set_word_round_trip() {
     let msg = NetMessage::Set {
         name: "greeting".to_string(),
         value: LogoValue::Word("hello".to_string()),
     };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "greeting");
@@ -44,7 +42,7 @@ fn test_encode_decode_set_word() {
 }
 
 #[test]
-fn test_encode_decode_set_list() {
+fn test_set_list_round_trip() {
     let msg = NetMessage::Set {
         name: "ports".to_string(),
         value: LogoValue::List(vec![
@@ -54,7 +52,7 @@ fn test_encode_decode_set_list() {
         ]),
     };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "ports");
@@ -72,7 +70,7 @@ fn test_encode_decode_set_list() {
 }
 
 #[test]
-fn test_encode_decode_set_nested_list() {
+fn test_set_nested_list_round_trip() {
     let msg = NetMessage::Set {
         name: "nested".to_string(),
         value: LogoValue::List(vec![
@@ -84,33 +82,29 @@ fn test_encode_decode_set_nested_list() {
         ]),
     };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "nested");
-            match value {
-                LogoValue::List(items) => {
-                    assert_eq!(items.len(), 2);
-                    assert_eq!(items[0], LogoValue::Number(1.0));
-                    assert_eq!(
-                        items[1],
-                        LogoValue::List(vec![LogoValue::Number(2.0), LogoValue::Number(3.0)])
-                    );
-                }
-                _ => panic!("Expected List"),
-            }
+            assert_eq!(
+                value,
+                LogoValue::List(vec![
+                    LogoValue::Number(1.0),
+                    LogoValue::List(vec![LogoValue::Number(2.0), LogoValue::Number(3.0)]),
+                ])
+            );
         }
         _ => panic!("Expected Set"),
     }
 }
 
 #[test]
-fn test_encode_decode_snapshot_empty() {
+fn test_snapshot_empty_round_trip() {
     let msg = NetMessage::Snapshot {
         vars: HashMap::new(),
     };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Snapshot { vars } => assert!(vars.is_empty()),
         _ => panic!("Expected Snapshot"),
@@ -118,20 +112,17 @@ fn test_encode_decode_snapshot_empty() {
 }
 
 #[test]
-fn test_encode_decode_snapshot_with_vars() {
+fn test_snapshot_with_vars_round_trip() {
     let mut vars = HashMap::new();
     vars.insert("x".to_string(), LogoValue::Number(42.0));
     vars.insert("name".to_string(), LogoValue::Word("robot".to_string()));
     vars.insert(
         "colors".to_string(),
-        LogoValue::List(vec![
-            LogoValue::Number(1.0),
-            LogoValue::Number(2.0),
-        ]),
+        LogoValue::List(vec![LogoValue::Number(1.0), LogoValue::Number(2.0)]),
     );
     let msg = NetMessage::Snapshot { vars };
     let encoded = encode(&msg);
-    let decoded = decode(&encoded).unwrap();
+    let decoded = decode(&encoded[4..]).unwrap();
     match decoded {
         NetMessage::Snapshot { vars } => {
             assert_eq!(vars.len(), 3);
@@ -147,42 +138,118 @@ fn test_encode_decode_snapshot_with_vars() {
 }
 
 #[test]
-fn test_decode_invalid_json() {
-    assert!(decode("not json").is_err());
+fn test_decode_empty_fails() {
+    assert!(decode(&[]).is_err());
 }
 
 #[test]
-fn test_decode_unknown_type() {
-    assert!(decode(r#"{"type":"unknown"}"#).is_err());
+fn test_decode_unknown_opcode_fails() {
+    assert!(decode(&[0xFF]).is_err());
 }
 
 #[test]
-fn test_set_number_json_format() {
+fn test_stream_round_trip() {
     let msg = NetMessage::Set {
         name: "x".to_string(),
         value: LogoValue::Number(7.0),
     };
-    let encoded = encode(&msg);
-    // untagged LogoValue means value is just 7.0, not {"Number":7.0}
-    assert!(encoded.contains(r#""value":7.0"#));
+    let mut buf = Vec::new();
+    write_message(&mut buf, &msg).unwrap();
+    let decoded = read_message(&mut &buf[..]).unwrap();
+    match decoded {
+        NetMessage::Set { name, value } => {
+            assert_eq!(name, "x");
+            assert_eq!(value, LogoValue::Number(7.0));
+        }
+        _ => panic!("Expected Set"),
+    }
 }
 
 #[test]
-fn test_set_word_json_format() {
-    let msg = NetMessage::Set {
-        name: "x".to_string(),
-        value: LogoValue::Word("hello".to_string()),
-    };
-    let encoded = encode(&msg);
-    assert!(encoded.contains(r#""value":"hello""#));
+fn test_stream_multiple_messages() {
+    let mut buf = Vec::new();
+    write_message(&mut buf, &NetMessage::Sync).unwrap();
+    write_message(&mut buf, &NetMessage::Set {
+        name: "a".to_string(),
+        value: LogoValue::Number(1.0),
+    }).unwrap();
+
+    let mut cursor = &buf[..];
+    let msg1 = read_message(&mut cursor).unwrap();
+    let msg2 = read_message(&mut cursor).unwrap();
+    assert!(matches!(msg1, NetMessage::Sync));
+    assert!(matches!(msg2, NetMessage::Set { .. }));
 }
 
 #[test]
-fn test_set_list_json_format() {
+fn test_negative_number() {
     let msg = NetMessage::Set {
         name: "x".to_string(),
-        value: LogoValue::List(vec![LogoValue::Number(1.0), LogoValue::Number(2.0)]),
+        value: LogoValue::Number(-3.14),
     };
     let encoded = encode(&msg);
-    assert!(encoded.contains(r#""value":[1.0,2.0]"#));
+    let decoded = decode(&encoded[4..]).unwrap();
+    match decoded {
+        NetMessage::Set { value, .. } => {
+            assert_eq!(value, LogoValue::Number(-3.14));
+        }
+        _ => panic!("Expected Set"),
+    }
+}
+
+#[test]
+fn test_message_reader_single() {
+    let mut buf = Vec::new();
+    write_message(&mut buf, &NetMessage::Set {
+        name: "x".to_string(),
+        value: LogoValue::Number(42.0),
+    }).unwrap();
+
+    let mut reader = MessageReader::new();
+    let msg = reader.read(&mut &buf[..]).unwrap();
+    match msg {
+        NetMessage::Set { name, value } => {
+            assert_eq!(name, "x");
+            assert_eq!(value, LogoValue::Number(42.0));
+        }
+        _ => panic!("Expected Set"),
+    }
+}
+
+#[test]
+fn test_message_reader_multiple_in_one_read() {
+    // Simulate multiple messages arriving in a single TCP read
+    let mut buf = Vec::new();
+    write_message(&mut buf, &NetMessage::Sync).unwrap();
+    write_message(&mut buf, &NetMessage::Set {
+        name: "a".to_string(),
+        value: LogoValue::Number(1.0),
+    }).unwrap();
+    write_message(&mut buf, &NetMessage::Set {
+        name: "b".to_string(),
+        value: LogoValue::Number(2.0),
+    }).unwrap();
+
+    let mut reader = MessageReader::new();
+    let mut cursor = &buf[..];
+    let msg1 = reader.read(&mut cursor).unwrap();
+    let msg2 = reader.read(&mut cursor).unwrap();
+    let msg3 = reader.read(&mut cursor).unwrap();
+
+    assert!(matches!(msg1, NetMessage::Sync));
+    match msg2 {
+        NetMessage::Set { name, .. } => assert_eq!(name, "a"),
+        _ => panic!("Expected Set"),
+    }
+    match msg3 {
+        NetMessage::Set { name, .. } => assert_eq!(name, "b"),
+        _ => panic!("Expected Set"),
+    }
+}
+
+#[test]
+fn test_message_reader_eof() {
+    let buf: Vec<u8> = Vec::new();
+    let mut reader = MessageReader::new();
+    assert!(reader.read(&mut &buf[..]).is_err());
 }

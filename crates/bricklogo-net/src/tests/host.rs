@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use bricklogo_lang::value::LogoValue;
-use crate::protocol::{self, NetMessage};
+use crate::protocol::{NetMessage, write_message, read_message};
 
 fn start_test_host(port: u16) -> (
     Arc<RwLock<HashMap<String, LogoValue>>>,
@@ -29,24 +28,18 @@ fn start_test_host(port: u16) -> (
     (global_vars, tx, log, status)
 }
 
-fn connect_and_sync(port: u16) -> (BufReader<TcpStream>, TcpStream) {
-    let stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+fn connect_and_sync(port: u16) -> TcpStream {
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let writer = stream.try_clone().unwrap();
-    let mut reader = BufReader::new(stream);
 
     // Send sync
-    let mut w = &writer;
-    w.write_all(protocol::encode(&NetMessage::Sync).as_bytes()).unwrap();
-    w.flush().unwrap();
+    write_message(&mut stream, &NetMessage::Sync).unwrap();
 
     // Read snapshot
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let msg = protocol::decode(&line).unwrap();
+    let msg = read_message(&mut stream).unwrap();
     assert!(matches!(msg, NetMessage::Snapshot { .. }));
 
-    (reader, writer)
+    stream
 }
 
 #[test]
@@ -54,18 +47,12 @@ fn test_host_accepts_connection_and_sends_snapshot() {
     let (vars, _tx, _log, _status) = start_test_host(19750);
     vars.write().unwrap().insert("x".to_string(), LogoValue::Number(42.0));
 
-    let stream = TcpStream::connect("127.0.0.1:19750").unwrap();
+    let mut stream = TcpStream::connect("127.0.0.1:19750").unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let writer = stream.try_clone().unwrap();
-    let mut reader = BufReader::new(stream);
 
-    let mut w = &writer;
-    w.write_all(protocol::encode(&NetMessage::Sync).as_bytes()).unwrap();
-    w.flush().unwrap();
-
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    match protocol::decode(&line).unwrap() {
+    write_message(&mut stream, &NetMessage::Sync).unwrap();
+    let msg = read_message(&mut stream).unwrap();
+    match msg {
         NetMessage::Snapshot { vars } => {
             assert_eq!(vars["x"], LogoValue::Number(42.0));
         }
@@ -76,25 +63,21 @@ fn test_host_accepts_connection_and_sends_snapshot() {
 #[test]
 fn test_host_empty_snapshot() {
     let (_vars, _tx, _log, _status) = start_test_host(19751);
-
-    let (reader, _writer) = connect_and_sync(19751);
     // The snapshot in connect_and_sync was empty — the assert!(matches!) confirms it was a Snapshot
-    drop(reader);
+    let _stream = connect_and_sync(19751);
 }
 
 #[test]
 fn test_host_broadcasts_local_set() {
     let (_vars, tx, _log, _status) = start_test_host(19752);
-
-    let (mut reader, _writer) = connect_and_sync(19752);
+    let mut stream = connect_and_sync(19752);
 
     // Broadcast a local variable change
     tx.send(("speed".to_string(), LogoValue::Number(5.0))).unwrap();
 
     // Client should receive it
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    match protocol::decode(&line).unwrap() {
+    let msg = read_message(&mut stream).unwrap();
+    match msg {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "speed");
             assert_eq!(value, LogoValue::Number(5.0));
@@ -107,16 +90,14 @@ fn test_host_broadcasts_local_set() {
 fn test_host_propagates_client_set_to_other_clients() {
     let (vars, _tx, _log, _status) = start_test_host(19753);
 
-    let (mut reader_a, writer_a) = connect_and_sync(19753);
-    let (mut reader_b, _writer_b) = connect_and_sync(19753);
+    let mut stream_a = connect_and_sync(19753);
+    let mut stream_b = connect_and_sync(19753);
 
     // Client A sends a set
-    let mut w = &writer_a;
-    w.write_all(protocol::encode(&NetMessage::Set {
+    write_message(&mut stream_a, &NetMessage::Set {
         name: "color".to_string(),
         value: LogoValue::Word("red".to_string()),
-    }).as_bytes()).unwrap();
-    w.flush().unwrap();
+    }).unwrap();
 
     thread::sleep(Duration::from_millis(100));
 
@@ -127,9 +108,8 @@ fn test_host_propagates_client_set_to_other_clients() {
     );
 
     // Client B should receive it
-    let mut line = String::new();
-    reader_b.read_line(&mut line).unwrap();
-    match protocol::decode(&line).unwrap() {
+    let msg = read_message(&mut stream_b).unwrap();
+    match msg {
         NetMessage::Set { name, value } => {
             assert_eq!(name, "color");
             assert_eq!(value, LogoValue::Word("red".to_string()));
@@ -138,9 +118,8 @@ fn test_host_propagates_client_set_to_other_clients() {
     }
 
     // Client A should NOT receive its own set back
-    reader_a.get_ref().set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-    let mut line2 = String::new();
-    assert!(reader_a.read_line(&mut line2).is_err() || line2.is_empty());
+    stream_a.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    assert!(read_message(&mut stream_a).is_err());
 }
 
 #[test]

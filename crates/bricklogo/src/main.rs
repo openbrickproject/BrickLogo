@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = match App::new(net_role) {
+    let mut app = match App::new(net_role, env!("CARGO_PKG_VERSION")) {
         Ok(app) => app,
         Err(e) => {
             let mut restorer = CrosstermRestorer { terminal: &mut terminal };

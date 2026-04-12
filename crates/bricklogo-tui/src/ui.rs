@@ -44,14 +44,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ])
         .split(inner);
 
-    draw_header(frame, chunks[0]);
+    draw_header(frame, chunks[0], &app.version);
     draw_repl(frame, app, chunks[1]);
     // chunks[2] is the blank line
     draw_divider(frame, chunks[3]);
     draw_status_bar(frame, app, chunks[4]);
 }
 
-fn draw_header(frame: &mut Frame, area: Rect) {
+fn draw_header(frame: &mut Frame, area: Rect, version: &str) {
     let mut lines = Vec::new();
     for line in LOGO_TOP.lines() {
         lines.push(Line::from(Span::styled(
@@ -69,7 +69,7 @@ fn draw_header(frame: &mut Frame, area: Rect) {
                     Style::default().fg(PINK).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" v{}", env!("CARGO_PKG_VERSION")),
+                    format!(" v{}", version),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
