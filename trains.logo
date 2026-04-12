@@ -1,0 +1,182 @@
+; trains.logo — Automated train layout controller
+;
+; Layout: Oval with front passing loop and rear 3-track staging yard
+;
+; Switches (all Control Lab):
+;   controllab.a / controllab.b — back left switches
+;   controllab.c / controllab.d — back right switches
+;   controllab.e — front left switch (passing loop entry)
+;   controllab.f — front right switch (passing loop exit)
+;
+; Trains:
+;   train1.a — PUP, Track 1, counterclockwise only
+;   train2.a — PUP, Track 2, clockwise only
+;   controllab.g — 9V, Track 3, either direction
+;
+; Sensors (WeDo distance sensors):
+;   wedo1.a / wedo1.b — Track 1
+;   wedo2.a / wedo2.b — Track 2
+;   wedo3.a / wedo3.b — Track 3
+;   wedo4.a / wedo4.b — Main line (front)
+;   wedo5.a / wedo5.b — Passing loop (front)
+
+; ── Switch helpers ───────────────────────────
+; ── Back switch routing ──────────────────────
+; Two left switches (a, b) and two right switches (c, d)
+; select which of the three tracks to route to/from
+; All switches thrown simultaneously
+
+to setbackswitches :track
+  talkto "controllab.a
+  ifelse :track = 1 [setleft] [setright]
+  talkto "controllab.c
+  ifelse :track = 1 [setleft] [setright]
+  talkto "controllab.b
+  ifelse :track = 2 [setleft] [setright]
+  talkto "controllab.d
+  ifelse :track = 2 [setleft] [setright]
+  talkto [controllab.a controllab.b controllab.c controllab.d]
+  sp 8
+  onfor 3
+end
+
+; ── Front switch routing ─────────────────────
+; Clockwise trains take the passing loop
+; Counterclockwise trains take the main line
+
+to setfrontswitches :direction
+  talkto "controllab.e
+  ifelse :direction = "cw [setright] [setleft]
+  talkto "controllab.f
+  ifelse :direction = "cw [setright] [setleft]
+  talkto [controllab.e controllab.f]
+  sp 8
+  onfor 3
+end
+
+; ── Train control ────────────────────────────
+
+to starttrain :train :direction
+  ifelse :train = 1 [
+    talkto "train1.a
+  ] [
+    ifelse :train = 2 [
+      talkto "train2.a
+    ] [
+      talkto "controllab.g
+    ]
+  ]
+  sp 5
+  ifelse :direction = "cw [setleft] [setright]
+  on
+end
+
+to slowtrain :train
+  ifelse :train = 1 [
+    talkto "train1.a
+  ] [
+    ifelse :train = 2 [
+      talkto "train2.a
+    ] [
+      talkto "controllab.g
+    ]
+  ]
+  sp 1
+end
+
+to stoptrain :train
+  ifelse :train = 1 [
+    talkto "train1.a
+  ] [
+    ifelse :train = 2 [
+      talkto "train2.a
+    ] [
+      talkto "controllab.g
+    ]
+  ]
+  off
+end
+
+; ── Sensor monitoring ────────────────────────
+; Each section has two sensors (a = one side, b = other side)
+; Direction determines which is entry and which is stop
+
+to waitforslow :wedo :direction
+  ifelse :direction = "cw [
+    listento word :wedo ".a
+  ] [
+    listento word :wedo ".b
+  ]
+  waituntil [sensor?]
+end
+
+to waitforstop :wedo :direction
+  ifelse :direction = "cw [
+    listento word :wedo ".b
+  ] [
+    listento word :wedo ".a
+  ]
+  waituntil [sensor?]
+end
+
+to brakeintoblock :train :wedo :direction
+  waitforslow :wedo :direction
+  slowtrain :train
+  waitforstop :wedo :direction
+  stoptrain :train
+end
+
+; ── Pick a random direction for train 3 ──────
+
+to traindirection :train
+  output ifelse :train = 1 ["ccw] [ifelse :train = 2 ["cw] [ifelse (random 2) = 0 ["cw] ["ccw]]]
+end
+
+; ── Which wedo monitors which track ──────────
+
+to trackwedo :track
+  output ifelse :track = 1 ["wedo1] [ifelse :track = 2 ["wedo2] ["wedo3]]
+end
+
+to frontwedo :direction
+  output ifelse :direction = "cw ["wedo5] ["wedo4]
+end
+
+; ── Main loop ────────────────────────────────
+
+to runtrain
+  make "train (random 3) + 1
+  make "direction traindirection :train
+  make "stopping ifelse (random 2) = 0 ["true] ["false]
+
+  print (word "|Running train | :train "| | :direction "|, stopping: | :stopping)
+
+  ; Set switches
+  setbackswitches :train
+  setfrontswitches :direction
+  wait 10
+
+  ; Start train
+  starttrain :train :direction
+
+  ; If stopping at front, brake into front block
+  if :stopping = "true [
+    brakeintoblock :train frontwedo :direction :direction
+    print "|Stopped at front|
+    wait (random 50) + 20
+    starttrain :train :direction
+  ]
+
+  ; Brake into back track
+  brakeintoblock :train trackwedo :train :direction
+
+  print (word "|Train | :train "| parked|)
+  wait 30
+end
+
+to trains
+  print "|Trains layout controller started|
+  forever [
+    runtrain
+  ]
+end
