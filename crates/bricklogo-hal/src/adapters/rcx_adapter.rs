@@ -18,9 +18,11 @@ fn to_direction(direction: PortDirection) -> u8 {
     }
 }
 
+/// RCX native power range is 0..7 (3-bit PWM).
+const MAX_POWER: u8 = 7;
+
 fn power_to_rcx(power: u8) -> u8 {
-    // Map 0-100% to 0-7 (RCX native range) with rounding
-    ((power as u16 * 7 + 50) / 100).min(7) as u8
+    power.min(MAX_POWER)
 }
 
 // ── Driver slot for RCX ─────────────────────────
@@ -338,6 +340,8 @@ impl HardwareAdapter for RcxAdapter {
         }
         self.tx = None;
     }
+
+    fn max_power(&self) -> u8 { MAX_POWER }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         if OUTPUT_PORTS.contains(&port) { Ok(()) }

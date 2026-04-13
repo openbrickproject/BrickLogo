@@ -10,8 +10,12 @@ use rust_wedo::wedo::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
+/// WeDo 1.0 native power range exposed to BrickLogo is 0..100; the rust-wedo
+/// `normalize_power` helper rescales to the hub's i8 wire range internally.
+const MAX_POWER: u8 = 100;
+
 fn to_signed_power(direction: PortDirection, power: u8) -> i32 {
-    let p = power as i32;
+    let p = power.min(MAX_POWER) as i32;
     match direction {
         PortDirection::Even => p,
         PortDirection::Odd => -p,
@@ -240,6 +244,8 @@ impl HardwareAdapter for WeDoAdapter {
         self.tx = None;
         self.motor_values = [0, 0];
     }
+
+    fn max_power(&self) -> u8 { MAX_POWER }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         match port {

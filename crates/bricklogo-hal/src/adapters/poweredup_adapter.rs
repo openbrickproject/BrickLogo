@@ -8,8 +8,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+/// Powered UP / WeDo 2.0 native power range is 0..100 (LWP3 spec).
+const MAX_POWER: u8 = 100;
+
 fn to_signed_speed(direction: PortDirection, power: u8) -> i8 {
-    let speed = power.min(100) as i8;
+    let speed = power.min(MAX_POWER) as i8;
     if direction == PortDirection::Even {
         speed
     } else {
@@ -169,6 +172,8 @@ impl HardwareAdapter for PoweredUpAdapter {
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.ble.disconnect();
     }
+
+    fn max_power(&self) -> u8 { MAX_POWER }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;

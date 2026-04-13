@@ -120,6 +120,12 @@ impl HardwareAdapter for CoralAdapter {
         self.ble.disconnect();
     }
 
+    fn max_power(&self) -> u8 {
+        // Coral wire protocol uses i8 -127..127 but the practical exposed range
+        // is 0..100, matching every other modern motor controller.
+        100
+    }
+
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         if self.output_ports.contains(&port.to_string()) {
             Ok(())

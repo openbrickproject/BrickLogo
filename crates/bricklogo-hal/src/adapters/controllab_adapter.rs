@@ -19,8 +19,12 @@ const SENSOR_MODE_MAP: &[(&str, SensorType)] = &[
     ("rotation", SensorType::Rotation),
 ];
 
+/// Control Lab native power range is 0..8 (1-8 wire encoded as 0-7,
+/// with 0 sent as a separate "off" opcode). See rust-controllab.
+const MAX_POWER: u8 = 8;
+
 fn to_signed_power(direction: PortDirection, power: u8) -> i8 {
-    let native = ((power as u16 * 8 + 50) / 100).min(8) as i8;
+    let native = power.min(MAX_POWER) as i8;
     match direction {
         PortDirection::Even => native,
         PortDirection::Odd => -native,
@@ -200,6 +204,8 @@ impl HardwareAdapter for ControlLabAdapter {
         }
         self.tx = None;
     }
+
+    fn max_power(&self) -> u8 { MAX_POWER }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         if OUTPUT_PORTS.contains(&port) {

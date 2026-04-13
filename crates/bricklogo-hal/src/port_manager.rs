@@ -39,10 +39,6 @@ pub struct PortManager {
     flash_timers: HashMap<String, Arc<AtomicBool>>,
 }
 
-fn power_to_percent(level: u8) -> u8 {
-    ((level.min(8) as u16 * 100) / 8) as u8
-}
-
 impl PortManager {
     pub fn new() -> Self {
         PortManager {
@@ -194,19 +190,30 @@ impl PortManager {
         }
     }
 
+    /// Default initial power for a fresh port — 50% of the device's native max,
+    /// so `on` without a prior `setpower` runs at half speed regardless of hub.
+    fn default_power_for(&self, device_name: &str) -> u8 {
+        self.devices
+            .get(device_name)
+            .map(|e| e.adapter.max_power() / 2)
+            .unwrap_or(4)
+    }
+
     fn get_state(&mut self, qp: &QualifiedPort) -> &mut OutputPortState {
+        let default_power = self.default_power_for(&qp.device_name);
         let entry = self.devices.get_mut(&qp.device_name).unwrap();
         entry
             .port_states
             .entry(qp.port.clone())
             .or_insert(OutputPortState {
                 direction: PortDirection::Even,
-                power: 4,
+                power: default_power,
                 is_running: false,
             })
     }
 
     fn sync_port(&mut self, qp: &QualifiedPort) -> Result<(), String> {
+        let default_power = self.default_power_for(&qp.device_name);
         let entry = self
             .devices
             .get_mut(&qp.device_name)
@@ -217,7 +224,7 @@ impl PortManager {
             .cloned()
             .unwrap_or(OutputPortState {
                 direction: PortDirection::Even,
-                power: 4,
+                power: default_power,
                 is_running: false,
             });
 
@@ -240,7 +247,7 @@ impl PortManager {
             entry.adapter.start_port(
                 &qp.port,
                 desired.direction,
-                power_to_percent(desired.power),
+                desired.power,
             )?;
         } else if entry
             .last_sent
@@ -262,6 +269,7 @@ impl PortManager {
     ) -> Vec<(String, Vec<(String, PortDirection, u8)>)> {
         let mut groups: HashMap<String, Vec<(String, PortDirection, u8)>> = HashMap::new();
         for qp in ports {
+            let default_power = self.default_power_for(&qp.device_name);
             let entry = self.devices.get(&qp.device_name).unwrap();
             let state = entry
                 .port_states
@@ -269,13 +277,13 @@ impl PortManager {
                 .cloned()
                 .unwrap_or(OutputPortState {
                     direction: PortDirection::Even,
-                    power: 4,
+                    power: default_power,
                     is_running: false,
                 });
             groups.entry(qp.device_name.clone()).or_default().push((
                 qp.port.clone(),
                 state.direction,
-                power_to_percent(state.power),
+                state.power,
             ));
         }
         groups.into_iter().collect()
@@ -377,16 +385,42 @@ impl PortManager {
         }
     }
 
-    pub fn set_power(&mut self, port_strs: &[String], level: u8) {
-        let clamped = level.min(8);
-        if let Ok(ports) = self.resolve_ports(port_strs) {
-            for qp in &ports {
-                let state = self.get_state(qp);
-                state.power = clamped;
-                if clamped == 0 { state.is_running = false; }
-                let _ = self.sync_port(qp);
+    /// Set power on the resolved ports. The level must be in `0..=device.max_power()`
+    /// for *every* device touched by the port selection — if any device's max
+    /// is below the requested level, the call errors and no state changes.
+    pub fn set_power(&mut self, port_strs: &[String], level: u8) -> Result<(), String> {
+        let ports = self.resolve_ports(port_strs)?;
+
+        // Validate against every selected device's max before mutating anything.
+        let mut seen_devices: Vec<&str> = Vec::new();
+        for qp in &ports {
+            if seen_devices.contains(&qp.device_name.as_str()) {
+                continue;
+            }
+            seen_devices.push(qp.device_name.as_str());
+            let entry = self
+                .devices
+                .get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            let max = entry.adapter.max_power();
+            if level > max {
+                return Err(format!(
+                    "{} (\"{}\") supports power 0-{}, got {}",
+                    entry.adapter.display_name(),
+                    qp.device_name,
+                    max,
+                    level
+                ));
             }
         }
+
+        for qp in &ports {
+            let state = self.get_state(qp);
+            state.power = level;
+            if level == 0 { state.is_running = false; }
+            let _ = self.sync_port(qp);
+        }
+        Ok(())
     }
 
     pub fn on(&mut self, port_strs: &[String]) -> Result<(), String> {
@@ -537,7 +571,7 @@ impl PortManager {
             let state = self.get_state(qp).clone();
 
             let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            entry.adapter.start_port(&qp.port, state.direction, power_to_percent(state.power))?;
+            entry.adapter.start_port(&qp.port, state.direction, state.power)?;
 
             let cancelled = Arc::new(AtomicBool::new(false));
             self.flash_timers.insert(key.clone(), cancelled.clone());
@@ -560,9 +594,10 @@ impl PortManager {
                     if is_on {
                         let _ = entry.adapter.stop_port(&port);
                     } else {
+                        let default_power = entry.adapter.max_power() / 2;
                         let state = entry.port_states.get(&port).cloned()
-                            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: 4, is_running: false });
-                        let _ = entry.adapter.start_port(&port, state.direction, power_to_percent(state.power));
+                            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: default_power, is_running: false });
+                        let _ = entry.adapter.start_port(&port, state.direction, state.power);
                     }
                     is_on = !is_on;
                 }

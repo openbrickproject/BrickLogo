@@ -273,9 +273,16 @@ pub fn register_hardware_primitives(
     eval.register_primitive("setpower", PrimitiveSpec {
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
-            let level = args[0].as_number()? as u8;
+            let raw = args[0].as_number()?;
+            if !raw.is_finite() || raw < 0.0 || raw > 255.0 {
+                return Err(LogoError::Runtime(
+                    format!("setpower: power must be a non-negative integer, got {}", raw),
+                ));
+            }
+            let level = raw as u8;
             let ports = eval.selected_outputs().to_vec();
-            pm_ref.lock().unwrap().set_power(&ports, level);
+            pm_ref.lock().unwrap().set_power(&ports, level)
+                .map_err(LogoError::Runtime)?;
             Ok(None)
         }),
     });

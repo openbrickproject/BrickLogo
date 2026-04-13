@@ -40,6 +40,7 @@ impl HardwareAdapter for MockAdapter {
     fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> {
         Ok(())
     }
+    fn max_power(&self) -> u8 { 100 }
     fn start_port(
         &mut self,
         _port: &str,

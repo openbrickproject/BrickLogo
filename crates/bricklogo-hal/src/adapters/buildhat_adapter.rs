@@ -257,8 +257,11 @@ impl DeviceSlot for BuildHATSlot {
 
 // ── Helper: speed from direction + power ────────
 
+/// Build HAT native power range is 0..100 (sent as 1% PWM steps).
+const MAX_POWER: u8 = 100;
+
 fn to_signed_speed(direction: PortDirection, power: u8) -> i32 {
-    let speed = power.min(100) as i32;
+    let speed = power.min(MAX_POWER) as i32;
     match direction {
         PortDirection::Even => speed,
         PortDirection::Odd => -speed,
@@ -484,6 +487,8 @@ impl HardwareAdapter for BuildHATAdapter {
         }
         self.tx = None;
     }
+
+    fn max_power(&self) -> u8 { MAX_POWER }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         let idx = self.port_index(port)?;

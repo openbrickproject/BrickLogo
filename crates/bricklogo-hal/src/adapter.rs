@@ -46,6 +46,11 @@ pub trait HardwareAdapter: Send {
     fn validate_output_port(&self, port: &str) -> Result<(), String>;
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String>;
 
+    /// Maximum native power value this device accepts. `setpower N` is valid
+    /// for `0 <= N <= max_power()`. Values are device-native — e.g. RCX uses
+    /// 0-7 (3-bit PWM), Control Lab 0-8, Build HAT / Powered UP 0-100.
+    fn max_power(&self) -> u8;
+
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8)
     -> Result<(), String>;
     fn stop_port(&mut self, port: &str) -> Result<(), String>;

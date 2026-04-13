@@ -27,6 +27,7 @@ impl HardwareAdapter for MockAdapter {
     fn disconnect(&mut self) { self.connected = false; }
     fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
     fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 100 }
     fn start_port(&mut self, port: &str, dir: PortDirection, power: u8) -> Result<(), String> {
         self.start_calls.push((port.to_string(), dir, power));
         Ok(())
