@@ -38,34 +38,43 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Linux dependencies
+      - name: Install Linux packaging tools (host)
         if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config zip
+        run: sudo apt-get update && sudo apt-get install -y zip
 
-      - name: Install zig + cargo-zigbuild (Linux)
-        if: matrix.platform == 'linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild (Linux)
-        if: matrix.platform == 'linux'
-        run: cargo install --locked cargo-zigbuild
-
-      # Linux: build with zigbuild against an old glibc so the binary runs on
-      # Debian Buster (2.28) and newer — covers every supported Raspberry Pi OS
-      # release. Without this, the runner's native glibc (2.39 on ubuntu-24.04)
-      # gets baked in and the binary won't run on older systems.
+      # Linux: build inside a Debian Bullseye container (glibc 2.31) so the
+      # released binary runs on Bullseye / Bookworm / modern Ubuntu. Without
+      # this, the runner's native glibc (2.39 on ubuntu-24.04) gets baked in
+      # and the binary fails on any Raspberry Pi OS released before 2024.
       #
-      # zig bundles its own glibc headers but not third-party system headers
-      # like libudev.h (hidapi) or dbus/dbus.h (btleplug). Point its toolchain
-      # at the runner's system include and lib dirs via CPATH / LIBRARY_PATH.
-      - name: Build (Linux)
+      # The runner is already aarch64, so the container runs natively — no
+      # cross-compilation, no zig, no glibc symbol mismatches between host
+      # libudev/libdbus and the target binary.
+      - name: Build (Linux, Bullseye container)
         if: matrix.platform == 'linux'
-        env:
-          CPATH: /usr/include/aarch64-linux-gnu:/usr/include
-          LIBRARY_PATH: /usr/lib/aarch64-linux-gnu:/usr/lib
-        run: cargo zigbuild --release --bin bricklogo --target ${{ matrix.target }}.2.28
+        run: |
+          docker run --rm \
+            -v "$PWD":/work \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo \
+            -e CARGO_TARGET_DIR=/work/target \
+            -e HOST_UID=$(id -u) \
+            -e HOST_GID=$(id -g) \
+            arm64v8/debian:bullseye \
+            bash -c '
+              set -euo pipefail
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                curl ca-certificates build-essential pkg-config \
+                libdbus-1-dev libudev-dev
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain stable
+              . "$CARGO_HOME/env"
+              cargo build --release --bin bricklogo --target ${{ matrix.target }}
+              # Hand build artifacts back to the runner user so later
+              # (non-root) steps can read/zip them.
+              chown -R "$HOST_UID:$HOST_GID" target .cargo
+            '
 
       - name: Build (macOS / Windows)
         if: matrix.platform != 'linux'
