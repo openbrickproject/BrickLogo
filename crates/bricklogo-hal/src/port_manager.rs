@@ -149,6 +149,16 @@ impl PortManager {
         self.active_device.as_deref()
     }
 
+    /// Return the names of devices whose adapter no longer reports
+    /// `connected()` — used by the health watchdog to reconcile state.
+    pub fn dead_device_names(&self) -> Vec<String> {
+        self.devices
+            .iter()
+            .filter(|(_, entry)| !entry.adapter.connected())
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     pub fn get_connected_device_names(&self) -> Vec<String> {
         self.device_order
             .iter()

@@ -1,6 +1,7 @@
 use btleplug::api::{Central, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Adapter, Peripheral};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -184,44 +185,51 @@ impl PoweredUpBle {
                 let button_uuid = Uuid::parse_str(WEDO2_BUTTON_UUID).unwrap();
 
                 self.runtime.spawn(async move {
-                    while let Some(notif) = stream.next().await {
-                        let mut hub = hub_clone.lock().unwrap();
-                        let events = if is_wedo2_hub {
-                            if notif.uuid == port_type_uuid {
-                                hub.process_wedo2_port_type(&notif.value)
-                            } else if notif.uuid == sensor_uuid {
-                                hub.process_wedo2_sensor_value(&notif.value)
-                            } else if notif.uuid == button_uuid {
-                                let pressed = notif.value.first().copied().unwrap_or(0) == 1;
-                                vec![HubEvent::PropertyUpdate(HubPropertyValue::Button(pressed))]
+                    // Catch panics from the underlying notification stream
+                    // (bluez-async on Linux can panic during teardown when a
+                    // peripheral disconnects mid-flight). The health monitor
+                    // in `bricklogo-hal::health` will notice the dead
+                    // connection on its next poll and remove the device.
+                    let _ = AssertUnwindSafe(async move {
+                        while let Some(notif) = stream.next().await {
+                            let mut hub = hub_clone.lock().unwrap();
+                            let events = if is_wedo2_hub {
+                                if notif.uuid == port_type_uuid {
+                                    hub.process_wedo2_port_type(&notif.value)
+                                } else if notif.uuid == sensor_uuid {
+                                    hub.process_wedo2_sensor_value(&notif.value)
+                                } else if notif.uuid == button_uuid {
+                                    let pressed = notif.value.first().copied().unwrap_or(0) == 1;
+                                    vec![HubEvent::PropertyUpdate(HubPropertyValue::Button(pressed))]
+                                } else {
+                                    vec![]
+                                }
                             } else {
-                                vec![]
-                            }
-                        } else {
-                            hub.process_message(&notif.value)
-                        };
+                                hub.process_message(&notif.value)
+                            };
 
-                        // Forward command feedback events
-                        for event in &events {
-                            if let HubEvent::CommandFeedback {
-                                port_id,
-                                completed,
-                                discarded,
-                            } = event
-                            {
-                                let _ = feedback_tx.send(PortFeedback {
-                                    port_id: *port_id,
-                                    feedback: if *completed {
-                                        0x0a
-                                    } else if *discarded {
-                                        0x04
-                                    } else {
-                                        0x00
-                                    },
-                                });
+                            // Forward command feedback events
+                            for event in &events {
+                                if let HubEvent::CommandFeedback {
+                                    port_id,
+                                    completed,
+                                    discarded,
+                                } = event
+                                {
+                                    let _ = feedback_tx.send(PortFeedback {
+                                        port_id: *port_id,
+                                        feedback: if *completed {
+                                            0x0a
+                                        } else if *discarded {
+                                            0x04
+                                        } else {
+                                            0x00
+                                        },
+                                    });
+                                }
                             }
                         }
-                    }
+                    }).catch_unwind().await;
                 });
 
                 self.feedback_rx = Some(feedback_rx);

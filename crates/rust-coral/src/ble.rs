@@ -1,6 +1,7 @@
 use btleplug::api::{Central, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Adapter, Peripheral};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -143,13 +144,19 @@ impl CoralBle {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let p_clone = p.clone();
                 self.runtime.spawn(async move {
-                    if let Ok(mut stream) = p_clone.notifications().await {
-                        while let Some(notif) = stream.next().await {
-                            if tx.send(notif.value).is_err() {
-                                break; // receiver dropped
+                    // See `rust-poweredup`: catch panics from the underlying
+                    // notification stream so a flaky bluez-async teardown
+                    // doesn't take down the worker. The HAL health monitor
+                    // reaps the dead device on its next poll.
+                    let _ = AssertUnwindSafe(async move {
+                        if let Ok(mut stream) = p_clone.notifications().await {
+                            while let Some(notif) = stream.next().await {
+                                if tx.send(notif.value).is_err() {
+                                    break; // receiver dropped
+                                }
                             }
                         }
-                    }
+                    }).catch_unwind().await;
                 });
                 self.notification_rx = Some(rx);
 
