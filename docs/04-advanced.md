@@ -59,6 +59,87 @@ Qualified names work with `listento` as well:
 ? print sensor "distance
 ```
 
+## Running scripts
+
+BrickLogo can run a `.logo` file as a script instead of an interactive session:
+
+```
+bricklogo path/to/script.logo
+```
+
+The script runs to completion, then BrickLogo exits. All hardware is disconnected cleanly on the way out — motors stop, BLE peripherals release — whether the script finishes normally, errors, or is interrupted with Ctrl+C.
+
+A script is ordinary BrickLogo code. It may contain procedure definitions, `connectto` calls, loops, or anything else you would type at the prompt:
+
+```
+connectto "pup "hub
+talkto "a
+setpower 80
+onfor 30
+disconnect
+```
+
+### Reading from standard input
+
+Use `-` as the path to read the script from stdin:
+
+```
+echo 'print 1 + 2' | bricklogo -
+```
+
+Useful for piping small snippets from a shell.
+
+### Shebang scripts
+
+Add a shebang line and mark the file executable, and the script runs directly:
+
+```
+#!/usr/bin/env bricklogo
+connectto "pup "hub
+talkto "a
+onfor 20
+```
+
+```
+$ chmod +x spin.logo
+$ ./spin.logo
+```
+
+BrickLogo strips the leading `#!` line and any UTF-8 BOM before evaluating.
+
+### Output
+
+`print`, `show`, and `type` write to stdout. System messages (port attach/detach, connect confirmations) write to stderr. Errors write to stderr. So a script can be cleanly piped:
+
+```
+bricklogo lights.logo 2>/dev/null | grep OK
+```
+
+Exit status is `0` on success, `1` on any uncaught error, `130` if interrupted by Ctrl+C.
+
+### Networking in scripts
+
+`--host` and `--join` work in script mode just as in REPL mode:
+
+```
+bricklogo --host controller.logo
+bricklogo --join 192.168.1.50 sensor.logo
+```
+
+The host runs the script while accepting network clients; the client runs the script while reading shared variables from the host. Handy for classroom demos where one machine orchestrates and another reads.
+
+### `load` and file paths
+
+When a script is run from a file, `load` resolves relative to the script's directory, so helper procedures can sit next to the main script:
+
+```
+project/
+├── main.logo
+└── helpers.logo
+```
+
+`main.logo` can `load "helpers` and the correct file is found regardless of where BrickLogo was invoked from.
+
 ## Networking
 
 BrickLogo instances on different computers can share variables over a network. One instance runs as the host. Others join it. Any variable set with `make` on one machine is visible on all the others.

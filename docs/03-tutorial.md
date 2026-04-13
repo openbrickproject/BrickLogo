@@ -32,7 +32,7 @@ Turn the motor on:
 ? on
 ```
 
-The motor turns at the default power (4 out of 8) in the default direction (even). Turn it off:
+The motor turns at the default power (half of full) in the default direction (even). Turn it off:
 
 ```
 ? off
@@ -43,17 +43,17 @@ The motor turns at the default power (4 out of 8) in the default direction (even
 Set the power before (or while) the motor runs:
 
 ```
-? setpower 8
+? setpower 100
 ? on
 ```
 
 Full power. Now change it while the motor is still running:
 
 ```
-? setpower 2
+? setpower 25
 ```
 
-The motor slows down. Power levels go from 0 (stopped) to 8 (full).
+The motor slows down. Power levels go from 0 (stopped) to the device's maximum. Powered UP, Build HAT, WeDo, and Science all accept 0–100. Older hubs use smaller ranges: Control Lab is 0–8, RCX is 0–7. The default on a fresh port is half the maximum.
 
 ```
 ? off

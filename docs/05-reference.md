@@ -67,21 +67,22 @@ You can connect multiple devices at the same time. Each must have a unique name.
 
 The first device you connect becomes the **active device**. Commands like `talkto` and `listento` apply to the active device unless you specify otherwise.
 
+When the active device is disconnected, BrickLogo falls back to the most-recently-used remaining device — whichever one you last `use`d, or the most recently connected if you haven't switched. When the last device is disconnected, there is no active device; the next command that needs one will error until you `connectto` or `use` another.
+
 ### `disconnect`
 
 ```
 disconnect
-disconnect "name
-disconnect "all
 ```
 
-Disconnects a device. With no argument, disconnects the active device. With a name, disconnects that specific device. With `"all`, disconnects every device.
+Disconnects the active device. Takes no arguments. To disconnect a specific device, switch to it first with `use`:
 
 ```
-? disconnect "lab
-? disconnect "all
+? use "lab
 ? disconnect
 ```
+
+Errors if there is no active device.
 
 ### `use`
 
@@ -193,10 +194,21 @@ Runs the motors for 5 seconds.
 setpower level
 ```
 
-Sets the power level for the selected ports. The level is a number from 0 to 8, where 0 is off and 8 is full power. The default power level is 4.
+Sets the power level for the selected ports. The accepted range is device-native — modern hubs accept 0 to 100, older hubs a smaller range:
+
+| Device | Power range |
+|---|---|
+| Build HAT | 0–100 |
+| Powered UP / WeDo 2.0 | 0–100 |
+| WeDo 1.0 | 0–100 |
+| Science (Coral) | 0–100 |
+| Control Lab | 0–8 |
+| RCX | 0–7 |
+
+The default power on a fresh port is half the device's maximum. A value outside the accepted range errors — when several devices are selected, the value must be valid for every one of them, so `setpower 50` works on a Powered UP hub but errors if an RCX is also in the selection.
 
 ```
-? setpower 8
+? setpower 100
 ? on
 ```
 
@@ -1398,7 +1410,13 @@ The Build HAT requires no configuration. It always uses `/dev/serial0` on the Ra
 
 ## 16. CLI Flags
 
-These flags are passed when starting BrickLogo from the command line.
+BrickLogo runs as an interactive REPL by default. Passing a script path or `-` runs the given script and exits; flags can appear in any order.
+
+| Invocation | Behavior |
+| --- | --- |
+| `bricklogo` | Interactive REPL |
+| `bricklogo path/to/script.logo` | Run the script and exit |
+| `bricklogo -` | Read a script from stdin and exit |
 
 | Flag | Description |
 | --- | --- |
@@ -1408,7 +1426,9 @@ These flags are passed when starting BrickLogo from the command line.
 | `--join <addr:port>` | Join a network host at a custom port |
 | `--password <value>` | Require a password for network connections |
 
-See [Advanced Usage](04-advanced.md) for details on networking, passwords, and browser clients.
+Flags work in either mode — e.g. `bricklogo --host script.logo` runs a script while also hosting a network session.
+
+See [Advanced Usage](04-advanced.md) for details on script mode, networking, passwords, and browser clients.
 
 ---
 
@@ -1427,18 +1447,23 @@ Connects via Bluetooth Low Energy. Use `connectto "science`.
 
 ### LEGO Powered UP
 
-Connects via Bluetooth Low Energy. Use `connectto "pup`.
+Connects via Bluetooth Low Energy. Use `connectto "pup`. Covers every hub in the LEGO Powered UP / LWP3 family plus the older LWP 1.x WeDo 2.0 Smart Hub.
 
 | Hub | Output Ports |
 | --- | --- |
-| Move Hub | a, b, c, d |
+| Boost Move Hub | a, b, c, d |
 | Powered UP Hub | a, b |
-| Technic Medium Hub | a, b, c, d |
-| Technic Small Hub | a, b |
-| Remote Control | a, b |
+| Technic Medium Hub (Control+) | a, b, c, d |
+| Technic Small Hub (SPIKE Essential) | a, b |
+| Powered UP Remote | a, b |
 | Duplo Train Base | a |
+| WeDo 2.0 Smart Hub | a, b |
 
-Powered UP hubs also expose internal sensors (tilt, voltage, temperature, etc.) as named sensor ports.
+Powered UP hubs also expose internal sensors (tilt, voltage, temperature, etc.) as named sensor ports. The LED Light (Powered UP accessory) is supported on any output port — `setpower` sets brightness 0–100.
+
+Multiple Powered UP hubs can be connected at once — BrickLogo skips any hub already claimed by another `connectto` and picks the next one during the scan.
+
+**WeDo 2.0 Smart Hub:** tacho-motor operations (`rotate`, `rotateto`, `rotatetohome`, `resetzero`) are rejected with a clear error, since the WeDo 2.0 hub firmware does not implement position feedback. Basic motor control (`on`, `off`, `setpower`, `onfor`, `setodd`/`seteven`) and sensors work normally.
 
 ### LEGO Education WeDo 1.0
 
