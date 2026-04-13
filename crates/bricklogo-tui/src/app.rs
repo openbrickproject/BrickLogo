@@ -1,9 +1,8 @@
-use crate::bridge::register_hardware_primitives;
+use crate::runtime::build_evaluator;
 use bricklogo_hal::port_manager::PortManager;
 use bricklogo_lang::check::{self, ParseOutcome};
 use bricklogo_lang::error::LogoError;
 use bricklogo_lang::evaluator::Evaluator;
-use bricklogo_lang::primitives::register_core_primitives;
 use bricklogo_lang::value::LogoValue;
 use bricklogo_net::NetRole;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,18 +101,14 @@ impl App {
     pub fn new(net_role: Option<NetRole>, version: &str, password: Option<String>) -> Result<Self, String> {
         let output_lines: Vec<OutputLine> = Vec::new();
         let output_lines_ref = Arc::new(Mutex::new(Vec::<OutputLine>::new()));
-        let output_clone = output_lines_ref.clone();
 
-        let mut evaluator = Evaluator::new(Arc::new(move |text: &str| {
+        let output_clone = output_lines_ref.clone();
+        let output_fn: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |text: &str| {
             output_clone.lock().unwrap().push(OutputLine {
                 text: text.to_string(),
                 line_type: OutputLineType::Output,
             });
-        }));
-        register_core_primitives(&mut evaluator);
-
-        let stop_flag = evaluator.stop_flag();
-        let port_manager = Arc::new(Mutex::new(PortManager::new()));
+        });
         let system_output = output_lines_ref.clone();
         let system_fn: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |text: &str| {
             system_output.lock().unwrap().push(OutputLine {
@@ -121,8 +116,9 @@ impl App {
                 line_type: OutputLineType::System,
             });
         });
-        evaluator.set_system_fn(system_fn.clone());
-        register_hardware_primitives(&mut evaluator, port_manager.clone(), system_fn.clone());
+
+        let (mut evaluator, port_manager) = build_evaluator(output_fn, system_fn.clone());
+        let stop_flag = evaluator.stop_flag();
 
         // Set up networking if requested
         let mut net_status_arc: Option<Arc<Mutex<String>>> = None;
@@ -190,6 +186,13 @@ impl App {
         }
         self.output_lines.append(&mut buf);
         true
+    }
+
+    /// Disconnect every hardware adapter, stopping motors and releasing handles.
+    /// Call before exiting so the user's Build HAT / Control Lab motors don't
+    /// keep running after BrickLogo quits.
+    pub fn disconnect_all_hardware(&self) {
+        self.port_manager.lock().unwrap().remove_all();
     }
 
     /// Check if a background evaluation has completed. Call from the main loop.
