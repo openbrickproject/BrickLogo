@@ -23,10 +23,6 @@ pub struct CoralBle {
     adapter: Adapter,
     stop_flag: Option<Arc<AtomicBool>>,
     notification_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
-    /// Set by the spawned notification task when its stream ends or panics.
-    /// Read by `is_connected()` so the health watchdog can reap unexpected
-    /// disconnects.
-    notif_dead: Arc<AtomicBool>,
 }
 
 impl CoralBle {
@@ -40,7 +36,6 @@ impl CoralBle {
             adapter,
             stop_flag: None,
             notification_rx: None,
-            notif_dead: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -145,18 +140,14 @@ impl CoralBle {
                         .map_err(|e| format!("Subscribe failed: {}", e))
                 })?;
 
-                // Reset the dead flag for a fresh connection.
-                self.notif_dead.store(false, Ordering::SeqCst);
-
-                // Spawn background task to forward notifications to a channel
+                // Spawn background task to forward notifications to a channel.
+                // Wrapped in `catch_unwind` so a bluez-async panic during
+                // stream teardown stays contained to this task. The health
+                // watchdog asks btleplug directly whether the peripheral is
+                // still connected, so no cleanup signalling is needed here.
                 let (tx, rx) = std::sync::mpsc::channel();
                 let p_clone = p.clone();
-                let dead_flag = self.notif_dead.clone();
                 self.runtime.spawn(async move {
-                    // See `rust-poweredup`: catch panics from the underlying
-                    // notification stream so a flaky bluez-async teardown
-                    // doesn't take down the worker. The HAL health monitor
-                    // reaps the dead device on its next poll.
                     let _ = AssertUnwindSafe(async move {
                         if let Ok(mut stream) = p_clone.notifications().await {
                             while let Some(notif) = stream.next().await {
@@ -166,10 +157,6 @@ impl CoralBle {
                             }
                         }
                     }).catch_unwind().await;
-                    // Stream ended (clean disconnect or caught panic) — flag
-                    // the device as dead so `is_connected()` reports false
-                    // and the watchdog reaps the entry.
-                    dead_flag.store(true, Ordering::SeqCst);
                 });
                 self.notification_rx = Some(rx);
 
@@ -345,8 +332,13 @@ impl CoralBle {
         Ok(())
     }
 
+    /// Authoritative connection check: asks btleplug directly. See
+    /// `rust-poweredup`'s `is_connected` for rationale.
     pub fn is_connected(&self) -> bool {
-        self.coral.is_connected() && !self.notif_dead.load(Ordering::SeqCst)
+        match &self.peripheral {
+            Some(p) => self.runtime.block_on(p.is_connected()).unwrap_or(false),
+            None => false,
+        }
     }
 
     // ── Internal helpers ────────────────────────

@@ -184,13 +184,12 @@ impl PoweredUpBle {
                 let sensor_uuid = Uuid::parse_str(WEDO2_SENSOR_VALUE_UUID).unwrap();
                 let button_uuid = Uuid::parse_str(WEDO2_BUTTON_UUID).unwrap();
 
-                let hub_for_cleanup = hub.clone();
                 self.runtime.spawn(async move {
                     // Catch panics from the underlying notification stream
                     // (bluez-async on Linux can panic during teardown when a
                     // peripheral disconnects mid-flight). The health monitor
-                    // in `bricklogo-hal::health` will notice the dead
-                    // connection on its next poll and remove the device.
+                    // asks btleplug directly whether the peripheral is still
+                    // connected, so no cleanup signalling is needed here.
                     let _ = AssertUnwindSafe(async move {
                         while let Some(notif) = stream.next().await {
                             let mut hub = hub_clone.lock().unwrap();
@@ -231,11 +230,6 @@ impl PoweredUpBle {
                             }
                         }
                     }).catch_unwind().await;
-                    // The notification stream ended — either cleanly because
-                    // the peripheral disconnected, or via a caught panic.
-                    // Either way, mark the hub disconnected so the health
-                    // watchdog reaps the entry from the port manager.
-                    hub_for_cleanup.lock().unwrap().on_disconnected();
                 });
 
                 self.feedback_rx = Some(feedback_rx);
@@ -268,8 +262,16 @@ impl PoweredUpBle {
         self.hub.lock().unwrap().on_disconnected();
     }
 
+    /// Authoritative connection check: asks btleplug directly whether the
+    /// peripheral is still connected. Doesn't rely on the cached hub flag,
+    /// which only updates on explicit disconnect() or notification-stream
+    /// exit — neither of which is guaranteed to fire promptly on Linux
+    /// bluez-async when a peripheral drops unexpectedly.
     pub fn is_connected(&self) -> bool {
-        self.hub.lock().unwrap().is_connected()
+        match &self.peripheral {
+            Some(p) => self.runtime.block_on(p.is_connected()).unwrap_or(false),
+            None => false,
+        }
     }
 
     /// Send a raw command to the hub.
