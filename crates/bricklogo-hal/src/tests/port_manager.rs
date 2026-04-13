@@ -153,9 +153,36 @@ fn test_connection_order_preserved_after_use_and_remove() {
         vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
     );
 
+    // Removing the active device falls back to the most-recently-used
+    // remaining one. With only adds + one `use gamma`, the MRU stack is
+    // [alpha, beta, gamma]; removing gamma leaves beta at the top.
     pm.remove_device("gamma");
-    assert_eq!(pm.get_active_device_name(), Some("alpha"));
+    assert_eq!(pm.get_active_device_name(), Some("beta"));
     assert_eq!(pm.get_connected_device_names(), vec!["alpha".to_string(), "beta".to_string()]);
+}
+
+#[test]
+fn test_mru_fallback_after_multiple_use_calls() {
+    let mut pm = PortManager::new();
+    pm.add_device("alpha", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("beta", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("gamma", Box::new(MockAdapter::new(&["a"])));
+    // use beta, then gamma, then alpha — MRU = [beta, gamma, alpha]
+    pm.set_active_device("beta").unwrap();
+    pm.set_active_device("gamma").unwrap();
+    pm.set_active_device("alpha").unwrap();
+
+    // Removing alpha falls back to gamma (the previous most-recent).
+    pm.remove_device("alpha");
+    assert_eq!(pm.get_active_device_name(), Some("gamma"));
+
+    // Removing gamma falls back to beta.
+    pm.remove_device("gamma");
+    assert_eq!(pm.get_active_device_name(), Some("beta"));
+
+    // Removing beta — no devices left.
+    pm.remove_device("beta");
+    assert_eq!(pm.get_active_device_name(), None);
 }
 
 #[test]

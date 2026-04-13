@@ -179,21 +179,14 @@ pub fn register_hardware_primitives(
         "disconnect",
         PrimitiveSpec {
             min_args: 0,
-            max_args: 1,
-            func: Arc::new(move |args, _, _| {
+            max_args: 0,
+            func: Arc::new(move |_, _, _| {
                 let mut pm = pm_ref.lock().unwrap();
-                if let Some(name_val) = args.first() {
-                    let name = name_val.as_string().to_lowercase();
-                    if name == "all" {
-                        pm.remove_all();
-                    } else {
-                        pm.remove_device(&name);
-                    }
-                } else {
-                    if let Some(name) = pm.get_active_device_name().map(|s| s.to_string()) {
-                        pm.remove_device(&name);
-                    }
-                }
+                let name = pm
+                    .get_active_device_name()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| LogoError::Runtime("No active device".to_string()))?;
+                pm.remove_device(&name);
                 Ok(None)
             }),
         },

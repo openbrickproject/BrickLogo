@@ -133,19 +133,10 @@ fn reading_to_logo(reading: &SensorReading) -> LogoValue {
 
 impl HardwareAdapter for PoweredUpAdapter {
     fn display_name(&self) -> &str {
-        // Can't return &str from locked mutex, so use a static-ish approach
-        // The hub type doesn't change after connect
-        let hub = self.ble.hub.lock().unwrap();
-        match hub.hub_type {
-            HubType::WeDo2SmartHub => "WeDo 2.0 Smart Hub",
-            HubType::MoveHub => "Move Hub",
-            HubType::Hub => "Powered UP Hub",
-            HubType::RemoteControl => "Remote Control",
-            HubType::DuploTrainBase => "Duplo Train Base",
-            HubType::TechnicMediumHub => "Technic Medium Hub",
-            HubType::TechnicSmallHub => "Technic Small Hub",
-            _ => "Powered UP Hub",
-        }
+        // Delegates to HubType::display_name so retail-product names are
+        // maintained in one place. HubType is Copy and display_name returns
+        // &'static str, so no lifetime juggling against the Mutex.
+        self.ble.hub.lock().unwrap().hub_type.display_name()
     }
 
     fn output_ports(&self) -> &[String] {
@@ -169,8 +160,10 @@ impl HardwareAdapter for PoweredUpAdapter {
     }
 
     fn disconnect(&mut self) {
-        let _ = self.ble.send(&protocol::cmd_disconnect());
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Disconnect from our end — no LWP3 courtesy message. btleplug's
+        // GATT-level disconnect makes the hub firmware tear down its side
+        // cleanly, and sending bytes through a shared central at teardown
+        // time can ripple into other active connections on macOS.
         self.ble.disconnect();
     }
 

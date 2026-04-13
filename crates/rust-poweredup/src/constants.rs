@@ -32,16 +32,16 @@ pub enum HubType {
 }
 
 impl HubType {
-    pub fn display_name(&self) -> &str {
+    pub fn display_name(&self) -> &'static str {
         match self {
             HubType::Unknown => "Unknown Hub",
             HubType::WeDo2SmartHub => "WeDo 2.0 Smart Hub",
-            HubType::MoveHub => "Move Hub",
+            HubType::MoveHub => "Boost Move Hub",
             HubType::Hub => "Powered UP Hub",
-            HubType::RemoteControl => "Remote Control",
+            HubType::RemoteControl => "Powered UP Remote",
             HubType::DuploTrainBase => "Duplo Train Base",
-            HubType::TechnicMediumHub => "Technic Medium Hub",
-            HubType::TechnicSmallHub => "Technic Small Hub",
+            HubType::TechnicMediumHub => "Technic Medium Hub (Control+)",
+            HubType::TechnicSmallHub => "Technic Small Hub (SPIKE Essential)",
         }
     }
 

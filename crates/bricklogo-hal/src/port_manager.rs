@@ -34,7 +34,12 @@ struct DeviceEntry {
 
 pub struct PortManager {
     devices: HashMap<String, DeviceEntry>,
+    /// Insertion order, for UI display.
     device_order: Vec<String>,
+    /// Most-recently-used stack (end = most recent). Every `add_device` and
+    /// `set_active_device` call pushes the name to the end; `remove_device`
+    /// falls back to the new top.
+    mru: Vec<String>,
     active_device: Option<String>,
     flash_timers: HashMap<String, Arc<AtomicBool>>,
 }
@@ -44,19 +49,28 @@ impl PortManager {
         PortManager {
             devices: HashMap::new(),
             device_order: Vec::new(),
+            mru: Vec::new(),
             active_device: None,
             flash_timers: HashMap::new(),
         }
     }
 
+    fn touch_mru(&mut self, name: &str) {
+        self.mru.retain(|n| n != name);
+        self.mru.push(name.to_string());
+    }
+
     pub fn add_device(&mut self, name: &str, adapter: Box<dyn HardwareAdapter>) {
+        // Default power on a fresh port is half the device's native maximum,
+        // so `on` without a prior `setpower` runs at ~50% on every hub.
+        let default_power = adapter.max_power() / 2;
         let mut port_states = HashMap::new();
         for port in adapter.output_ports() {
             port_states.insert(
                 port.clone(),
                 OutputPortState {
                     direction: PortDirection::Even,
-                    power: 4,
+                    power: default_power,
                     is_running: false,
                 },
             );
@@ -70,6 +84,7 @@ impl PortManager {
             },
         );
         self.device_order.push(name.to_string());
+        self.touch_mru(name);
         if self.devices.len() == 1 {
             self.active_device = Some(name.to_string());
         }
@@ -95,12 +110,10 @@ impl PortManager {
             }
         }
         self.device_order.retain(|device_name| device_name != name);
+        self.mru.retain(|n| n != name);
         if self.active_device.as_deref() == Some(name) {
-            self.active_device = self
-                .device_order
-                .iter()
-                .find(|device_name| self.devices.contains_key(device_name.as_str()))
-                .cloned();
+            // Fall back to the most-recently-used remaining device.
+            self.active_device = self.mru.last().cloned();
         }
     }
 
@@ -120,12 +133,14 @@ impl PortManager {
         }
         self.active_device = None;
         self.device_order.clear();
+        self.mru.clear();
     }
 
     pub fn set_active_device(&mut self, name: &str) -> Result<(), String> {
         if !self.devices.contains_key(name) {
             return Err(format!("No device named \"{}\"", name));
         }
+        self.touch_mru(name);
         self.active_device = Some(name.to_string());
         Ok(())
     }
@@ -344,11 +359,12 @@ impl PortManager {
     pub fn ensure_port_states(&mut self, port_strs: &[String]) -> Result<(), String> {
         let ports = self.resolve_ports(port_strs)?;
         for qp in &ports {
+            let default_power = self.default_power_for(&qp.device_name);
             let entry = self.devices.get_mut(&qp.device_name)
                 .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
             entry.port_states.entry(qp.port.clone()).or_insert(OutputPortState {
                 direction: PortDirection::Even,
-                power: 4,
+                power: default_power,
                 is_running: false,
             });
         }
