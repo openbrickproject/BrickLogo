@@ -42,7 +42,26 @@ jobs:
         if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config zip
 
-      - name: Build
+      - name: Install zig + cargo-zigbuild (Linux)
+        if: matrix.platform == 'linux'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild (Linux)
+        if: matrix.platform == 'linux'
+        run: cargo install --locked cargo-zigbuild
+
+      # Linux: build with zigbuild against an old glibc so the binary runs on
+      # Debian Buster (2.28) and newer — covers every supported Raspberry Pi OS
+      # release. Without this, the runner's native glibc (2.39 on ubuntu-24.04)
+      # gets baked in and the binary won't run on older systems.
+      - name: Build (Linux)
+        if: matrix.platform == 'linux'
+        run: cargo zigbuild --release --bin bricklogo --target ${{ matrix.target }}.2.28
+
+      - name: Build (macOS / Windows)
+        if: matrix.platform != 'linux'
         run: cargo build --release --bin bricklogo --target ${{ matrix.target }}
 
       - name: Sign and notarize (macOS)
