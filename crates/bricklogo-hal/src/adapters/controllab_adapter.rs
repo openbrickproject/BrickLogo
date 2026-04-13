@@ -7,7 +7,7 @@ use rust_controllab::protocol::{encode_keep_alive, encode_output_power, get_outp
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const OUTPUT_PORTS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h"];
 const INPUT_PORTS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -29,9 +29,10 @@ fn to_signed_power(direction: PortDirection, power: u8) -> i8 {
 
 // ── Driver slot for Control Lab ─────────────────
 
-#[derive(Debug, Clone)]
+type ReplyTx = Option<mpsc::Sender<Result<(), String>>>;
+
 enum ControlLabCommand {
-    Power { mask: u8, power: i8 },
+    Power { mask: u8, power: i8, reply_tx: ReplyTx },
 }
 
 /// Shared state between the adapter and the driver slot.
@@ -81,21 +82,38 @@ impl DeviceSlot for ControlLabSlot {
 
         // ── Drain command queue and batch ─────
         let mut power_groups: HashMap<i8, u8> = HashMap::new();
+        let mut reply_senders: Vec<mpsc::Sender<Result<(), String>>> = Vec::new();
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
-                ControlLabCommand::Power { mask, power } => {
+                ControlLabCommand::Power { mask, power, reply_tx } => {
                     *power_groups.entry(power).or_insert(0) |= mask;
+                    if let Some(tx) = reply_tx {
+                        reply_senders.push(tx);
+                    }
                 }
             }
         }
 
         if !power_groups.is_empty() {
+            let mut result: Result<(), String> = Ok(());
             for (power, mask) in &power_groups {
                 let encoded = encode_output_power(*mask, *power);
-                let _ = self.port.write_all(&encoded);
+                if let Err(e) = self.port.write_all(&encoded) {
+                    result = Err(format!("Write failed: {}", e));
+                    break;
+                }
             }
-            let _ = self.port.flush();
-            self.last_write = Instant::now();
+            if result.is_ok() {
+                if let Err(e) = self.port.flush() {
+                    result = Err(format!("Flush failed: {}", e));
+                }
+            }
+            if result.is_ok() {
+                self.last_write = Instant::now();
+            }
+            for tx in reply_senders {
+                let _ = tx.send(result.clone());
+            }
         }
 
         // ── Keep-alive ───────────────────────
@@ -215,24 +233,31 @@ impl HardwareAdapter for ControlLabAdapter {
         let mask = get_output_port_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         let signed = to_signed_power(direction, power);
+        let (tx, rx) = mpsc::channel();
         self.tx
             .as_ref()
             .ok_or("Not connected")?
             .send(ControlLabCommand::Power {
                 mask,
                 power: signed,
+                reply_tx: Some(tx),
             })
-            .map_err(|_| "Send failed".to_string())
+            .map_err(|_| "Send failed".to_string())?;
+        rx.recv_timeout(Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let mask = get_output_port_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+        let (tx, rx) = mpsc::channel();
         self.tx
             .as_ref()
             .ok_or("Not connected")?
-            .send(ControlLabCommand::Power { mask, power: 0 })
-            .map_err(|_| "Send failed".to_string())
+            .send(ControlLabCommand::Power { mask, power: 0, reply_tx: Some(tx) })
+            .map_err(|_| "Send failed".to_string())?;
+        rx.recv_timeout(Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     fn run_port_for_time(
@@ -358,7 +383,7 @@ impl HardwareAdapter for ControlLabAdapter {
     // ── Batch overrides ─────────────────────────
 
     fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
-        let tx = self.tx.as_ref().ok_or("Not connected")?;
+        let tx_ch = self.tx.as_ref().ok_or("Not connected")?;
         let mut groups: HashMap<i8, u8> = HashMap::new();
         for cmd in commands {
             let power = to_signed_power(cmd.direction, cmd.power);
@@ -366,26 +391,34 @@ impl HardwareAdapter for ControlLabAdapter {
                 .ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
             *groups.entry(power).or_insert(0) |= mask;
         }
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let count = groups.len();
         for (power, mask) in groups {
-            tx.send(ControlLabCommand::Power { mask, power })
+            tx_ch.send(ControlLabCommand::Power { mask, power, reply_tx: if count == 1 { Some(reply_tx.clone()) } else { Some(reply_tx.clone()) } })
                 .map_err(|_| "Send failed".to_string())?;
         }
-        Ok(())
+        // Wait for at least one reply (all go in the same tick batch)
+        reply_rx.recv_timeout(Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
-        let tx = self.tx.as_ref().ok_or("Not connected")?;
+        let tx_ch = self.tx.as_ref().ok_or("Not connected")?;
         let mut combined_mask: u8 = 0;
         for port in ports {
             let mask = get_output_port_mask(&port.to_uppercase())
                 .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
             combined_mask |= mask;
         }
-        tx.send(ControlLabCommand::Power {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        tx_ch.send(ControlLabCommand::Power {
             mask: combined_mask,
             power: 0,
+            reply_tx: Some(reply_tx),
         })
-        .map_err(|_| "Send failed".to_string())
+        .map_err(|_| "Send failed".to_string())?;
+        reply_rx.recv_timeout(Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {

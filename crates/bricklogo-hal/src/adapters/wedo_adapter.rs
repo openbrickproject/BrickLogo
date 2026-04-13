@@ -20,10 +20,12 @@ fn to_signed_power(direction: PortDirection, power: u8) -> i32 {
 
 // ── Driver slot for WeDo ────────────────────────
 
-#[derive(Debug, Clone)]
+type ReplyTx = Option<mpsc::Sender<Result<(), String>>>;
+
 struct WeDoMotorCommand {
     motor_a: i8,
     motor_b: i8,
+    reply_tx: ReplyTx,
 }
 
 /// Shared state between the adapter and the driver slot.
@@ -94,8 +96,14 @@ impl DeviceSlot for WeDoSlot {
 
         // ── Drain motor command queue ────────
         // Take the last command only (most recent state wins)
+        // Superseded commands get Ok since they were intentionally replaced
         let mut last_cmd: Option<WeDoMotorCommand> = None;
         while let Ok(cmd) = self.rx.try_recv() {
+            if let Some(prev) = last_cmd.take() {
+                if let Some(tx) = prev.reply_tx {
+                    let _ = tx.send(Ok(()));
+                }
+            }
             last_cmd = Some(cmd);
         }
 
@@ -104,7 +112,12 @@ impl DeviceSlot for WeDoSlot {
             self.motor_values[1] = cmd.motor_b;
             let encoded =
                 encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
-            let _ = self.device.write(&encoded);
+            let result = self.device.write(&encoded)
+                .map(|_| ())
+                .map_err(|e| format!("HID write failed: {}", e));
+            if let Some(tx) = cmd.reply_tx {
+                let _ = tx.send(result);
+            }
         }
     }
 
@@ -147,14 +160,18 @@ impl WeDoAdapter {
     }
 
     fn send_motor_state(&self) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
         self.tx
             .as_ref()
             .ok_or("Not connected")?
             .send(WeDoMotorCommand {
                 motor_a: self.motor_values[0],
                 motor_b: self.motor_values[1],
+                reply_tx: Some(tx),
             })
-            .map_err(|_| "Send failed".to_string())
+            .map_err(|_| "Send failed".to_string())?;
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 }
 

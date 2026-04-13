@@ -72,6 +72,21 @@ impl PoweredUpAdapter {
             .copied()
             .ok_or_else(|| format!("Unknown port \"{}\"", port))
     }
+
+    fn is_wedo2(&self) -> bool {
+        self.ble.hub.lock().unwrap().hub_type.is_wedo2()
+    }
+
+    fn reject_if_wedo2(&self, op: &str) -> Result<(), String> {
+        if self.is_wedo2() {
+            Err(format!(
+                "WeDo 2.0 Smart Hub does not support {}",
+                op
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Map internal device types to port names for sensors built into the hub.
@@ -188,13 +203,21 @@ impl HardwareAdapter for PoweredUpAdapter {
     ) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
-        let cmd = protocol::cmd_set_power(port_id, speed, true);
+        let cmd = if self.is_wedo2() {
+            protocol::wedo2_cmd_motor(port_id, speed)
+        } else {
+            protocol::cmd_set_power(port_id, speed, true)
+        };
         self.ble.send(&cmd)
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
-        let cmd = protocol::cmd_motor_stop(port_id, true);
+        let cmd = if self.is_wedo2() {
+            protocol::wedo2_cmd_motor(port_id, 0)
+        } else {
+            protocol::cmd_motor_stop(port_id, true)
+        };
         self.ble.send(&cmd)
     }
 
@@ -208,7 +231,8 @@ impl HardwareAdapter for PoweredUpAdapter {
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
 
-        let is_tacho = {
+        let is_wedo2 = self.is_wedo2();
+        let is_tacho = !is_wedo2 && {
             let hub = self.ble.hub.lock().unwrap();
             hub.get_device(port_id)
                 .map_or(false, |d| d.device_type.is_tacho_motor())
@@ -226,11 +250,19 @@ impl HardwareAdapter for PoweredUpAdapter {
             );
             self.ble.request(port_id, &cmd)?;
         } else {
-            let cmd = protocol::cmd_set_power(port_id, speed, true);
-            self.ble.send(&cmd)?;
+            let start_cmd = if is_wedo2 {
+                protocol::wedo2_cmd_motor(port_id, speed)
+            } else {
+                protocol::cmd_set_power(port_id, speed, true)
+            };
+            self.ble.send(&start_cmd)?;
             std::thread::sleep(std::time::Duration::from_millis((tenths * 100) as u64));
-            let cmd = protocol::cmd_motor_stop(port_id, true);
-            self.ble.send(&cmd)?;
+            let stop_cmd = if is_wedo2 {
+                protocol::wedo2_cmd_motor(port_id, 0)
+            } else {
+                protocol::cmd_motor_stop(port_id, true)
+            };
+            self.ble.send(&stop_cmd)?;
         }
         Ok(())
     }
@@ -242,6 +274,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         power: u8,
         degrees: i32,
     ) -> Result<(), String> {
+        self.reject_if_wedo2("rotation by degrees")?;
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd = protocol::cmd_start_speed_for_degrees(
@@ -263,6 +296,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
+        self.reject_if_wedo2("rotation to position")?;
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd =
@@ -272,6 +306,7 @@ impl HardwareAdapter for PoweredUpAdapter {
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
+        self.reject_if_wedo2("position reset")?;
         let port_id = self.resolve_port_id(port)?;
         let cmd = protocol::cmd_reset_zero(port_id, true);
         self.ble.send(&cmd)
@@ -283,6 +318,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         direction: PortDirection,
         power: u8,
     ) -> Result<(), String> {
+        self.reject_if_wedo2("absolute positioning")?;
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
@@ -336,11 +372,12 @@ impl HardwareAdapter for PoweredUpAdapter {
         // Check which ports are tacho vs basic
         let mut tacho_cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         let mut basic_ports: Vec<(u8, PortDirection, u8)> = Vec::new();
+        let is_wedo2 = self.is_wedo2();
 
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;
             let speed = to_signed_speed(cmd.direction, cmd.power);
-            let is_tacho = {
+            let is_tacho = !is_wedo2 && {
                 let hub = self.ble.hub.lock().unwrap();
                 hub.get_device(port_id)
                     .map_or(false, |d| d.device_type.is_tacho_motor())
@@ -365,7 +402,11 @@ impl HardwareAdapter for PoweredUpAdapter {
         // Start basic motors
         for (port_id, direction, power) in &basic_ports {
             let speed = to_signed_speed(*direction, *power);
-            let msg = protocol::cmd_set_power(*port_id, speed, true);
+            let msg = if is_wedo2 {
+                protocol::wedo2_cmd_motor(*port_id, speed)
+            } else {
+                protocol::cmd_set_power(*port_id, speed, true)
+            };
             self.ble.send(&msg)?;
         }
 
@@ -382,7 +423,11 @@ impl HardwareAdapter for PoweredUpAdapter {
 
         // Stop basic motors
         for (port_id, _, _) in &basic_ports {
-            let msg = protocol::cmd_motor_stop(*port_id, true);
+            let msg = if is_wedo2 {
+                protocol::wedo2_cmd_motor(*port_id, 0)
+            } else {
+                protocol::cmd_motor_stop(*port_id, true)
+            };
             self.ble.send(&msg)?;
         }
 
@@ -394,6 +439,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
+        self.reject_if_wedo2("rotation to position")?;
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;
@@ -415,6 +461,7 @@ impl HardwareAdapter for PoweredUpAdapter {
     }
 
     fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        self.reject_if_wedo2("absolute positioning")?;
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;
@@ -433,6 +480,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         commands: &[PortCommand],
         degrees: i32,
     ) -> Result<(), String> {
+        self.reject_if_wedo2("rotation by degrees")?;
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;

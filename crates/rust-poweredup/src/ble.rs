@@ -374,8 +374,20 @@ impl PoweredUpBle {
 
     /// Subscribe to a sensor mode on a port.
     pub fn subscribe(&self, port_id: u8, mode: u8) -> Result<(), String> {
-        let cmd = protocol::cmd_subscribe(port_id, mode);
-        self.send(&cmd)?;
+        let (is_wedo2, device_type) = {
+            let hub = self.hub.lock().unwrap();
+            let dt = hub.get_device(port_id).map(|d| d.device_type as u8);
+            (hub.hub_type.is_wedo2(), dt)
+        };
+        if is_wedo2 {
+            let dt = device_type
+                .ok_or_else(|| format!("No device on port {} to subscribe", port_id))?;
+            let cmd = protocol::wedo2_cmd_subscribe(port_id, dt, mode);
+            self.send_wedo2(WEDO2_PORT_TYPE_WRITE_UUID, &cmd)?;
+        } else {
+            let cmd = protocol::cmd_subscribe(port_id, mode);
+            self.send(&cmd)?;
+        }
         self.hub.lock().unwrap().set_subscribed_mode(port_id, mode);
         Ok(())
     }

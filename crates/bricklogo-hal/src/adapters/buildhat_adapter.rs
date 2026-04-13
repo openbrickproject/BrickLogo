@@ -15,14 +15,15 @@ const ALL_PORTS: [&str; 4] = ["a", "b", "c", "d"];
 
 // ── Commands queued for the driver slot ─────────
 
-#[derive(Debug, Clone)]
+type ReplyTx = Option<mpsc::Sender<Result<(), String>>>;
+
 #[allow(dead_code)]
 enum BuildHATCommand {
     Raw(String),
-    MotorSet { port: u8, speed: i32 },
-    MotorSpeed { port: u8, speed: i32 },
-    MotorCoast { port: u8 },
-    MotorOff { port: u8 },
+    MotorSet { port: u8, speed: i32, reply_tx: ReplyTx },
+    MotorSpeed { port: u8, speed: i32, reply_tx: ReplyTx },
+    MotorCoast { port: u8, reply_tx: ReplyTx },
+    MotorOff { port: u8, reply_tx: ReplyTx },
     MotorPulse { port: u8, speed: i32, seconds: f64 },
     MotorRamp { port: u8, from: f64, to: f64, duration: f64 },
     SelectMode { port: u8, mode: u8 },
@@ -86,6 +87,17 @@ impl BuildHATSlot {
     fn write_cmd(&mut self, cmd: &str) {
         let _ = self.port.write_all(cmd.as_bytes());
         let _ = self.port.flush();
+    }
+
+    fn write_cmd_checked(&mut self, cmd: &str) -> Result<(), String> {
+        self.port.write_all(cmd.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+        self.port.flush().map_err(|e| format!("Flush failed: {}", e))
+    }
+
+    fn reply(tx: ReplyTx, result: Result<(), String>) {
+        if let Some(tx) = tx {
+            let _ = tx.send(result);
+        }
     }
 }
 
@@ -189,17 +201,21 @@ impl DeviceSlot for BuildHATSlot {
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
                 BuildHATCommand::Raw(s) => self.write_cmd(&s),
-                BuildHATCommand::MotorSet { port, speed } => {
-                    self.write_cmd(&cmd_motor_set(port, speed));
+                BuildHATCommand::MotorSet { port, speed, reply_tx } => {
+                    let r = self.write_cmd_checked(&cmd_motor_set(port, speed));
+                    Self::reply(reply_tx, r);
                 }
-                BuildHATCommand::MotorSpeed { port, speed } => {
-                    self.write_cmd(&cmd_motor_speed(port, speed));
+                BuildHATCommand::MotorSpeed { port, speed, reply_tx } => {
+                    let r = self.write_cmd_checked(&cmd_motor_speed(port, speed));
+                    Self::reply(reply_tx, r);
                 }
-                BuildHATCommand::MotorCoast { port } => {
-                    self.write_cmd(&cmd_motor_coast(port));
+                BuildHATCommand::MotorCoast { port, reply_tx } => {
+                    let r = self.write_cmd_checked(&cmd_motor_coast(port));
+                    Self::reply(reply_tx, r);
                 }
-                BuildHATCommand::MotorOff { port } => {
-                    self.write_cmd(&cmd_motor_off(port));
+                BuildHATCommand::MotorOff { port, reply_tx } => {
+                    let r = self.write_cmd_checked(&cmd_motor_off(port));
+                    Self::reply(reply_tx, r);
                 }
                 BuildHATCommand::MotorPulse { port, speed, seconds } => {
                     {
@@ -284,6 +300,13 @@ impl BuildHATAdapter {
     fn send_cmd(&self, cmd: BuildHATCommand) -> Result<(), String> {
         self.tx.as_ref().ok_or("Not connected")?
             .send(cmd).map_err(|_| "Send failed".to_string())
+    }
+
+    fn send_cmd_wait(&self, cmd_fn: impl FnOnce(ReplyTx) -> BuildHATCommand) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        self.send_cmd(cmd_fn(Some(tx)))?;
+        rx.recv_timeout(Duration::from_millis(500))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     fn wait_for_completion(&self, port: u8, timeout_secs: u64) -> Result<(), String> {
@@ -481,13 +504,12 @@ impl HardwareAdapter for BuildHATAdapter {
         let idx = self.port_index(port)?;
         self.require_device(idx)?;
         let speed = to_signed_speed(direction, power);
-        // Direct PWM for all motors (matches Powered UP behavior)
-        self.send_cmd(BuildHATCommand::MotorSet { port: idx, speed })
+        self.send_cmd_wait(|reply_tx| BuildHATCommand::MotorSet { port: idx, speed, reply_tx })
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let idx = self.port_index(port)?;
-        self.send_cmd(BuildHATCommand::MotorCoast { port: idx })
+        self.send_cmd_wait(|reply_tx| BuildHATCommand::MotorCoast { port: idx, reply_tx })
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {

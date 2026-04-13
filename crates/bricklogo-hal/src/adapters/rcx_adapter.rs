@@ -25,12 +25,13 @@ fn power_to_rcx(power: u8) -> u8 {
 
 // ── Driver slot for RCX ─────────────────────────
 
-#[derive(Debug, Clone)]
+type ReplyTx = Option<mpsc::Sender<Result<(), String>>>;
+
 enum RcxCommand {
-    SetDirection { mask: u8, direction: u8 },
-    SetPower { mask: u8, power: u8 },
-    MotorOn { mask: u8 },
-    MotorOff { mask: u8 },
+    SetDirection { mask: u8, direction: u8, reply_tx: ReplyTx },
+    SetPower { mask: u8, power: u8, reply_tx: ReplyTx },
+    MotorOn { mask: u8, reply_tx: ReplyTx },
+    MotorOff { mask: u8, reply_tx: ReplyTx },
     SetSensorType { sensor: u8, sensor_type: u8 },
     SetSensorMode { sensor: u8, mode: u8 },
     ReadSensor { sensor: u8, source: u8, reply_tx: mpsc::Sender<Result<i16, String>> },
@@ -173,12 +174,20 @@ struct RcxSlot {
 }
 
 impl RcxSlot {
-    fn send_with_retry(&mut self, msg: &[u8]) {
+    fn send_with_retry(&mut self, msg: &[u8]) -> Result<(), String> {
+        let mut last_err = String::new();
         for _ in 0..COMMAND_RETRIES {
             match self.transport.request(msg) {
-                Ok(_) => return,
-                Err(_) => continue,
+                Ok(_) => return Ok(()),
+                Err(e) => last_err = e,
             }
+        }
+        Err(last_err)
+    }
+
+    fn reply(tx: ReplyTx, result: Result<(), String>) {
+        if let Some(tx) = tx {
+            let _ = tx.send(result);
         }
     }
 }
@@ -188,29 +197,33 @@ impl DeviceSlot for RcxSlot {
         // Drain command queue
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
-                RcxCommand::SetDirection { mask, direction } => {
+                RcxCommand::SetDirection { mask, direction, reply_tx } => {
                     let msg = protocol::cmd_set_direction(mask, direction);
-                    self.send_with_retry(&msg);
+                    let r = self.send_with_retry(&msg);
+                    Self::reply(reply_tx, r);
                 }
-                RcxCommand::SetPower { mask, power } => {
+                RcxCommand::SetPower { mask, power, reply_tx } => {
                     let msg = protocol::cmd_set_power(mask, power);
-                    self.send_with_retry(&msg);
+                    let r = self.send_with_retry(&msg);
+                    Self::reply(reply_tx, r);
                 }
-                RcxCommand::MotorOn { mask } => {
+                RcxCommand::MotorOn { mask, reply_tx } => {
                     let msg = protocol::cmd_set_motor_state(mask, MOTOR_ON);
-                    self.send_with_retry(&msg);
+                    let r = self.send_with_retry(&msg);
+                    Self::reply(reply_tx, r);
                 }
-                RcxCommand::MotorOff { mask } => {
+                RcxCommand::MotorOff { mask, reply_tx } => {
                     let msg = protocol::cmd_set_motor_state(mask, MOTOR_OFF);
-                    self.send_with_retry(&msg);
+                    let r = self.send_with_retry(&msg);
+                    Self::reply(reply_tx, r);
                 }
                 RcxCommand::SetSensorType { sensor, sensor_type } => {
                     let msg = protocol::cmd_set_sensor_type(sensor, sensor_type);
-                    self.send_with_retry(&msg);
+                    let _ = self.send_with_retry(&msg);
                 }
                 RcxCommand::SetSensorMode { sensor, mode } => {
                     let msg = protocol::cmd_set_sensor_mode(sensor, mode);
-                    self.send_with_retry(&msg);
+                    let _ = self.send_with_retry(&msg);
                 }
                 RcxCommand::ReadSensor { sensor, source, reply_tx } => {
                     let msg = protocol::cmd_get_value(source, sensor);
@@ -258,6 +271,13 @@ impl RcxAdapter {
     fn send_cmd(&self, cmd: RcxCommand) -> Result<(), String> {
         self.tx.as_ref().ok_or("Not connected")?
             .send(cmd).map_err(|_| "Send failed".to_string())
+    }
+
+    fn send_cmd_wait(&self, cmd_fn: impl FnOnce(ReplyTx) -> RcxCommand) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        self.send_cmd(cmd_fn(Some(tx)))?;
+        rx.recv_timeout(std::time::Duration::from_millis(2000))
+            .map_err(|_| "Command timed out".to_string())?
     }
 
     /// Get the serial path (None = USB tower).
@@ -341,16 +361,16 @@ impl HardwareAdapter for RcxAdapter {
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
         let mask = motor_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.send_cmd(RcxCommand::SetDirection { mask, direction: to_direction(direction) })?;
-        self.send_cmd(RcxCommand::SetPower { mask, power: power_to_rcx(power) })?;
-        self.send_cmd(RcxCommand::MotorOn { mask })
+        self.send_cmd_wait(|reply_tx| RcxCommand::SetDirection { mask, direction: to_direction(direction), reply_tx })?;
+        self.send_cmd_wait(|reply_tx| RcxCommand::SetPower { mask, power: power_to_rcx(power), reply_tx })?;
+        self.send_cmd_wait(|reply_tx| RcxCommand::MotorOn { mask, reply_tx })
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let mask = motor_mask(&port.to_uppercase())
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.send_cmd(RcxCommand::SetPower { mask, power: 0 })?;
-        self.send_cmd(RcxCommand::MotorOff { mask })
+        self.send_cmd_wait(|reply_tx| RcxCommand::SetPower { mask, power: 0, reply_tx })?;
+        self.send_cmd_wait(|reply_tx| RcxCommand::MotorOff { mask, reply_tx })
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
@@ -449,22 +469,27 @@ impl HardwareAdapter for RcxAdapter {
                 .ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
             combined_mask |= mask;
             // Direction per motor (may differ)
-            self.send_cmd(RcxCommand::SetDirection { mask, direction: to_direction(cmd.direction) })?;
+            let dir = to_direction(cmd.direction);
+            self.send_cmd_wait(|reply_tx| RcxCommand::SetDirection { mask, direction: dir, reply_tx })?;
         }
 
         // Power — batch if all same
         let powers: Vec<u8> = commands.iter().map(|c| power_to_rcx(c.power)).collect();
         if powers.windows(2).all(|w| w[0] == w[1]) {
-            self.send_cmd(RcxCommand::SetPower { mask: combined_mask, power: powers[0] })?;
+            let p = powers[0];
+            let m = combined_mask;
+            self.send_cmd_wait(|reply_tx| RcxCommand::SetPower { mask: m, power: p, reply_tx })?;
         } else {
             for cmd in commands {
                 let mask = motor_mask(&cmd.port.to_uppercase()).unwrap();
-                self.send_cmd(RcxCommand::SetPower { mask, power: power_to_rcx(cmd.power) })?;
+                let p = power_to_rcx(cmd.power);
+                self.send_cmd_wait(|reply_tx| RcxCommand::SetPower { mask, power: p, reply_tx })?;
             }
         }
 
         // Turn all on at once
-        self.send_cmd(RcxCommand::MotorOn { mask: combined_mask })
+        let m = combined_mask;
+        self.send_cmd_wait(|reply_tx| RcxCommand::MotorOn { mask: m, reply_tx })
     }
 
     fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
@@ -474,13 +499,10 @@ impl HardwareAdapter for RcxAdapter {
                 .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
             combined_mask |= mask;
         }
-        self.send_cmd(RcxCommand::SetPower {
-            mask: combined_mask,
-            power: 0,
-        })?;
-        self.send_cmd(RcxCommand::MotorOff {
-            mask: combined_mask,
-        })
+        let m = combined_mask;
+        self.send_cmd_wait(|reply_tx| RcxCommand::SetPower { mask: m, power: 0, reply_tx })?;
+        let m = combined_mask;
+        self.send_cmd_wait(|reply_tx| RcxCommand::MotorOff { mask: m, reply_tx })
     }
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
