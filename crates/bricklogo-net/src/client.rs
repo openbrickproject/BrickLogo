@@ -16,6 +16,30 @@ const READ_TIMEOUT_MS: u64 = 10;
 
 type WsStream = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
+/// Decode a WebSocket frame into a NetMessage, picking the parser by frame type.
+/// Returns None for non-data frames (Ping/Pong/Close) or undecodable payloads.
+fn decode_ws_message(msg: &Message) -> Option<NetMessage> {
+    match msg {
+        Message::Text(text) => protocol::decode_json(text).ok(),
+        Message::Binary(data) => protocol::decode_binary(data).ok(),
+        _ => None,
+    }
+}
+
+/// Merge a snapshot's vars into the local global-var map.
+/// Snapshot is strictly additive — never deletes existing vars — so a
+/// reconnect to a freshly-restarted host with an empty snapshot doesn't
+/// drop state the client already has.
+fn apply_snapshot(
+    global_vars: &Arc<RwLock<HashMap<String, LogoValue>>>,
+    vars: HashMap<String, LogoValue>,
+) {
+    let mut gv = global_vars.write().unwrap();
+    for (k, v) in vars {
+        gv.insert(k, v);
+    }
+}
+
 fn connect_and_sync(
     addr: &str,
     global_vars: &Arc<RwLock<HashMap<String, LogoValue>>>,
@@ -33,57 +57,23 @@ fn connect_and_sync(
     ws.send(Message::Text(protocol::encode_json(&hello).into()))
         .map_err(|e| format!("Failed to send hello: {}", e))?;
 
-    // Expect binary Hi back
-    let msg = ws.read()
+    // Expect Hi back (host may answer in either binary or JSON)
+    let raw = ws.read()
         .map_err(|e| format!("Failed to read hi: {}", e))?;
-    match &msg {
-        Message::Binary(data) => {
-            match protocol::decode_binary(data) {
-                Ok(NetMessage::Hi) => {}
-                _ => return Err("Expected Hi from host".to_string()),
-            }
-        }
-        Message::Text(text) => {
-            match protocol::decode_json(text) {
-                Ok(NetMessage::Hi) => {}
-                _ => return Err("Expected Hi from host".to_string()),
-            }
-        }
+    match decode_ws_message(&raw) {
+        Some(NetMessage::Hi) => {}
         _ => return Err("Expected Hi from host".to_string()),
     }
 
-    // Send sync (binary)
+    // Request snapshot
     ws.send(Message::Binary(protocol::encode_binary(&NetMessage::Sync).into()))
         .map_err(|e| format!("Failed to send sync: {}", e))?;
 
-    // Receive snapshot (binary)
-    let snap_msg = ws.read()
+    // Receive snapshot
+    let raw = ws.read()
         .map_err(|e| format!("Failed to read snapshot: {}", e))?;
-    match &snap_msg {
-        Message::Binary(data) => {
-            match protocol::decode_binary(data)? {
-                NetMessage::Snapshot { vars } => {
-                    let mut gv = global_vars.write().unwrap();
-                    gv.clear();
-                    for (k, v) in vars {
-                        gv.insert(k, v);
-                    }
-                }
-                _ => return Err("Expected snapshot from host".to_string()),
-            }
-        }
-        Message::Text(text) => {
-            match protocol::decode_json(text)? {
-                NetMessage::Snapshot { vars } => {
-                    let mut gv = global_vars.write().unwrap();
-                    gv.clear();
-                    for (k, v) in vars {
-                        gv.insert(k, v);
-                    }
-                }
-                _ => return Err("Expected snapshot from host".to_string()),
-            }
-        }
+    match decode_ws_message(&raw) {
+        Some(NetMessage::Snapshot { vars }) => apply_snapshot(global_vars, vars),
         _ => return Err("Expected snapshot from host".to_string()),
     }
 
@@ -104,20 +94,14 @@ fn run_loop(
     }
 
     loop {
-        // Read incoming (binary mode)
+        // Read incoming (binary or text — same handler either way)
         match ws.read() {
-            Ok(Message::Binary(data)) => {
-                if let Ok(msg) = protocol::decode_binary(&data) {
-                    handle_incoming(msg, global_vars);
-                }
-            }
-            Ok(Message::Text(text)) => {
-                if let Ok(msg) = protocol::decode_json(&text) {
-                    handle_incoming(msg, global_vars);
-                }
-            }
             Ok(Message::Close(_)) => break,
-            Ok(_) => {}
+            Ok(raw) => {
+                if let Some(msg) = decode_ws_message(&raw) {
+                    handle_incoming(msg, global_vars);
+                }
+            }
             Err(tungstenite::Error::Io(ref e))
                 if e.kind() == std::io::ErrorKind::TimedOut
                     || e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -138,18 +122,10 @@ fn run_loop(
 
 fn handle_incoming(msg: NetMessage, global_vars: &Arc<RwLock<HashMap<String, LogoValue>>>) {
     match msg {
-        NetMessage::Set { vars } => {
-            let mut gv = global_vars.write().unwrap();
-            for (name, value) in vars {
-                gv.insert(name, value);
-            }
-        }
-        NetMessage::Snapshot { vars } => {
-            let mut gv = global_vars.write().unwrap();
-            gv.clear();
-            for (k, v) in vars {
-                gv.insert(k, v);
-            }
+        // Set and Snapshot have identical apply semantics — both merge into the
+        // local global-var map. Snapshot is just a bulk Set sent on connect/sync.
+        NetMessage::Set { vars } | NetMessage::Snapshot { vars } => {
+            apply_snapshot(global_vars, vars);
         }
         _ => {}
     }
