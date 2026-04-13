@@ -56,8 +56,15 @@ jobs:
       # Debian Buster (2.28) and newer — covers every supported Raspberry Pi OS
       # release. Without this, the runner's native glibc (2.39 on ubuntu-24.04)
       # gets baked in and the binary won't run on older systems.
+      #
+      # zig bundles its own glibc headers but not third-party system headers
+      # like libudev.h (hidapi) or dbus/dbus.h (btleplug). Point its toolchain
+      # at the runner's system include and lib dirs via CPATH / LIBRARY_PATH.
       - name: Build (Linux)
         if: matrix.platform == 'linux'
+        env:
+          CPATH: /usr/include/aarch64-linux-gnu:/usr/include
+          LIBRARY_PATH: /usr/lib/aarch64-linux-gnu:/usr/lib
         run: cargo zigbuild --release --bin bricklogo --target ${{ matrix.target }}.2.28
 
       - name: Build (macOS / Windows)
