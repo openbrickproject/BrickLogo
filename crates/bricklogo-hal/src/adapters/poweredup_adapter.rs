@@ -174,8 +174,8 @@ impl HardwareAdapter for PoweredUpAdapter {
         let port_id = self.resolve_port_id(port)?;
         let hub = self.ble.hub.lock().unwrap();
         match hub.get_device(port_id) {
-            Some(device) if device.device_type.is_motor() => Ok(()),
-            Some(_) => Err(format!("Port \"{}\" is not a motor", port)),
+            Some(device) if device.device_type.is_power_output() => Ok(()),
+            Some(_) => Err(format!("Port \"{}\" is not a motor or light", port)),
             None => Err(format!("No device on port \"{}\"", port)),
         }
     }

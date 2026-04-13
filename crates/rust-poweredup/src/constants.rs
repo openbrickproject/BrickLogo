@@ -202,6 +202,12 @@ impl DeviceType {
                 | DeviceType::TechnicLargeAngularMotorGrey
         )
     }
+
+    /// Returns true if this device accepts a power/brightness value via the
+    /// motor command path (motors and the LPF2 LED Light).
+    pub fn is_power_output(&self) -> bool {
+        self.is_motor() || matches!(self, DeviceType::Light)
+    }
 }
 
 // ── LWP3 Message Types ───────────────────────────
