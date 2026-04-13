@@ -1,9 +1,10 @@
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::api::{Central, Peripheral as _, ScanFilter, WriteType};
+use btleplug::platform::{Adapter, Peripheral};
 use futures::StreamExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::constants::*;
@@ -17,18 +18,22 @@ const LEGO_COMPANY_ID: u16 = 0x0397;
 pub struct PoweredUpBle {
     pub hub: Arc<Mutex<Hub>>,
     peripheral: Option<Peripheral>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<Runtime>,
+    adapter: Adapter,
     stop_flag: Option<Arc<AtomicBool>>,
     feedback_rx: Option<std::sync::mpsc::Receiver<PortFeedback>>,
 }
 
 impl PoweredUpBle {
-    pub fn new() -> Self {
-        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    /// Construct a `PoweredUpBle` against a shared BLE context. The same
+    /// `Runtime` and `Adapter` should be passed to every BLE-using adapter
+    /// in the process — see `bricklogo-hal`'s `ble::ble_context()`.
+    pub fn new(runtime: Arc<Runtime>, adapter: Adapter) -> Self {
         PoweredUpBle {
             hub: Arc::new(Mutex::new(Hub::new(HubType::Unknown))),
             peripheral: None,
             runtime,
+            adapter,
             stop_flag: None,
             feedback_rx: None,
         }
@@ -44,20 +49,9 @@ impl PoweredUpBle {
             .map_or(false, |f| f.load(Ordering::SeqCst))
     }
 
-    /// Scan and connect to the first Powered UP hub found.
+    /// Scan and connect to the first unclaimed Powered UP hub found.
     pub fn connect(&mut self) -> Result<(), String> {
-        let manager = self.runtime.block_on(async {
-            Manager::new()
-                .await
-                .map_err(|e| format!("BLE init failed: {}", e))
-        })?;
-        let adapters = self.runtime.block_on(async {
-            manager
-                .adapters()
-                .await
-                .map_err(|e| format!("No BLE adapter: {}", e))
-        })?;
-        let adapter = adapters.into_iter().next().ok_or("No BLE adapter found")?;
+        let adapter = &self.adapter;
 
         self.runtime.block_on(async {
             adapter
@@ -89,6 +83,15 @@ impl PoweredUpBle {
             })?;
 
             for p in peripherals {
+                // Skip peripherals already connected — either by this adapter
+                // instance or by another `PoweredUpBle` / `CoralBle` sharing
+                // the same central. btleplug's `connect()` is idempotent, so
+                // without this check a second `connectto "pup` would silently
+                // re-latch onto the already-owned hub.
+                if self.runtime.block_on(p.is_connected()).unwrap_or(false) {
+                    continue;
+                }
+
                 let props = match self.runtime.block_on(p.properties()) {
                     Ok(Some(props)) => props,
                     _ => continue,

@@ -36,8 +36,9 @@ pub struct CoralAdapter {
 
 impl CoralAdapter {
     pub fn new() -> Self {
+        let (runtime, adapter) = crate::ble::ble_context();
         CoralAdapter {
-            ble: CoralBle::new(),
+            ble: CoralBle::new(runtime, adapter),
             output_ports: Vec::new(),
             port_modes: HashMap::new(),
             display_name: "LEGO Education Science".to_string(),

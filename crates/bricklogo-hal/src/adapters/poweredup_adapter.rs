@@ -26,8 +26,9 @@ pub struct PoweredUpAdapter {
 
 impl PoweredUpAdapter {
     pub fn new() -> Self {
+        let (runtime, adapter) = crate::ble::ble_context();
         PoweredUpAdapter {
-            ble: PoweredUpBle::new(),
+            ble: PoweredUpBle::new(runtime, adapter),
         }
     }
 

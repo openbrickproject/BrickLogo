@@ -1,9 +1,10 @@
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::api::{Central, Peripheral as _, ScanFilter, WriteType};
+use btleplug::platform::{Adapter, Peripheral};
 use futures::StreamExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::constants::*;
@@ -17,18 +18,21 @@ const NOTIFY_CHAR_UUID: &str = CORAL_NOTIFY_CHAR_UUID;
 pub struct CoralBle {
     pub coral: Coral,
     peripheral: Option<Peripheral>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<Runtime>,
+    adapter: Adapter,
     stop_flag: Option<Arc<AtomicBool>>,
     notification_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
 }
 
 impl CoralBle {
-    pub fn new() -> Self {
-        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    /// Construct a `CoralBle` against a shared BLE context. See
+    /// `bricklogo-hal`'s `ble::ble_context()`.
+    pub fn new(runtime: Arc<Runtime>, adapter: Adapter) -> Self {
         CoralBle {
             coral: Coral::new(),
             peripheral: None,
             runtime,
+            adapter,
             stop_flag: None,
             notification_rx: None,
         }
@@ -44,20 +48,9 @@ impl CoralBle {
             .map_or(false, |f| f.load(Ordering::SeqCst))
     }
 
-    /// Scan for and connect to the first Coral device found.
+    /// Scan for and connect to the first unclaimed Coral device found.
     pub fn connect(&mut self) -> Result<(), String> {
-        let manager = self.runtime.block_on(async {
-            Manager::new()
-                .await
-                .map_err(|e| format!("BLE init failed: {}", e))
-        })?;
-        let adapters = self.runtime.block_on(async {
-            manager
-                .adapters()
-                .await
-                .map_err(|e| format!("No BLE adapter: {}", e))
-        })?;
-        let adapter = adapters.into_iter().next().ok_or("No BLE adapter found")?;
+        let adapter = &self.adapter;
 
         self.runtime.block_on(async {
             adapter
@@ -88,6 +81,13 @@ impl CoralBle {
             })?;
 
             for p in peripherals {
+                // Skip peripherals already connected (by us or another BLE
+                // adapter sharing the same central). Prevents silent re-latch
+                // onto an already-claimed device.
+                if self.runtime.block_on(p.is_connected()).unwrap_or(false) {
+                    continue;
+                }
+
                 let props = match self.runtime.block_on(p.properties()) {
                     Ok(Some(props)) => props,
                     _ => continue,
