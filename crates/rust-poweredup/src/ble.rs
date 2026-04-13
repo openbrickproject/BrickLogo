@@ -184,6 +184,7 @@ impl PoweredUpBle {
                 let sensor_uuid = Uuid::parse_str(WEDO2_SENSOR_VALUE_UUID).unwrap();
                 let button_uuid = Uuid::parse_str(WEDO2_BUTTON_UUID).unwrap();
 
+                let hub_for_cleanup = hub.clone();
                 self.runtime.spawn(async move {
                     // Catch panics from the underlying notification stream
                     // (bluez-async on Linux can panic during teardown when a
@@ -230,6 +231,11 @@ impl PoweredUpBle {
                             }
                         }
                     }).catch_unwind().await;
+                    // The notification stream ended — either cleanly because
+                    // the peripheral disconnected, or via a caught panic.
+                    // Either way, mark the hub disconnected so the health
+                    // watchdog reaps the entry from the port manager.
+                    hub_for_cleanup.lock().unwrap().on_disconnected();
                 });
 
                 self.feedback_rx = Some(feedback_rx);

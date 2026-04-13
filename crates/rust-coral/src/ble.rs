@@ -23,6 +23,10 @@ pub struct CoralBle {
     adapter: Adapter,
     stop_flag: Option<Arc<AtomicBool>>,
     notification_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    /// Set by the spawned notification task when its stream ends or panics.
+    /// Read by `is_connected()` so the health watchdog can reap unexpected
+    /// disconnects.
+    notif_dead: Arc<AtomicBool>,
 }
 
 impl CoralBle {
@@ -36,6 +40,7 @@ impl CoralBle {
             adapter,
             stop_flag: None,
             notification_rx: None,
+            notif_dead: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -140,9 +145,13 @@ impl CoralBle {
                         .map_err(|e| format!("Subscribe failed: {}", e))
                 })?;
 
+                // Reset the dead flag for a fresh connection.
+                self.notif_dead.store(false, Ordering::SeqCst);
+
                 // Spawn background task to forward notifications to a channel
                 let (tx, rx) = std::sync::mpsc::channel();
                 let p_clone = p.clone();
+                let dead_flag = self.notif_dead.clone();
                 self.runtime.spawn(async move {
                     // See `rust-poweredup`: catch panics from the underlying
                     // notification stream so a flaky bluez-async teardown
@@ -157,6 +166,10 @@ impl CoralBle {
                             }
                         }
                     }).catch_unwind().await;
+                    // Stream ended (clean disconnect or caught panic) — flag
+                    // the device as dead so `is_connected()` reports false
+                    // and the watchdog reaps the entry.
+                    dead_flag.store(true, Ordering::SeqCst);
                 });
                 self.notification_rx = Some(rx);
 
@@ -333,7 +346,7 @@ impl CoralBle {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.coral.is_connected()
+        self.coral.is_connected() && !self.notif_dead.load(Ordering::SeqCst)
     }
 
     // ── Internal helpers ────────────────────────
