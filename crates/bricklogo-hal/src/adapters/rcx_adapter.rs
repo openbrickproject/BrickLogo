@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::time::Instant;
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use crate::driver::{self, DeviceSlot};
+use crate::scheduler::{self, DeviceSlot};
 use rust_rcx::constants::*;
 use rust_rcx::protocol;
 
@@ -328,7 +328,7 @@ impl HardwareAdapter for RcxAdapter {
             alive: true,
         };
 
-        let slot_id = driver::register(Box::new(slot));
+        let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
         self.slot_id = Some(slot_id);
         Ok(())
@@ -336,7 +336,7 @@ impl HardwareAdapter for RcxAdapter {
 
     fn disconnect(&mut self) {
         if let Some(id) = self.slot_id.take() {
-            driver::deregister(id);
+            scheduler::deregister_slot(id);
         }
         self.tx = None;
     }

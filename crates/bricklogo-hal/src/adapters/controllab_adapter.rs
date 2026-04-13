@@ -1,5 +1,5 @@
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use crate::driver::{self, DeviceSlot};
+use crate::scheduler::{self, DeviceSlot};
 use bricklogo_lang::value::LogoValue;
 use rust_controllab::constants::*;
 use rust_controllab::controllab::{self, ControlLabSensorPayload, process_sensor_data};
@@ -191,7 +191,7 @@ impl HardwareAdapter for ControlLabAdapter {
             alive: true,
         };
 
-        let slot_id = driver::register(Box::new(slot));
+        let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
         self.shared = shared;
         self.slot_id = Some(slot_id);
@@ -200,7 +200,7 @@ impl HardwareAdapter for ControlLabAdapter {
 
     fn disconnect(&mut self) {
         if let Some(id) = self.slot_id.take() {
-            driver::deregister(id);
+            scheduler::deregister_slot(id);
         }
         self.tx = None;
     }

@@ -603,31 +603,50 @@ impl PortManager {
             self.flash_timers.insert(key.clone(), cancelled.clone());
 
             let pm = pm.clone();
+            let cancelled_for_task = cancelled.clone();
             let device_name = qp.device_name.clone();
             let port = qp.port.clone();
             let on_ms = on_tenths as u64 * 100;
             let off_ms = off_tenths as u64 * 100;
+            let mut is_on = true;
+            let mut next_toggle =
+                std::time::Instant::now() + std::time::Duration::from_millis(on_ms);
 
-            std::thread::spawn(move || {
-                let mut is_on = true;
-                loop {
-                    let delay = if is_on { on_ms } else { off_ms };
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
-                    if cancelled.load(Ordering::Relaxed) { return; }
-                    let Ok(mut pm) = pm.lock() else { return; };
-                    let Some(entry) = pm.devices.get_mut(&device_name) else { return; };
-                    if !entry.adapter.connected() { return; }
-                    if is_on {
-                        let _ = entry.adapter.stop_port(&port);
-                    } else {
-                        let default_power = entry.adapter.max_power() / 2;
-                        let state = entry.port_states.get(&port).cloned()
-                            .unwrap_or(OutputPortState { direction: PortDirection::Even, power: default_power, is_running: false });
-                        let _ = entry.adapter.start_port(&port, state.direction, state.power);
-                    }
-                    is_on = !is_on;
+            // Periodic task — the scheduler thread (60 Hz) invokes this
+            // every tick. We check whether it's time to toggle, and if so
+            // issue the stop/start command. Returning `false` retires the
+            // task; `true` keeps it scheduled.
+            crate::scheduler::register_task(Box::new(move || -> bool {
+                if cancelled_for_task.load(Ordering::Relaxed) { return false; }
+                if std::time::Instant::now() < next_toggle { return true; }
+
+                let Ok(mut pm) = pm.lock() else { return false; };
+                let Some(entry) = pm.devices.get_mut(&device_name) else { return false; };
+                if !entry.adapter.connected() { return false; }
+
+                if is_on {
+                    let _ = entry.adapter.stop_port(&port);
+                    is_on = false;
+                    next_toggle =
+                        std::time::Instant::now() + std::time::Duration::from_millis(off_ms);
+                } else {
+                    // Re-read the port's current direction/power every cycle
+                    // so a `setpower` issued mid-flash takes effect on the
+                    // next on-phase.
+                    let default_power = entry.adapter.max_power() / 2;
+                    let state = entry.port_states.get(&port).cloned()
+                        .unwrap_or(OutputPortState {
+                            direction: PortDirection::Even,
+                            power: default_power,
+                            is_running: false,
+                        });
+                    let _ = entry.adapter.start_port(&port, state.direction, state.power);
+                    is_on = true;
+                    next_toggle =
+                        std::time::Instant::now() + std::time::Duration::from_millis(on_ms);
                 }
-            });
+                true
+            }));
         }
         Ok(())
     }

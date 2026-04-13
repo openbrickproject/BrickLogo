@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortDirection};
-use crate::driver::{self, DeviceSlot};
+use crate::scheduler::{self, DeviceSlot};
 use rust_buildhat::constants::*;
 use rust_buildhat::protocol::*;
 use rust_buildhat::constants::{is_absolute_motor, needs_led_init};
@@ -470,7 +470,7 @@ impl HardwareAdapter for BuildHATAdapter {
             pending_inits: Vec::new(),
         };
 
-        let slot_id = driver::register(Box::new(slot));
+        let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
         self.shared = shared;
         self.slot_id = Some(slot_id);
@@ -483,7 +483,7 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn disconnect(&mut self) {
         if let Some(id) = self.slot_id.take() {
-            driver::deregister(id);
+            scheduler::deregister_slot(id);
         }
         self.tx = None;
     }

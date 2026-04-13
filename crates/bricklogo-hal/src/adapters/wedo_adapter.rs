@@ -1,5 +1,5 @@
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use crate::driver::{self, DeviceSlot};
+use crate::scheduler::{self, DeviceSlot};
 use bricklogo_lang::value::LogoValue;
 use hidapi::{HidApi, HidDevice};
 use rust_wedo::constants::*;
@@ -229,7 +229,7 @@ impl HardwareAdapter for WeDoAdapter {
             alive: true,
         };
 
-        let slot_id = driver::register(Box::new(slot));
+        let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
         self.shared = shared;
         self.slot_id = Some(slot_id);
@@ -239,7 +239,7 @@ impl HardwareAdapter for WeDoAdapter {
 
     fn disconnect(&mut self) {
         if let Some(id) = self.slot_id.take() {
-            driver::deregister(id);
+            scheduler::deregister_slot(id);
         }
         self.tx = None;
         self.motor_values = [0, 0];
