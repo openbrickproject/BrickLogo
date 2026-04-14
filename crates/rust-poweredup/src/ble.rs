@@ -235,17 +235,18 @@ impl PoweredUpBle {
                 self.feedback_rx = Some(feedback_rx);
                 self.peripheral = Some(p.clone());
 
-                // TODO: temporarily stripped post-connect commands to isolate
-                // City Hub disconnect issue on Pi/BlueZ.
-                // if !is_wedo2 {
-                //     let cmd = protocol::cmd_request_property(HubProperty::BatteryVoltage);
-                //     self.send_to(&p, &cmd)?;
-                //     let cmd = protocol::cmd_enable_property_updates(HubProperty::BatteryVoltage);
-                //     self.send_to(&p, &cmd)?;
-                // }
-
-                // Wait briefly for initial device attach messages
+                // Wait for the hub to finish sending its initial
+                // HubAttachedIO burst and for BlueZ to fully settle the
+                // notification subscription before writing. Without this
+                // delay, the City Hub disconnects immediately on Pi/BlueZ.
                 std::thread::sleep(Duration::from_millis(500));
+
+                // Enable periodic property updates so the hub keeps sending
+                // traffic and doesn't hit its idle-disconnect timeout.
+                if !is_wedo2 {
+                    let cmd = protocol::cmd_enable_property_updates(HubProperty::BatteryVoltage);
+                    self.send_to(&p, &cmd)?;
+                }
 
                 return Ok(());
             }
