@@ -8,23 +8,35 @@
 - For Control Lab or RCX serial tower: a USB-to-serial adapter.
 - For Build HAT: a Raspberry Pi with the Build HAT attached.
 
-## Download
+## Install
 
-Download the latest release for your platform from the GitHub releases page. The release is a zip containing the `bricklogo` binary and example programs. Unpack it anywhere.
+### macOS / Linux
+
+```
+curl -fsSL https://raw.githubusercontent.com/openbrickproject/BrickLogo/main/scripts/install.sh | sh
+```
+
+### Windows (PowerShell)
+
+```
+irm https://raw.githubusercontent.com/openbrickproject/BrickLogo/main/scripts/install.ps1 | iex
+```
+
+This installs BrickLogo to `~/.bricklogo/` (including example scripts and documentation) and adds it to your PATH.
+
+### Manual install
+
+Alternatively, download the latest release for your platform from the [GitHub releases page](https://github.com/openbrickproject/BrickLogo/releases). The release is a zip containing the `bricklogo` binary and example programs. Unpack it anywhere.
 
 ## Running
 
-Open a terminal. Go to the folder where you unpacked the release and run:
+Open a terminal and run:
 
 ```
-./bricklogo
+bricklogo
 ```
 
-On Windows:
-
-```
-bricklogo.exe
-```
+If you installed manually, go to the folder where you unpacked the release and run `./bricklogo` (macOS / Linux) or `bricklogo.exe` (Windows).
 
 You should see the BrickLogo header and a `?` prompt.
 

@@ -11,15 +11,32 @@ LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at M
 | Type | Command | Devices |
 | --- | --- | --- |
 | LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
-| LEGO Powered UP | `connectto "pup "name` | Move Hub, Powered UP Hub, Technic Hub, Remote, Duplo Train |
+| LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered UP Hub, WeDo 2.0, Technic Hub, Remote, Duplo Train |
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
+| LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
 | Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
 
 Multiple devices can be connected at the same time. Each is given a name and addressed by that name or by qualified port names (for example `"mybot.a`).
 
 ## Quick Start
+
+### Install (macOS / Linux)
+
+```
+curl -fsSL https://raw.githubusercontent.com/openbrickproject/BrickLogo/main/scripts/install.sh | sh
+```
+
+### Install (Windows PowerShell)
+
+```
+irm https://raw.githubusercontent.com/openbrickproject/BrickLogo/main/scripts/install.ps1 | iex
+```
+
+This installs BrickLogo to `~/.bricklogo/` and adds it to your PATH. Run `bricklogo` to start.
+
+### Manual install
 
 Download the [latest release](https://github.com/openbrickproject/BrickLogo/releases) for your platform, unpack it, and run the binary.
 
@@ -32,10 +49,10 @@ Example session:
 ```
 ? connectto "pup "mybot
 Scanning for Powered UP hub...
-Connected to Move Hub as "mybot"
+Connected to Boost Move Hub as "mybot"
 
 ? talkto "a
-? setpower 5
+? setpower 50
 ? onfor 10
 
 ? to backandforward
@@ -47,16 +64,17 @@ Connected to Move Hub as "mybot"
 
 ## Configuration
 
-BrickLogo looks for `bricklogo.config.json` in the current working directory. This is needed for devices that connect over serial.
+BrickLogo looks for `bricklogo.config.json` in the current working directory. This is only needed for devices that connect over serial (Control Lab, RCX serial towers, EV3 Bluetooth). USB and BLE devices are detected automatically.
 
 ```json
 {
   "controllab": ["/dev/tty.usbserial-AC018HBC"],
-  "rcx": ["/dev/ttyS0"]
+  "rcx": ["/dev/ttyS0"],
+  "ev3": ["/dev/cu.EV3-SerialPort-14"]
 }
 ```
 
-Serial paths are used in order as devices are connected. RCX USB towers are detected automatically and do not need a config entry.
+Serial paths are used in order as devices are connected. WeDo 1.0, RCX USB towers, and EV3 USB connections are detected automatically and do not need a config entry.
 
 ## Commands
 
@@ -64,7 +82,7 @@ Connection:
 
 - `connectto "type "name`
 - `use "name`
-- `disconnect`, `disconnect "name`, `disconnect "all`
+- `disconnect`
 - `firmware "device "file` (RCX, Build HAT)
 
 Motor control:
