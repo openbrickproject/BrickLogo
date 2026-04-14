@@ -14,9 +14,9 @@ $InstallDir = "$env:USERPROFILE\.bricklogo"
 
 # ── Detect platform ──────────────────────────────
 
-$Arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+$Arch = $env:PROCESSOR_ARCHITECTURE
 switch ($Arch) {
-    "X64"   { $Platform = "windows-x64" }
+    "AMD64" { $Platform = "windows-x64" }
     default { Write-Error "Unsupported architecture: $Arch"; exit 1 }
 }
 
