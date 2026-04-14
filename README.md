@@ -6,20 +6,6 @@ BrickLogo is a Logo programming environment for controlling LEGO motors and sens
 
 LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at MIT in the 1980s to connect the Logo programming language to physical LEGO models. LEGO produced two implementations: LEGO TC Logo (1988) and LEGO DACTA Control Lab (1993). BrickLogo is a spiritual evolution of LEGO/Logo, drawing from both and adding support for current hardware.
 
-## Supported Devices
-
-| Type | Command | Devices |
-| --- | --- | --- |
-| LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
-| LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered UP Hub, WeDo 2.0, Technic Hub, Remote, Duplo Train |
-| LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
-| LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
-| LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
-| LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
-| Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
-
-Multiple devices can be connected at the same time. Each is given a name and addressed by that name or by qualified port names (for example `"mybot.a`).
-
 ## Quick Start
 
 ### Install (macOS / Linux)
@@ -61,6 +47,20 @@ Connected to Boost Move Hub as "mybot"
 
 ? backandforward
 ```
+
+## Supported Devices
+
+| Type | Command | Devices |
+| --- | --- | --- |
+| LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
+| LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered UP Hub, WeDo 2.0, Technic Hub, Remote, Duplo Train |
+| LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
+| LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
+| LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
+| LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
+| Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
+
+Multiple devices can be connected at the same time. Each is given a name and addressed by that name or by qualified port names (for example `"mybot.a`).
 
 ## Configuration
 
