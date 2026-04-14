@@ -117,6 +117,7 @@ dependencies = [
  "rust-buildhat",
  "rust-controllab",
  "rust-coral",
+ "rust-ev3",
  "rust-poweredup",
  "rust-rcx",
  "rust-wedo",
@@ -1107,6 +1108,14 @@ dependencies = [
  "futures",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "rust-ev3"
+version = "0.1.0"
+dependencies = [
+ "hidapi",
+ "serialport",
 ]
 
 [[package]]

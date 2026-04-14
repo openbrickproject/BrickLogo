@@ -570,24 +570,20 @@ impl HardwareAdapter for BuildHATAdapter {
         if !is_tacho_motor(type_id) {
             return Err("This motor does not support rotation to position".to_string());
         }
-        let speed = to_signed_speed(direction, power).abs().max(1);
-        // Get current position from combi data (index 1 = position/mode 2)
+        // Read current encoder position, compute mod-360 delta respecting
+        // direction, then delegate to rotate_port_by_degrees.
         let current = {
             let shared = self.shared.lock().unwrap();
             shared.sensor_data.get(&format!("{}:0", idx))
                 .and_then(|v| v.get(1).copied())
                 .unwrap_or(0.0)
-        };
-        let from_rot = current / 360.0;
-        let to_rot = position as f64 / 360.0;
-        let delta = (to_rot - from_rot).abs();
-        let duration = delta / (speed as f64 / 100.0);
-        {
-            let mut shared = self.shared.lock().unwrap();
-            shared.completions[idx as usize] = false;
+        } as i32;
+        let delta = crate::adapter::rotateto_delta(current, position, direction);
+        if delta == 0 {
+            return Ok(());
         }
-        self.send_cmd(BuildHATCommand::MotorRamp { port: idx, from: from_rot, to: to_rot, duration: duration.max(0.1) })?;
-        self.wait_for_completion(idx, duration as u64 + 5)
+        let delta_dir = if delta > 0 { PortDirection::Even } else { PortDirection::Odd };
+        self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {

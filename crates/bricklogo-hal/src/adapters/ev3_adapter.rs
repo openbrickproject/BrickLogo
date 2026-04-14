@@ -438,7 +438,7 @@ impl HardwareAdapter for EV3Adapter {
     fn rotate_port_to_position(
         &mut self,
         port: &str,
-        _direction: PortDirection,
+        direction: PortDirection,
         power: u8,
         position: i32,
     ) -> Result<(), String> {
@@ -446,7 +446,7 @@ impl HardwareAdapter for EV3Adapter {
             .ok_or_else(|| format!("Unknown output port \"{}\"", port))?;
         let port_index = port_to_index(port)
             .ok_or_else(|| format!("Unknown output port \"{}\"", port))?;
-        // Read current encoder count, compute delta to target position.
+        // Read current encoder count.
         let (tx, rx) = mpsc::channel();
         self.tx
             .as_ref()
@@ -459,12 +459,11 @@ impl HardwareAdapter for EV3Adapter {
             Some(LogoValue::Number(n)) => n as i32,
             _ => 0,
         };
-        let delta = position - current;
+        // Mod-360 delta respecting direction.
+        let delta = crate::adapter::rotateto_delta(current, position, direction);
         if delta == 0 {
             return Ok(());
         }
-        // Use direction of the delta, not the user's direction setting,
-        // since we need to go toward the target position.
         let signed_power = if delta > 0 {
             to_signed_power(PortDirection::Even, power)
         } else {

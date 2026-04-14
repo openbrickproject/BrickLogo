@@ -7,6 +7,23 @@ pub enum PortDirection {
     Odd,
 }
 
+/// Compute the mod-360 delta for `rotateto`. Given the current raw encoder
+/// position and a target angle (0..359), returns the number of degrees to
+/// move in the direction specified by `direction`:
+///
+///   - `Even`: forward (positive delta, 0..359)
+///   - `Odd`: backward (negative delta, -359..0)
+///
+/// Returns 0 if the motor is already at the target angle.
+pub fn rotateto_delta(current_position: i32, target: i32, direction: PortDirection) -> i32 {
+    let current_angle = current_position.rem_euclid(360);
+    let raw = (target - current_angle).rem_euclid(360);
+    match direction {
+        PortDirection::Even => raw,
+        PortDirection::Odd => if raw == 0 { 0 } else { raw - 360 },
+    }
+}
+
 impl PortDirection {
     pub fn toggle(&self) -> Self {
         match self {

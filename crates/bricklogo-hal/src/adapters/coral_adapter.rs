@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-fn map_direction(direction: PortDirection, port: &str) -> MotorDirection {
-    // Left motor (port "a") is physically mirrored
-    let invert = port == "a";
+/// On the Double Motor, port "a" (left) is physically mirrored so Even
+/// (forward) must map to Counterclockwise. On the Single Motor there is
+/// no mirroring — Even maps to Clockwise as-is.
+fn map_direction(direction: PortDirection, port: &str, is_double_motor: bool) -> MotorDirection {
+    let invert = is_double_motor && port == "a";
     let forward = direction == PortDirection::Even;
     let clockwise = if invert { !forward } else { forward };
     if clockwise {
@@ -17,6 +19,12 @@ fn map_direction(direction: PortDirection, port: &str) -> MotorDirection {
     } else {
         MotorDirection::Counterclockwise
     }
+}
+
+/// Whether the raw encoder value for this port needs negating to match
+/// the Logo "forward" frame. Only applies to port "a" on the Double Motor.
+fn is_encoder_inverted(port: &str, is_double_motor: bool) -> bool {
+    is_double_motor && port == "a"
 }
 
 fn motor_bits_for_port(port: &str) -> Result<u8, String> {
@@ -32,6 +40,7 @@ pub struct CoralAdapter {
     output_ports: Vec<String>,
     port_modes: HashMap<String, Vec<String>>,
     display_name: String,
+    is_double_motor: bool,
 }
 
 impl CoralAdapter {
@@ -42,11 +51,20 @@ impl CoralAdapter {
             output_ports: Vec::new(),
             port_modes: HashMap::new(),
             display_name: "LEGO Education Science".to_string(),
+            is_double_motor: false,
         }
     }
 
     pub fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) {
         self.ble.set_stop_flag(flag);
+    }
+
+    fn dir(&self, direction: PortDirection, port: &str) -> MotorDirection {
+        map_direction(direction, port, self.is_double_motor)
+    }
+
+    fn encoder_inverted(&self, port: &str) -> bool {
+        is_encoder_inverted(port, self.is_double_motor)
     }
 }
 
@@ -71,6 +89,7 @@ impl HardwareAdapter for CoralAdapter {
             self.display_name = kind.display_name().to_string();
             self.port_modes.clear();
 
+            self.is_double_motor = kind == CoralDeviceKind::DoubleMotor;
             match kind {
                 CoralDeviceKind::DoubleMotor => {
                     self.output_ports = vec!["a".to_string(), "b".to_string()];
@@ -160,7 +179,7 @@ impl HardwareAdapter for CoralAdapter {
         let cmd = self
             .ble
             .coral
-            .cmd_motor_run(bits, map_direction(direction, port));
+            .cmd_motor_run(bits, self.dir(direction, port));
         self.ble.send(&cmd)
     }
 
@@ -183,7 +202,7 @@ impl HardwareAdapter for CoralAdapter {
         let cmd = self.ble.coral.cmd_motor_run_for_time(
             bits,
             tenths * 100,
-            map_direction(direction, port),
+            self.dir(direction, port),
         );
         self.ble.request(&cmd)
     }
@@ -201,7 +220,7 @@ impl HardwareAdapter for CoralAdapter {
         let cmd =
             self.ble
                 .coral
-                .cmd_motor_run_for_degrees(bits, degrees, map_direction(direction, port));
+                .cmd_motor_run_for_degrees(bits, degrees, self.dir(direction, port));
         self.ble.request(&cmd)
     }
 
@@ -212,15 +231,22 @@ impl HardwareAdapter for CoralAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
-        let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
-        self.ble.send(&cmd)?;
-        let dir = map_direction(direction, port);
-        let cmd = self
-            .ble
-            .coral
-            .cmd_motor_run_to_absolute_position(bits, position as u16, dir);
-        self.ble.request(&cmd)
+        // Read current encoder position. On the Double Motor, port "a" is
+        // physically mirrored — its raw encoder runs backwards relative to
+        // the Logo "forward" frame. Negate for inverted ports so
+        // rotateto_delta computes a delta in the same frame as the motor
+        // command.
+        let raw = match self.read_sensor(port, Some("rotation"))? {
+            Some(LogoValue::Number(n)) => n as i32,
+            _ => 0,
+        };
+        let current = if self.encoder_inverted(port) { -raw } else { raw };
+        let delta = crate::adapter::rotateto_delta(current, position, direction);
+        if delta == 0 {
+            return Ok(());
+        }
+        let delta_dir = if delta > 0 { PortDirection::Even } else { PortDirection::Odd };
+        self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
@@ -241,7 +267,7 @@ impl HardwareAdapter for CoralAdapter {
         let cmd = self.ble.coral.cmd_motor_run_to_absolute_position(
             bits,
             0,
-            map_direction(direction, port),
+            self.dir(direction, port),
         );
         self.ble.request(&cmd)
     }
@@ -372,9 +398,10 @@ impl HardwareAdapter for CoralAdapter {
         }
 
         // Run — batch if all same direction
+        let is_dm = self.is_double_motor;
         let dirs: Vec<MotorDirection> = commands
             .iter()
-            .map(|c| map_direction(c.direction, c.port))
+            .map(|c| map_direction(c.direction, c.port, is_dm))
             .collect();
         if dirs.windows(2).all(|w| w[0] == w[1]) {
             let combined_bits: u8 = commands
@@ -389,7 +416,7 @@ impl HardwareAdapter for CoralAdapter {
                 let run_cmd = self
                     .ble
                     .coral
-                    .cmd_motor_run(bits, map_direction(cmd.direction, cmd.port));
+                    .cmd_motor_run(bits, self.dir(cmd.direction, cmd.port));
                 self.ble.send(&run_cmd)?;
             }
             Ok(())
@@ -415,9 +442,10 @@ impl HardwareAdapter for CoralAdapter {
 
         // Check if all directions are the same — can use combined bitmask
         if commands.len() > 1 {
+            let is_dm = self.is_double_motor;
             let dirs: Vec<MotorDirection> = commands
                 .iter()
-                .map(|c| map_direction(c.direction, c.port))
+                .map(|c| map_direction(c.direction, c.port, is_dm))
                 .collect();
             if dirs.windows(2).all(|w| w[0] == w[1]) {
                 let combined_bits: u8 = commands
@@ -434,11 +462,12 @@ impl HardwareAdapter for CoralAdapter {
 
         // Different directions: send all, then wait for all results
         let cmd_id = MessageType::MotorRunForTimeCommand as u8;
+        let is_dm = self.is_double_motor;
         let reqs: Vec<(u8, u8, Vec<u8>)> = commands
             .iter()
             .map(|cmd| {
                 let bits = motor_bits_for_port(cmd.port).unwrap();
-                let dir = map_direction(cmd.direction, cmd.port);
+                let dir = map_direction(cmd.direction, cmd.port, is_dm);
                 let msg = self
                     .ble
                     .coral
@@ -454,18 +483,29 @@ impl HardwareAdapter for CoralAdapter {
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
-        let cmd_id = MessageType::MotorRunToAbsolutePositionCommand as u8;
+        use rust_coral::protocol::MessageType;
+        let cmd_id = MessageType::MotorRunForDegreesCommand as u8;
         let mut reqs: Vec<(u8, u8, Vec<u8>)> = Vec::new();
 
         for cmd in commands {
+            let raw = match self.read_sensor(cmd.port, Some("rotation"))? {
+                Some(LogoValue::Number(n)) => n as i32,
+                _ => 0,
+            };
+            let current = if self.encoder_inverted(cmd.port) { -raw } else { raw };
+            let delta = crate::adapter::rotateto_delta(current, position, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
             let bits = motor_bits_for_port(cmd.port)?;
             let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
-            let dir = map_direction(cmd.direction, cmd.port);
-            let msg = self
-                .ble
-                .coral
-                .cmd_motor_run_to_absolute_position(bits, position as u16, dir);
+            let delta_dir = if delta > 0 { PortDirection::Even } else { PortDirection::Odd };
+            let msg = self.ble.coral.cmd_motor_run_for_degrees(
+                bits,
+                delta.abs(),
+                self.dir(delta_dir, cmd.port),
+            );
             reqs.push((cmd_id, bits, msg));
         }
 
@@ -486,7 +526,7 @@ impl HardwareAdapter for CoralAdapter {
             let msg = self.ble.coral.cmd_motor_run_to_absolute_position(
                 bits,
                 0,
-                map_direction(cmd.direction, cmd.port),
+                self.dir(cmd.direction, cmd.port),
             );
             reqs.push((cmd_id, bits, msg));
         }
@@ -511,11 +551,12 @@ impl HardwareAdapter for CoralAdapter {
 
         // Send all rotation commands, then wait for all results
         let cmd_id = MessageType::MotorRunForDegreesCommand as u8;
+        let is_dm = self.is_double_motor;
         let reqs: Vec<(u8, u8, Vec<u8>)> = commands
             .iter()
             .map(|cmd| {
                 let bits = motor_bits_for_port(cmd.port).unwrap();
-                let dir = map_direction(cmd.direction, cmd.port);
+                let dir = map_direction(cmd.direction, cmd.port, is_dm);
                 let msg = self.ble.coral.cmd_motor_run_for_degrees(bits, degrees, dir);
                 (cmd_id, bits, msg)
             })

@@ -310,12 +310,19 @@ impl HardwareAdapter for PoweredUpAdapter {
         position: i32,
     ) -> Result<(), String> {
         self.reject_if_wedo2("rotation to position")?;
-        let port_id = self.resolve_port_id(port)?;
-        let speed = to_signed_speed(direction, power);
-        let cmd =
-            protocol::cmd_goto_absolute(port_id, position, speed, 100, BrakingStyle::Hold, true);
-        self.ble.request(port_id, &cmd)?;
-        Ok(())
+        // Read current encoder position, compute mod-360 delta respecting
+        // direction, then issue a relative rotation. This gives consistent
+        // "shortest path within direction" semantics across all adapters.
+        let current = match self.read_sensor(port, Some("rotation"))? {
+            Some(LogoValue::Number(n)) => n as i32,
+            _ => 0,
+        };
+        let delta = crate::adapter::rotateto_delta(current, position, direction);
+        if delta == 0 {
+            return Ok(());
+        }
+        let delta_dir = if delta > 0 { PortDirection::Even } else { PortDirection::Odd };
+        self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
@@ -454,13 +461,26 @@ impl HardwareAdapter for PoweredUpAdapter {
         position: i32,
     ) -> Result<(), String> {
         self.reject_if_wedo2("rotation to position")?;
+        // Compute per-port deltas, then issue parallel relative rotations.
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
+            let current = match self.read_sensor(cmd.port, Some("rotation"))? {
+                Some(LogoValue::Number(n)) => n as i32,
+                _ => 0,
+            };
+            let delta = crate::adapter::rotateto_delta(current, position, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
             let port_id = self.resolve_port_id(cmd.port)?;
-            let speed = to_signed_speed(cmd.direction, cmd.power);
-            let msg = protocol::cmd_goto_absolute(
+            let speed = if delta > 0 {
+                to_signed_speed(PortDirection::Even, cmd.power)
+            } else {
+                to_signed_speed(PortDirection::Odd, cmd.power)
+            };
+            let msg = protocol::cmd_start_speed_for_degrees(
                 port_id,
-                position,
+                (delta.abs()) as u32,
                 speed,
                 100,
                 BrakingStyle::Hold,

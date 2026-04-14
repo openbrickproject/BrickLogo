@@ -272,15 +272,18 @@ Rotates a quarter turn.
 ### `rotateto`
 
 ```
-rotateto position
+rotateto angle
 ```
 
-Rotates the selected ports to an absolute position in degrees. The device determines the shortest path. The command does not return until the motor reaches the position. Requires encoder motors.
+Rotates the selected ports to an angular position (0–359) relative to the zero set by `resetzero`. The motor takes the path in the direction set by `seteven`/`setodd`, always within one revolution. The command does not return until the motor reaches the position. Requires encoder motors.
 
 ```
+? resetzero
+? rotateto 90
 ? rotateto 0
-? rotateto 180
 ```
+
+`rotateto 90` turns 90 degrees from zero. `rotateto 0` returns to zero. The direction controls which way the motor turns — if the target is "behind" the current angle in the set direction, the motor wraps the long way around rather than reversing.
 
 ### `resetzero`
 
@@ -288,7 +291,7 @@ Rotates the selected ports to an absolute position in degrees. The device determ
 resetzero
 ```
 
-Resets the encoder zero point on the selected ports. After this command, the current physical position of the motor is considered position 0.
+Resets the encoder zero point on the selected ports. After this command, the current physical position of the motor is considered angle 0 for `rotateto`.
 
 ### `rotatetohome`
 
@@ -296,7 +299,7 @@ Resets the encoder zero point on the selected ports. After this command, the cur
 rotatetohome
 ```
 
-Rotates the selected ports back to absolute position 0. The command does not return until the motors reach home. Requires encoder motors.
+Rotates the selected ports back to the motor's physical absolute zero. The command does not return until the motors reach home. Requires motors with an absolute-position encoder (Technic angular motors). Non-absolute tacho motors (Boost motors, train motors, EV3 motors) do not support this command — use `rotateto 0` after `resetzero` instead.
 
 ### `flash`
 
@@ -1488,6 +1491,35 @@ Connects via serial or USB IR tower. Use `connectto "rcx`.
 | Output Ports | Input Ports |
 | --- | --- |
 | a, b, c | 1, 2, 3 |
+
+### LEGO Mindstorms EV3
+
+Connects via USB HID (default, no setup required) or Bluetooth SPP (pair the brick at the OS level, add the serial port path to `bricklogo.config.json`). Wi-Fi is planned but not yet implemented. Use `connectto "ev3`.
+
+| Output Ports | Input Ports |
+| --- | --- |
+| a, b, c, d | 1, 2, 3, 4 |
+
+`connectto "ev3 "name` tries USB first; if no USB EV3 is found, falls back to the next unconsumed serial path from `bricklogo.config.json`. The config array accepts:
+
+- a bare serial path → Bluetooth SPP
+- `"usb"` → force USB HID, first unclaimed brick
+- `"usb:<path>"` → USB HID at a specific HID path (for multi-EV3 setups)
+- `"wifi:discover"` or `"wifi:<ip>"` → future Wi-Fi (currently errors)
+
+Example:
+
+```json
+{ "ev3": ["/dev/cu.EV3-SerialPort-14"] }
+```
+
+**Limitations on EV3:**
+
+- `rotateto` works on EV3 — it rotates to the given angle relative to the last `resetzero`, same as every other adapter with encoder motors.
+- `rotatetohome` errors out — EV3 motors have no absolute-position encoder. Use `rotateto 0` after `resetzero` instead.
+- Motor control uses raw PWM power (matching every other BrickLogo adapter). Motors load-droop under heavy loads — this is intentional and consistent across devices.
+- Firmware upload and file transfer are not supported.
+- Daisy-chained bricks are not supported (layer is always 0).
 
 ### Raspberry Pi Build HAT
 
