@@ -1,3 +1,4 @@
 {
-  "controllab": ["/dev/tty.usbserial-AC018HBC"]
+  "controllab": ["/dev/tty.usbserial-AC018HBC"],
+  "ev3": ["/dev/cu.EV3-SerialPort-14"]
 }
