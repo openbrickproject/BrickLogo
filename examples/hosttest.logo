@@ -1,2 +1,5 @@
+make "running "on
+
+connectto "science "science
 make "state "off
-forever [talkto "a seteven make "state "even onfor 10 make "state "off off wait 10 setodd make "state "odd onfor 10 make "state "off wait 10]
+forever [if :running = "on [talkto "a seteven make "state "even onfor 10 make "state "off off wait 10 setodd make "state "odd onfor 10 make "state "off wait 10]]

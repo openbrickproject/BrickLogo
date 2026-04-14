@@ -1,1 +1,2 @@
+connectto "pup "pup
 talkto "a forever [ifelse :state = "off [off] [ifelse :state = "odd [setodd on] [seteven on]]]
