@@ -236,17 +236,8 @@ impl PoweredUpBle {
                 self.peripheral = Some(p.clone());
 
                 // Wait for the hub to finish sending its initial
-                // HubAttachedIO burst and for BlueZ to fully settle the
-                // notification subscription before writing. Without this
-                // delay, the City Hub disconnects immediately on Pi/BlueZ.
+                // HubAttachedIO burst before any writes.
                 std::thread::sleep(Duration::from_millis(500));
-
-                // Enable periodic property updates so the hub keeps sending
-                // traffic and doesn't hit its idle-disconnect timeout.
-                if !is_wedo2 {
-                    let cmd = protocol::cmd_enable_property_updates(HubProperty::BatteryVoltage);
-                    self.send_to(&p, &cmd)?;
-                }
 
                 return Ok(());
             }
@@ -305,9 +296,12 @@ impl PoweredUpBle {
             .iter()
             .find(|c| c.uuid == uuid)
             .ok_or("LPF2 characteristic not found")?;
+        // Use WithResponse to match noble's behavior. The LWP3 spec says
+        // WithoutResponse, but on Pi/BlueZ WithoutResponse causes the
+        // City Hub to disconnect ~1.5s after the first write.
         self.runtime.block_on(async {
             peripheral
-                .write(c, data, WriteType::WithoutResponse)
+                .write(c, data, WriteType::WithResponse)
                 .await
                 .map_err(|e| format!("Write failed: {}", e))
         })
