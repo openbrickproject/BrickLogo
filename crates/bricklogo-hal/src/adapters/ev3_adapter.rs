@@ -82,8 +82,9 @@ enum EV3Command {
     MotorTimePower   { mask: u8, power: i8, ms: i32, brake: bool, reply_tx: ReplyTx },
     /// Fire per-port step-power commands without blocking between them, then
     /// poll the combined mask for completion. Each entry is (single-port mask,
-    /// power) so different ports can run at different speeds.
-    MotorStepPowerBatch { entries: Vec<(u8, i8)>, degrees: i32, brake: bool, combined_mask: u8, reply_tx: ReplyTx },
+    /// power, degrees) so different ports can run at different speeds and
+    /// different distances (needed by `rotateto` where each port's delta differs).
+    MotorStepPowerBatch { entries: Vec<(u8, i8, i32)>, brake: bool, combined_mask: u8, reply_tx: ReplyTx },
     /// Same for timed runs.
     MotorTimePowerBatch { entries: Vec<(u8, i8)>, ms: i32, brake: bool, combined_mask: u8, reply_tx: ReplyTx },
     MotorClrCount    { mask: u8, reply_tx: ReplyTx },
@@ -132,9 +133,9 @@ impl DeviceSlot for EV3Slot {
                         Err(e) => { let _ = reply_tx.send(Err(e)); }
                     }
                 }
-                EV3Command::MotorStepPowerBatch { entries, degrees, brake, combined_mask, reply_tx } => {
+                EV3Command::MotorStepPowerBatch { entries, brake, combined_mask, reply_tx } => {
                     let mut err = None;
-                    for (mask, power) in entries {
+                    for (mask, power, degrees) in entries {
                         if let Err(e) = self.ev3.step_power(mask, power, degrees, brake) {
                             err = Some(e);
                             break;
@@ -587,12 +588,60 @@ impl HardwareAdapter for EV3Adapter {
             let mask = port_to_mask(cmd.port)
                 .ok_or_else(|| format!("Unknown output port \"{}\"", cmd.port))?;
             let power = to_signed_power(cmd.direction, cmd.power);
-            entries.push((mask, power));
+            entries.push((mask, power, degrees.abs()));
             combined_mask |= mask;
         }
         self.send_and_wait(|tx| EV3Command::MotorStepPowerBatch {
             entries,
-            degrees: degrees.abs(),
+            brake: true,
+            combined_mask,
+            reply_tx: tx,
+        })
+    }
+
+    fn rotate_ports_to_position(
+        &mut self,
+        commands: &[PortCommand],
+        position: i32,
+    ) -> Result<(), String> {
+        // Read each port's encoder, compute per-port mod-360 delta, fire all
+        // in parallel via the batch command.
+        let mut entries = Vec::with_capacity(commands.len());
+        let mut combined_mask = 0u8;
+        for cmd in commands {
+            let mask = port_to_mask(cmd.port)
+                .ok_or_else(|| format!("Unknown output port \"{}\"", cmd.port))?;
+            let port_index = port_to_index(cmd.port)
+                .ok_or_else(|| format!("Unknown output port \"{}\"", cmd.port))?;
+            let (tx, rx) = mpsc::channel();
+            self.tx
+                .as_ref()
+                .ok_or("Not connected")?
+                .send(EV3Command::ReadMotorCount { port_index, reply_tx: tx })
+                .map_err(|_| "EV3 slot channel closed".to_string())?;
+            let current = match rx.recv_timeout(std::time::Duration::from_millis(500))
+                .map_err(|_| "EV3 motor-count read timed out".to_string())??
+            {
+                Some(LogoValue::Number(n)) => n as i32,
+                _ => 0,
+            };
+            let delta = crate::adapter::rotateto_delta(current, position, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
+            let power = if delta > 0 {
+                to_signed_power(PortDirection::Even, cmd.power)
+            } else {
+                to_signed_power(PortDirection::Odd, cmd.power)
+            };
+            entries.push((mask, power, delta.abs()));
+            combined_mask |= mask;
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.send_and_wait(|tx| EV3Command::MotorStepPowerBatch {
+            entries,
             brake: true,
             combined_mask,
             reply_tx: tx,
