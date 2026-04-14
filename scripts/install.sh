@@ -86,18 +86,19 @@ ln -sf "$INSTALL_DIR/bricklogo" "$LINK_DIR/bricklogo"
 echo ""
 echo "BrickLogo $VERSION installed successfully."
 echo ""
-echo "  Binary:   $INSTALL_DIR/bricklogo"
-echo "  Symlink:  $LINK_DIR/bricklogo"
 echo "  Examples: $INSTALL_DIR/examples/"
 echo "  Docs:     $INSTALL_DIR/docs/"
 echo ""
 
 # Check if the symlink dir is on PATH
 case ":$PATH:" in
-    *":$LINK_DIR:"*) ;;
+    *":$LINK_DIR:"*)
+        echo "Run 'bricklogo' to get started."
+        ;;
     *)
         echo "Note: $LINK_DIR is not on your PATH."
         echo "Add it with:  export PATH=\"$LINK_DIR:\$PATH\""
-        echo ""
+        echo "Then run 'bricklogo' to get started."
         ;;
 esac
+echo ""
