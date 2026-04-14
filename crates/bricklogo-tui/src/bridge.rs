@@ -2,6 +2,7 @@ use bricklogo_hal::adapter::HardwareAdapter;
 use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
+use bricklogo_hal::adapters::ev3_adapter::EV3Adapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
@@ -25,6 +26,8 @@ pub struct BrickLogoConfig {
     pub science: Vec<String>,
     #[serde(default)]
     pub rcx: Vec<String>,
+    #[serde(default)]
+    pub ev3: Vec<String>,
 }
 
 impl BrickLogoConfig {
@@ -157,9 +160,18 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "ev3" => {
+                        let identifier = next_config_entry(&config.ev3, &mut indices, "ev3");
+                        let mut adapter = EV3Adapter::new(identifier.as_deref());
+                        system_fn_ref("Connecting to LEGO Mindstorms EV3...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", or \"buildhat\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", or \"ev3\""
                                 .to_string(),
                         ));
                     }

@@ -1,0 +1,9 @@
+[package]
+name = "rust-ev3"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Mindstorms EV3 Direct Command protocol library"
+
+[dependencies]
+hidapi = "2.6"
+serialport = "4"

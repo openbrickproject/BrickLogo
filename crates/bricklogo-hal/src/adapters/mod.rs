@@ -1,6 +1,7 @@
 pub mod buildhat_adapter;
 pub mod controllab_adapter;
 pub mod coral_adapter;
+pub mod ev3_adapter;
 pub mod poweredup_adapter;
 pub mod rcx_adapter;
 pub mod wedo_adapter;

@@ -81,6 +81,20 @@ impl PoweredUpAdapter {
         self.ble.hub.lock().unwrap().hub_type.is_wedo2()
     }
 
+    fn require_absolute_motor(&self, port: &str) -> Result<(), String> {
+        let port_id = self.resolve_port_id(port)?;
+        let hub = self.ble.hub.lock().unwrap();
+        match hub.get_device(port_id) {
+            Some(device) if device.device_type.is_absolute_motor() => Ok(()),
+            Some(device) => Err(format!(
+                "Motor on port \"{}\" ({:?}) has no absolute-position encoder; \
+                 use rotate (relative) instead",
+                port, device.device_type
+            )),
+            None => Err(format!("No device on port \"{}\"", port)),
+        }
+    }
+
     fn reject_if_wedo2(&self, op: &str) -> Result<(), String> {
         if self.is_wedo2() {
             Err(format!(
@@ -318,6 +332,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         power: u8,
     ) -> Result<(), String> {
         self.reject_if_wedo2("absolute positioning")?;
+        self.require_absolute_motor(port)?;
         let port_id = self.resolve_port_id(port)?;
         let speed = to_signed_speed(direction, power);
         let cmd = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
@@ -461,6 +476,9 @@ impl HardwareAdapter for PoweredUpAdapter {
 
     fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
         self.reject_if_wedo2("absolute positioning")?;
+        for cmd in commands {
+            self.require_absolute_motor(cmd.port)?;
+        }
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
             let port_id = self.resolve_port_id(cmd.port)?;

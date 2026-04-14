@@ -601,6 +601,14 @@ impl HardwareAdapter for BuildHATAdapter {
     }
 
     fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+        let idx = self.port_index(port)?;
+        let type_id = self.require_device(idx)?;
+        if !is_absolute_motor(type_id) {
+            return Err(format!(
+                "Motor on port \"{}\" has no absolute-position encoder",
+                port
+            ));
+        }
         self.rotate_port_to_position(port, direction, power, 0)
     }
 

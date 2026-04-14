@@ -12,6 +12,7 @@ rust-coral = { path = "../rust-coral" }
 rust-poweredup = { path = "../rust-poweredup" }
 rust-rcx = { path = "../rust-rcx" }
 rust-buildhat = { path = "../rust-buildhat" }
+rust-ev3 = { path = "../rust-ev3" }
 lazy_static = "1"
 hidapi = "2.6"
 serialport = "4"
