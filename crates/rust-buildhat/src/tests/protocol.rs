@@ -90,11 +90,14 @@ fn test_sensor_commands() {
 }
 
 #[test]
-fn test_preset_uses_set_under_selonce() {
-    // The firmware's `preset` verb doesn't reset the position counter for
-    // a motor in combi mode — matches the RPi Python lib, which uses
-    // `selonce 2 ; set V` to briefly target mode 2 (position) and write
-    // the value via `set`.
-    assert_eq!(cmd_preset(0, 2, 0.0), "port 0 ; selonce 2 ; set 0\r");
-    assert_eq!(cmd_preset(3, 2, 42.5), "port 3 ; selonce 2 ; set 42.5\r");
+fn test_preset_uses_write1_lpf2_direct_mode_data() {
+    // Build HAT firmware has no `preset` command. Use `write1` to send
+    // an LPF2 UART WriteDirectModeData: first byte 0xC0|mode, then the
+    // 4-byte little-endian i32 value.
+    //    mode 2, value 0 → header 0xc2, payload 00 00 00 00
+    assert_eq!(cmd_preset(0, 2, 0.0), "port 0 ; write1 c2 0 0 0 0\r");
+    //    mode 2, value 42 → header 0xc2, payload 2a 00 00 00
+    assert_eq!(cmd_preset(3, 2, 42.0), "port 3 ; write1 c2 2a 0 0 0\r");
+    //    mode 2, value -1 → header 0xc2, payload ff ff ff ff
+    assert_eq!(cmd_preset(0, 2, -1.0), "port 0 ; write1 c2 ff ff ff ff\r");
 }

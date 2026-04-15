@@ -117,15 +117,23 @@ pub fn cmd_set_value(port: u8, value: i32) -> String {
     format!("port {} ; set {}\r", port, value)
 }
 
-/// Preset a motor counter (e.g. reset position mode 2 to 0). Uses
-/// `selonce` to briefly target the mode and `set` to write the value —
-/// this matches the Raspberry Pi Build HAT Python library's
-/// `presetposition`. `selonce` is a one-shot select that doesn't disturb
-/// the ongoing combi subscription; `set` writes to the selected mode's
-/// counter (the firmware's `preset` verb does something different and
-/// silently no-ops for motors in combi mode).
+/// Preset a motor counter (e.g. reset position mode 2 to 0).
+///
+/// The Build HAT firmware has no `preset` command and `set` only controls
+/// the port's PWM waveform. The actual mechanism is `write1`, which sends
+/// a raw LPF2 UART "WriteDirectModeData" message to the connected device.
+/// The first byte `0xC0 | mode` targets the mode; the payload is the
+/// value encoded in the device's expected format (4-byte little-endian
+/// i32 for motor position). Mirrors node-poweredup's BLE `resetZero`
+/// (which sends subcommand `0x51, 0x02, 0x00, 0x00, 0x00, 0x00`).
 pub fn cmd_preset(port: u8, mode: u8, value: f64) -> String {
-    format!("port {} ; selonce {} ; set {}\r", port, mode, value)
+    let header = 0xC0u8 | (mode & 0x07);
+    let v = value as i32;
+    let b = v.to_le_bytes();
+    format!(
+        "port {} ; write1 {:x} {:x} {:x} {:x} {:x}\r",
+        port, header, b[0], b[1], b[2], b[3]
+    )
 }
 
 // ── Response parsing ─────────────────────────────
