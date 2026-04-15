@@ -345,7 +345,7 @@ impl Evaluator {
         } else {
             format!("{}.logo", name)
         };
-        let path = self.disk_path().join(&filename);
+        let path = crate::paths::resolve_bundled(&filename, self.disk_path(), "examples");
         let source = std::fs::read_to_string(&path)
             .map_err(|e| LogoError::Runtime(format!("Could not load: {}", e)))?;
         self.load_source(&source)?;

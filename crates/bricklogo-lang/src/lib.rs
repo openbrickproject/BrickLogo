@@ -3,6 +3,7 @@ pub mod check;
 pub mod error;
 pub mod evaluator;
 pub mod parser;
+pub mod paths;
 pub mod primitives;
 pub mod token;
 pub mod tokenizer;

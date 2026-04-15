@@ -40,6 +40,17 @@ fn strip_shebang_and_bom(s: &str) -> String {
 }
 
 pub fn run(source: ScriptSource, net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // ── Resolve file path (CWD first, then bundled examples/) ──
+    let source = match source {
+        ScriptSource::File(path) => {
+            let name = path.to_string_lossy().into_owned();
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let resolved = bricklogo_lang::paths::resolve_bundled(&name, &cwd, "examples");
+            ScriptSource::File(resolved)
+        }
+        other => other,
+    };
+
     // ── Read source ───────────────────────────────
     let source_text = match &source {
         ScriptSource::File(path) => std::fs::read_to_string(path)

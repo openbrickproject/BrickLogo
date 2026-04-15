@@ -391,15 +391,11 @@ impl App {
         let device_name = parts[1].trim_start_matches('"').to_lowercase();
         let firmware_path = parts[2].trim_start_matches('"').to_string();
 
-        // Resolve path relative to disk path if evaluator is available
+        // Resolve path: CWD/setdisk first, then bundled firmware/ next to the binary.
         let resolved_path = if let Some(ref eval) = self.evaluator {
-            let disk = eval.disk_path();
-            let candidate = disk.join(&firmware_path);
-            if candidate.exists() {
-                candidate.to_string_lossy().to_string()
-            } else {
-                firmware_path
-            }
+            bricklogo_lang::paths::resolve_bundled(&firmware_path, eval.disk_path(), "firmware")
+                .to_string_lossy()
+                .to_string()
         } else {
             firmware_path
         };
