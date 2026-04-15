@@ -90,11 +90,11 @@ fn test_sensor_commands() {
 }
 
 #[test]
-fn test_preset_uses_selonce_to_target_mode() {
-    // `preset` operates on the currently-selected mode. Our motors sit in
-    // combi mode after init, so `preset N` alone would be a no-op. The
-    // `selonce 2` prefix briefly targets mode 2 (position) for this
-    // single command without disturbing the ongoing combi subscription.
-    assert_eq!(cmd_preset(0, 2, 0.0), "port 0 ; selonce 2 ; preset 0\r");
-    assert_eq!(cmd_preset(3, 2, 42.5), "port 3 ; selonce 2 ; preset 42.5\r");
+fn test_preset_uses_set_under_selonce() {
+    // The firmware's `preset` verb doesn't reset the position counter for
+    // a motor in combi mode — matches the RPi Python lib, which uses
+    // `selonce 2 ; set V` to briefly target mode 2 (position) and write
+    // the value via `set`.
+    assert_eq!(cmd_preset(0, 2, 0.0), "port 0 ; selonce 2 ; set 0\r");
+    assert_eq!(cmd_preset(3, 2, 42.5), "port 3 ; selonce 2 ; set 42.5\r");
 }

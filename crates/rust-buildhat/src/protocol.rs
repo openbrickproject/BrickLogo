@@ -118,12 +118,14 @@ pub fn cmd_set_value(port: u8, value: i32) -> String {
 }
 
 /// Preset a motor counter (e.g. reset position mode 2 to 0). Uses
-/// `selonce` to briefly establish the target mode — without it, the
-/// firmware's active mode is our port's combi group, which has no single
-/// counter for `preset` to modify. `selonce` is a one-shot mode select
-/// and doesn't disturb the ongoing combi subscription.
+/// `selonce` to briefly target the mode and `set` to write the value —
+/// this matches the Raspberry Pi Build HAT Python library's
+/// `presetposition`. `selonce` is a one-shot select that doesn't disturb
+/// the ongoing combi subscription; `set` writes to the selected mode's
+/// counter (the firmware's `preset` verb does something different and
+/// silently no-ops for motors in combi mode).
 pub fn cmd_preset(port: u8, mode: u8, value: f64) -> String {
-    format!("port {} ; selonce {} ; preset {}\r", port, mode, value)
+    format!("port {} ; selonce {} ; set {}\r", port, mode, value)
 }
 
 // ── Response parsing ─────────────────────────────
