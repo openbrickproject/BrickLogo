@@ -428,11 +428,25 @@ impl HardwareAdapter for BuildHATAdapter {
         // Detect state and upload firmware if needed
         let mut state = firmware::detect_state(&mut *port)?;
         if let HatState::Bootloader = state {
-            // Load bundled firmware
-            let fw_data = std::fs::read("firmware/buildhat/buildhat-firmware-1902784.bin")
-                .map_err(|e| format!("Cannot read Build HAT firmware: {} (is the firmware/ directory present?)", e))?;
-            let sig_data = std::fs::read("firmware/buildhat/buildhat-signature-1902784.bin")
-                .map_err(|e| format!("Cannot read Build HAT signature: {} (is the firmware/ directory present?)", e))?;
+            // Load bundled firmware. `resolve_bundled` tries CWD first, then
+            // the bricklogo install dir (`~/.bricklogo/firmware/buildhat/`),
+            // so running the binary from anywhere on PATH still works.
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let fw_path = bricklogo_lang::paths::resolve_bundled(
+                "firmware/buildhat/buildhat-firmware-1902784.bin",
+                &cwd,
+                "",
+            );
+            let sig_path = bricklogo_lang::paths::resolve_bundled(
+                "firmware/buildhat/buildhat-signature-1902784.bin",
+                &cwd,
+                "",
+            );
+            let fw_data = std::fs::read(&fw_path)
+                .map_err(|e| format!("Cannot read Build HAT firmware at {}: {}", fw_path.display(), e))?;
+            let sig_data = std::fs::read(&sig_path)
+                .map_err(|e| format!("Cannot read Build HAT signature at {}: {}", sig_path.display(), e))?;
             let progress: firmware::ProgressFn = Box::new(|_| {});
             firmware::upload_firmware(&mut *port, &fw_data, &sig_data, &progress)?;
 
