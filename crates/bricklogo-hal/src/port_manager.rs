@@ -314,6 +314,65 @@ impl PortManager {
         groups.into_iter().collect()
     }
 
+    /// Run a batch operation in parallel across devices.
+    ///
+    /// Each device gets its own scoped thread so blocking operations
+    /// (`run_ports_for_time`, `rotate_ports_by_degrees`, etc.) on different
+    /// devices fire simultaneously instead of serially. Waits for all
+    /// threads before returning; if any returned an error, returns the
+    /// first one.
+    fn run_parallel_by_device<F>(
+        &mut self,
+        groups: Vec<(String, Vec<(String, PortDirection, u8)>)>,
+        op: F,
+    ) -> Result<(), String>
+    where
+        F: Fn(&mut dyn HardwareAdapter, &[PortCommand]) -> Result<(), String> + Sync,
+    {
+        let group_map: HashMap<String, Vec<(String, PortDirection, u8)>> =
+            groups.into_iter().collect();
+
+        // Collect &mut refs to each adapter in the batch, keyed by name.
+        let mut work: Vec<(
+            &mut Box<dyn HardwareAdapter>,
+            &Vec<(String, PortDirection, u8)>,
+        )> = Vec::new();
+        for (name, entry) in self.devices.iter_mut() {
+            if let Some(port_cmds) = group_map.get(name) {
+                work.push((&mut entry.adapter, port_cmds));
+            }
+        }
+
+        let results: Vec<Result<(), String>> = std::thread::scope(|s| {
+            let handles: Vec<_> = work
+                .into_iter()
+                .map(|(adapter, port_cmds)| {
+                    let op = &op;
+                    s.spawn(move || {
+                        let commands: Vec<PortCommand> = port_cmds
+                            .iter()
+                            .map(|(port, dir, power)| PortCommand {
+                                port: port.as_str(),
+                                direction: *dir,
+                                power: *power,
+                            })
+                            .collect();
+                        op(adapter.as_mut(), &commands)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| Err("adapter thread panicked".to_string()))
+                })
+                .collect()
+        });
+
+        results.into_iter().find(|r| r.is_err()).unwrap_or(Ok(()))
+    }
+
     /// Batch start ports, grouped by device.
     fn batch_start(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
         let groups = self.group_by_device(ports);
@@ -489,16 +548,12 @@ impl PortManager {
         for qp in &ports { self.cancel_flash(qp); }
 
         let groups = self.group_by_device(&ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
-                .collect();
-            entry.adapter.run_ports_for_time(&commands, tenths)?;
-        }
+        let result = self.run_parallel_by_device(groups, |adapter, commands| {
+            adapter.run_ports_for_time(commands, tenths)
+        });
 
         for qp in &ports { self.get_state(qp).is_running = false; }
-        Ok(())
+        result
     }
 
     pub fn rotate(&mut self, port_strs: &[String], degrees: i32) -> Result<(), String> {
@@ -511,15 +566,12 @@ impl PortManager {
         for qp in &ports { self.cancel_flash(qp); }
 
         let groups = self.group_by_device(&ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
-                .collect();
-            entry.adapter.rotate_ports_by_degrees(&commands, degrees)?;
-        }
+        let result = self.run_parallel_by_device(groups, |adapter, commands| {
+            adapter.rotate_ports_by_degrees(commands, degrees)
+        });
+
         for qp in &ports { self.get_state(qp).is_running = false; }
-        Ok(())
+        result
     }
 
     pub fn rotate_to(&mut self, port_strs: &[String], position: i32) -> Result<(), String> {
@@ -532,15 +584,12 @@ impl PortManager {
         for qp in &ports { self.cancel_flash(qp); }
 
         let groups = self.group_by_device(&ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
-                .collect();
-            entry.adapter.rotate_ports_to_position(&commands, position)?;
-        }
+        let result = self.run_parallel_by_device(groups, |adapter, commands| {
+            adapter.rotate_ports_to_position(commands, position)
+        });
+
         for qp in &ports { self.get_state(qp).is_running = false; }
-        Ok(())
+        result
     }
 
     pub fn reset_zero(&mut self, port_strs: &[String]) -> Result<(), String> {
@@ -567,15 +616,12 @@ impl PortManager {
         for qp in &ports { self.cancel_flash(qp); }
 
         let groups = self.group_by_device(&ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds.iter()
-                .map(|(port, dir, power)| PortCommand { port: port.as_str(), direction: *dir, power: *power })
-                .collect();
-            entry.adapter.rotate_ports_to_home(&commands)?;
-        }
+        let result = self.run_parallel_by_device(groups, |adapter, commands| {
+            adapter.rotate_ports_to_home(commands)
+        });
+
         for qp in &ports { self.get_state(qp).is_running = false; }
-        Ok(())
+        result
     }
 
     pub fn flash(
