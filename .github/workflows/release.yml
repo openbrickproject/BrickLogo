@@ -42,6 +42,18 @@ jobs:
         if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y zip
 
+      # Generates THIRD_PARTY_NOTICES.md covering every Rust crate statically
+      # linked into the release binary. Runs on the host (not inside the
+      # Linux build container) since cargo-about resolves targets from
+      # about.toml and doesn't need the target toolchain.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Generate third-party notices
+        run: cargo about generate about.hbs -o THIRD_PARTY_NOTICES.md
+
       # Linux: build inside a Debian Bullseye container (glibc 2.31) so the
       # released binary runs on Bullseye / Bookworm / modern Ubuntu. Without
       # this, the runner's native glibc (2.39 on ubuntu-24.04) gets baked in
@@ -130,6 +142,8 @@ jobs:
           mkdir -p "$STAGING/bricklogo"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$STAGING/bricklogo/"
           cp bricklogo.config.json.example "$STAGING/bricklogo/"
+          cp LICENSE "$STAGING/bricklogo/"
+          cp THIRD_PARTY_NOTICES.md "$STAGING/bricklogo/"
           cp -r examples "$STAGING/bricklogo/"
           cp -r firmware "$STAGING/bricklogo/"
           cp -r docs "$STAGING/bricklogo/"
@@ -146,6 +160,8 @@ jobs:
           New-Item -ItemType Directory -Path "$staging\bricklogo" | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\${{ matrix.binary }}" "$staging\bricklogo\"
           Copy-Item "bricklogo.config.json.example" "$staging\bricklogo\"
+          Copy-Item "LICENSE" "$staging\bricklogo\"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "$staging\bricklogo\"
           Copy-Item -Recurse "examples" "$staging\bricklogo\examples"
           Copy-Item -Recurse "firmware" "$staging\bricklogo\firmware"
           Copy-Item -Recurse "docs" "$staging\bricklogo\docs"

@@ -2,7 +2,7 @@
 
 ![BrickLogo screenshot](screenshots/v0.2.0.png)
 
-BrickLogo is a Logo programming environment for controlling LEGO motors and sensors. It runs in a terminal and works with hardware from the original DACTA Control Lab through to current Powered UP and LEGO Education Science devices.
+BrickLogo is a Logo programming environment for controlling LEGO® motors and sensors. It runs in a terminal and works with hardware from the original DACTA Control Lab through to current Powered UP and LEGO Education Science devices.
 
 LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at MIT in the 1980s to connect the Logo programming language to physical LEGO models. LEGO produced two implementations: LEGO TC Logo (1988) and LEGO DACTA Control Lab (1993). BrickLogo is a spiritual evolution of LEGO/Logo, drawing from both and adding support for current hardware.
 
@@ -52,7 +52,7 @@ Connected to Boost Move Hub as "mybot"
 
 | Type | Command | Devices |
 | --- | --- | --- |
-| LEGO Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
+| LEGO® Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
 | LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered UP Hub, WeDo 2.0, Technic Hub, Remote, Duplo Train |
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
@@ -131,3 +131,15 @@ cargo run -p bricklogo
 ## Status
 
 BrickLogo is in active development. The goal is a usable and fun LEGO/Logo environment for automation and learning.
+
+## License
+
+BrickLogo is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+## Trademarks
+
+LEGO®, DACTA, Mindstorms, Powered UP, WeDo, Boost, SPIKE, and Technic are trademarks of the LEGO Group of companies, which does not sponsor, authorize, or endorse this project.
+
+Raspberry Pi is a trademark of Raspberry Pi Ltd. BrickLogo is compatible with the Raspberry Pi Build HAT but is not affiliated with, endorsed by, or supported by Raspberry Pi Ltd.
+
+BrickLogo is an independent, unofficial project. All product names, logos, and brands referenced in this project are the property of their respective owners. Use of these names is for identification and compatibility purposes only and does not imply any endorsement.

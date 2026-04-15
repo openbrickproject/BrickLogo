@@ -3,6 +3,7 @@ name = "bricklogo"
 version = "0.6.6"
 edition = "2024"
 description = "A modern LEGO/Logo REPL"
+license = "Apache-2.0"
 
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }

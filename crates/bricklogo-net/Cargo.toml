@@ -3,6 +3,7 @@ name = "bricklogo-net"
 version = "0.1.0"
 edition = "2024"
 description = "Networked shared variables for BrickLogo"
+license = "Apache-2.0"
 
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }

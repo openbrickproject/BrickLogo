@@ -3,6 +3,7 @@ name = "bricklogo-tui"
 version = "0.1.0"
 edition = "2024"
 description = "Terminal UI for BrickLogo"
+license = "Apache-2.0"
 
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }

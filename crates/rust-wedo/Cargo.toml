@@ -3,6 +3,7 @@ name = "rust-wedo"
 version = "0.1.0"
 edition = "2024"
 description = "LEGO WeDo 1.0 protocol library"
+license = "Apache-2.0"
 
 [dependencies]
 hidapi = "2.6"

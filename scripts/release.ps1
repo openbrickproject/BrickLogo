@@ -10,6 +10,15 @@ Write-Host "Building BrickLogo v${version} for windows-${arch}..."
 cargo build --release --bin bricklogo
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
+Write-Host "Generating THIRD_PARTY_NOTICES.md..."
+if (-not (Get-Command cargo-about -ErrorAction SilentlyContinue)) {
+    Write-Host "cargo-about not found, installing..."
+    cargo install cargo-about --locked
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+}
+cargo about generate about.hbs -o THIRD_PARTY_NOTICES.md
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
 Write-Host "Creating ${zipName}..."
 
 $staging = Join-Path $env:TEMP "bricklogo-release"
@@ -18,6 +27,8 @@ New-Item -ItemType Directory -Path "$staging\bricklogo" | Out-Null
 
 Copy-Item "target\release\bricklogo.exe" "$staging\bricklogo\"
 Copy-Item "bricklogo.config.json.example" "$staging\bricklogo\"
+Copy-Item "LICENSE" "$staging\bricklogo\"
+Copy-Item "THIRD_PARTY_NOTICES.md" "$staging\bricklogo\"
 Copy-Item -Recurse "examples" "$staging\bricklogo\examples"
 Copy-Item -Recurse "firmware" "$staging\bricklogo\firmware"
 Copy-Item -Recurse "docs" "$staging\bricklogo\docs"

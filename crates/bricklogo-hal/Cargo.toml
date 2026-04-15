@@ -3,6 +3,7 @@ name = "bricklogo-hal"
 version = "0.1.0"
 edition = "2024"
 description = "Hardware abstraction layer for BrickLogo"
+license = "Apache-2.0"
 
 [dependencies]
 bricklogo-lang = { path = "../bricklogo-lang" }

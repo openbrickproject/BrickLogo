@@ -3,6 +3,7 @@ name = "bricklogo-lang"
 version = "0.1.0"
 edition = "2024"
 description = "Logo language interpreter for BrickLogo"
+license = "Apache-2.0"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
