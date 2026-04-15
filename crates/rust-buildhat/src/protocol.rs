@@ -117,9 +117,13 @@ pub fn cmd_set_value(port: u8, value: i32) -> String {
     format!("port {} ; set {}\r", port, value)
 }
 
-/// Preset a mode value (e.g. reset position counter to 0).
+/// Preset a motor counter (e.g. reset position mode 2 to 0). Uses
+/// `selonce` to briefly establish the target mode — without it, the
+/// firmware's active mode is our port's combi group, which has no single
+/// counter for `preset` to modify. `selonce` is a one-shot mode select
+/// and doesn't disturb the ongoing combi subscription.
 pub fn cmd_preset(port: u8, mode: u8, value: f64) -> String {
-    format!("port {} ; preset {} {}\r", port, mode, value)
+    format!("port {} ; selonce {} ; preset {}\r", port, mode, value)
 }
 
 // ── Response parsing ─────────────────────────────

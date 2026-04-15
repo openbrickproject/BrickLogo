@@ -88,3 +88,13 @@ fn test_sensor_commands() {
     assert_eq!(cmd_select_mode(0, 1, 100), "port 0 ; select 1 ; selrate 100\r");
     assert_eq!(cmd_deselect(3), "port 3 ; select\r");
 }
+
+#[test]
+fn test_preset_uses_selonce_to_target_mode() {
+    // `preset` operates on the currently-selected mode. Our motors sit in
+    // combi mode after init, so `preset N` alone would be a no-op. The
+    // `selonce 2` prefix briefly targets mode 2 (position) for this
+    // single command without disturbing the ongoing combi subscription.
+    assert_eq!(cmd_preset(0, 2, 0.0), "port 0 ; selonce 2 ; preset 0\r");
+    assert_eq!(cmd_preset(3, 2, 42.5), "port 3 ; selonce 2 ; preset 42.5\r");
+}
