@@ -371,13 +371,25 @@ impl HardwareAdapter for PoweredUpAdapter {
         direction: PortDirection,
         power: u8,
     ) -> Result<(), String> {
+        // Target is the motor's mechanical home (APOS=0). LWP3's
+        // GotoAbsolutePosition operates on POS in practice, not APOS, so we
+        // read APOS and rotate by the shortest direction-respecting delta.
         self.reject_if_wedo2("absolute positioning")?;
         self.require_absolute_motor(port)?;
-        let port_id = self.resolve_port_id(port)?;
-        let speed = to_signed_speed(direction, power);
-        let cmd = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
-        self.ble.request(port_id, &cmd)?;
-        Ok(())
+        let apos = match self.read_sensor(port, Some("absolute"))? {
+            Some(LogoValue::Number(n)) => n as i32,
+            _ => return Err("Could not read absolute position".to_string()),
+        };
+        let delta = crate::adapter::rotate_home_delta(apos, direction);
+        if delta == 0 {
+            return Ok(());
+        }
+        let delta_dir = if delta > 0 {
+            PortDirection::Even
+        } else {
+            PortDirection::Odd
+        };
+        self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
     }
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
@@ -528,15 +540,37 @@ impl HardwareAdapter for PoweredUpAdapter {
     }
 
     fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        // Read each port's APOS, compute shortest direction-respecting delta
+        // to mechanical home, fire all port commands in parallel.
         self.reject_if_wedo2("absolute positioning")?;
         for cmd in commands {
             self.require_absolute_motor(cmd.port)?;
         }
         let mut cmds: Vec<(u8, Vec<u8>)> = Vec::new();
         for cmd in commands {
+            let apos = match self.read_sensor(cmd.port, Some("absolute"))? {
+                Some(LogoValue::Number(n)) => n as i32,
+                _ => continue,
+            };
+            let delta = crate::adapter::rotate_home_delta(apos, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
             let port_id = self.resolve_port_id(cmd.port)?;
-            let speed = to_signed_speed(cmd.direction, cmd.power);
-            let msg = protocol::cmd_goto_absolute(port_id, 0, speed, 100, BrakingStyle::Hold, true);
+            let delta_dir = if delta > 0 {
+                PortDirection::Even
+            } else {
+                PortDirection::Odd
+            };
+            let speed = to_signed_speed(delta_dir, cmd.power);
+            let msg = protocol::cmd_start_speed_for_degrees(
+                port_id,
+                delta.unsigned_abs(),
+                speed,
+                100,
+                BrakingStyle::Hold,
+                true,
+            );
             cmds.push((port_id, msg));
         }
         if !cmds.is_empty() {

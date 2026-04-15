@@ -1,6 +1,7 @@
 use super::*;
 use crate::scheduler;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Mock serial transport for BuildHAT — records every text command written,
 /// returns no data on read.
@@ -105,6 +106,121 @@ fn test_buildhat_run_ports_for_time_single_port_not_degraded() {
     let writes = writes.lock().unwrap();
     assert_eq!(count_matching(&writes, "set "), 1);
     assert_eq!(count_matching(&writes, "coast"), 1);
+}
+
+/// Build an adapter whose port 0 and port 1 hold absolute motors with
+/// pre-populated combi data (speed, position, apos). Caller picks each
+/// port's APOS for the home-delta test.
+fn make_adapter_with_absolute_motors(
+    apos_a: f64,
+    apos_b: f64,
+) -> (BuildHATAdapter, Arc<Mutex<Vec<String>>>, Arc<Mutex<BuildHATShared>>) {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let transport: Box<dyn BuildHATTransport> = Box::new(MockTransport {
+        writes: writes.clone(),
+    });
+    let (tx, rx) = mpsc::channel();
+    let shared = Arc::new(Mutex::new(BuildHATShared::new()));
+    {
+        let mut s = shared.lock().unwrap();
+        // DEVICE_MEDIUM_ANGULAR_MOTOR is both tacho and absolute.
+        s.ports[0] = PortInfo { type_id: DEVICE_MEDIUM_ANGULAR_MOTOR, connected: true };
+        s.ports[1] = PortInfo { type_id: DEVICE_MEDIUM_ANGULAR_MOTOR, connected: true };
+        // combi layout: [speed, position, absolute]
+        s.sensor_data.insert("0:0".into(), vec![0.0, 0.0, apos_a]);
+        s.sensor_data.insert("1:0".into(), vec![0.0, 0.0, apos_b]);
+    }
+    let slot = BuildHATSlot {
+        port: transport,
+        rx,
+        shared: shared.clone(),
+        read_buffer: String::new(),
+        alive: true,
+        pending_inits: Vec::new(),
+    };
+    let slot_id = scheduler::register_slot(Box::new(slot));
+    let mut adapter = BuildHATAdapter::new();
+    adapter.tx = Some(tx);
+    adapter.slot_id = Some(slot_id);
+    adapter.shared = shared.clone();
+    (adapter, writes, shared)
+}
+
+#[test]
+fn test_buildhat_rotate_ports_to_home_both_at_home_is_noop() {
+    // Both motors already at APOS=0 → no ramps issued, returns immediately.
+    let (mut adapter, writes, _) = make_adapter_with_absolute_motors(0.0, 0.0);
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+    adapter.rotate_ports_to_home(&commands).unwrap();
+    adapter.disconnect();
+
+    let writes = writes.lock().unwrap();
+    assert_eq!(
+        count_matching(&writes, "ramp"),
+        0,
+        "expected no ramp commands, got {:?}",
+        writes
+    );
+}
+
+#[test]
+fn test_buildhat_rotate_ports_to_home_fires_both_ramps_before_waiting() {
+    // Both motors at APOS=60 (needing rotation). The batch must issue BOTH
+    // `ramp` commands before blocking on completions — i.e. while the main
+    // thread is in the wait loop, both ramps should already be visible in
+    // the mock transport's writes. Helper thread flips completion flags
+    // once it sees both ramps, so the function returns.
+    let (mut adapter, writes, shared) = make_adapter_with_absolute_motors(60.0, 60.0);
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+
+    let writes_for_flipper = writes.clone();
+    let shared_for_flipper = shared.clone();
+    let ramps_at_flip = std::thread::spawn(move || {
+        // Wait for both ramps to appear in writes.
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let ramp_count = writes_for_flipper
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|w| w.contains("ramp"))
+                .count();
+            if ramp_count >= 2 {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let ramp_count = writes_for_flipper
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|w| w.contains("ramp"))
+            .count();
+        // Flip both completions to unblock the wait loop.
+        let mut s = shared_for_flipper.lock().unwrap();
+        s.completions[0] = true;
+        s.completions[1] = true;
+        ramp_count
+    });
+
+    adapter.rotate_ports_to_home(&commands).unwrap();
+    let ramps_observed = ramps_at_flip.join().unwrap();
+    adapter.disconnect();
+
+    assert_eq!(
+        ramps_observed, 2,
+        "both ramps should be queued before waiting on completions (observed {})",
+        ramps_observed
+    );
 }
 
 #[test]

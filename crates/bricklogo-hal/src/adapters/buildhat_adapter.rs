@@ -3,9 +3,7 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
-#[cfg(test)]
-use crate::adapter::PortCommand;
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::scheduler::{self, DeviceSlot};
 use rust_buildhat::constants::*;
 use rust_buildhat::protocol::*;
@@ -624,6 +622,8 @@ impl HardwareAdapter for BuildHATAdapter {
     }
 
     fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+        // Target is the motor's mechanical home (APOS, combi mode 3). Read
+        // APOS and rotate by the shortest direction-respecting delta.
         let idx = self.port_index(port)?;
         let type_id = self.require_device(idx)?;
         if !is_absolute_motor(type_id) {
@@ -632,7 +632,98 @@ impl HardwareAdapter for BuildHATAdapter {
                 port
             ));
         }
-        self.rotate_port_to_position(port, direction, power, 0)
+        let apos = match self.read_sensor(port, Some("absolute"))? {
+            Some(LogoValue::Number(n)) => n as i32,
+            _ => return Err("Could not read absolute position".to_string()),
+        };
+        let delta = crate::adapter::rotate_home_delta(apos, direction);
+        if delta == 0 {
+            return Ok(());
+        }
+        let delta_dir = if delta > 0 {
+            PortDirection::Even
+        } else {
+            PortDirection::Odd
+        };
+        self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
+    }
+
+    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        // Plan every port first (read APOS, compute delta, build MotorRamp
+        // args), then fire all commands without blocking between them, and
+        // finally poll each port's completion flag. This gives within-hub
+        // parallelism: the motors ramp toward home simultaneously instead
+        // of one-at-a-time through the default per-port loop.
+        let mut plans: Vec<(u8, f64, f64, f64)> = Vec::new();
+        for cmd in commands {
+            let idx = self.port_index(cmd.port)?;
+            let type_id = self.require_device(idx)?;
+            if !is_absolute_motor(type_id) {
+                return Err(format!(
+                    "Motor on port \"{}\" has no absolute-position encoder",
+                    cmd.port
+                ));
+            }
+            let apos = match self.read_sensor(cmd.port, Some("absolute"))? {
+                Some(LogoValue::Number(n)) => n as i32,
+                _ => return Err("Could not read absolute position".to_string()),
+            };
+            let delta = crate::adapter::rotate_home_delta(apos, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
+            let degrees = delta.unsigned_abs() as i32;
+            let speed = to_signed_speed(cmd.direction, cmd.power).abs().max(1);
+            let current = {
+                let shared = self.shared.lock().unwrap();
+                shared.sensor_data.get(&format!("{}:0", idx))
+                    .and_then(|v| v.get(1).copied())
+                    .unwrap_or(0.0)
+            };
+            let from_rot = current / 360.0;
+            let to_rot = from_rot + (delta as f64 / 360.0);
+            let duration = (degrees as f64 / 360.0) / (speed as f64 / 100.0);
+            plans.push((idx, from_rot, to_rot, duration));
+        }
+
+        if plans.is_empty() {
+            return Ok(());
+        }
+
+        // Clear completion flags, then queue all ramps without waiting.
+        {
+            let mut shared = self.shared.lock().unwrap();
+            for &(idx, _, _, _) in &plans {
+                shared.completions[idx as usize] = false;
+            }
+        }
+        for &(idx, from, to, duration) in &plans {
+            self.send_cmd(BuildHATCommand::MotorRamp {
+                port: idx,
+                from,
+                to,
+                duration,
+            })?;
+        }
+
+        // Wait for every port to signal completion. Timeout is the longest
+        // planned duration plus a small margin.
+        let max_duration = plans.iter().map(|p| p.3).fold(0.0f64, f64::max);
+        let timeout_secs = (max_duration as u64) + 5;
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        loop {
+            if Instant::now() > deadline {
+                return Err("Command timed out".to_string());
+            }
+            let all_done = {
+                let shared = self.shared.lock().unwrap();
+                plans.iter().all(|&(idx, _, _, _)| shared.completions[idx as usize])
+            };
+            if all_done {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
     }
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {

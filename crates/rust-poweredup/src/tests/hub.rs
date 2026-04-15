@@ -91,6 +91,41 @@ fn test_process_sensor_value() {
 }
 
 #[test]
+fn test_set_subscribed_mode_clears_stale_reading_on_mode_change() {
+    // When switching subscription modes, the cached last_reading was
+    // captured under the old mode and is meaningless for the new one.
+    // set_subscribed_mode must clear it so callers polling last_reading
+    // wait for fresh data instead of returning the stale value.
+    let mut hub = Hub::new(HubType::TechnicMediumHub);
+    hub.on_connected();
+    // Attach a Technic motor (type 0x30 = TechnicLargeAngularMotor) on port 0.
+    let attach = vec![
+        15, 0x00, 0x04, 0x00, 0x01, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    hub.process_message(&attach);
+
+    // Subscribe to mode 2 (rotation / POS) and populate a reading.
+    hub.set_subscribed_mode(0, 0x02);
+    let deg_bytes = 700_i32.to_le_bytes();
+    let msg = vec![9, 0x00, 0x45, 0x00, deg_bytes[0], deg_bytes[1], deg_bytes[2], deg_bytes[3]];
+    hub.process_message(&msg);
+    assert_eq!(hub.last_reading(0), Some(&SensorReading::Number(700.0)));
+
+    // Changing subscription to mode 3 (absolute / APOS) must clear the
+    // previous reading.
+    hub.set_subscribed_mode(0, 0x03);
+    assert_eq!(hub.last_reading(0), None);
+
+    // Re-subscribing to the SAME mode should NOT clear (reading stays valid).
+    let apos_bytes = 60_i16.to_le_bytes();
+    let apos_msg = vec![7, 0x00, 0x45, 0x00, apos_bytes[0], apos_bytes[1]];
+    hub.process_message(&apos_msg);
+    assert_eq!(hub.last_reading(0), Some(&SensorReading::Number(60.0)));
+    hub.set_subscribed_mode(0, 0x03);
+    assert_eq!(hub.last_reading(0), Some(&SensorReading::Number(60.0)));
+}
+
+#[test]
 fn test_process_motor_rotation() {
     let mut hub = Hub::new(HubType::TechnicMediumHub);
     hub.on_connected();

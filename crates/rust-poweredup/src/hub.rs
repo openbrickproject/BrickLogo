@@ -264,9 +264,15 @@ impl Hub {
 
     // ── Sensor subscription tracking ────────────
 
-    /// Record that we've subscribed to a mode on a port.
+    /// Record that we've subscribed to a mode on a port. If the mode is
+    /// changing, the cached `last_reading` is cleared — a value captured
+    /// under the previous mode is meaningless for the new one, and
+    /// callers that poll `last_reading` must wait for fresh data.
     pub fn set_subscribed_mode(&mut self, port_id: u8, mode: u8) {
         if let Some(device) = self.devices.get_mut(&port_id) {
+            if device.current_mode != Some(mode) {
+                device.last_reading = None;
+            }
             device.current_mode = Some(mode);
         }
     }

@@ -24,6 +24,23 @@ pub fn rotateto_delta(current_position: i32, target: i32, direction: PortDirecti
     }
 }
 
+/// Compute the rotation delta for `rotatetohome` on an absolute-encoder
+/// motor, given the mechanical angle `apos` (in [-180, 180]). The result
+/// brings the shaft to mechanical home (APOS = 0) by less than one
+/// revolution, in the direction specified.
+///
+///   - `Even` (forward): delta in `[0, 360)` — smallest forward rotation.
+///   - `Odd` (backward): delta in `(-360, 0]` — smallest backward rotation.
+///
+/// Bounded via `rem_euclid(360)` so a noisy or out-of-range `apos` never
+/// causes more than a single revolution.
+pub fn rotate_home_delta(apos: i32, direction: PortDirection) -> i32 {
+    match direction {
+        PortDirection::Even => (-apos).rem_euclid(360),
+        PortDirection::Odd => -apos.rem_euclid(360),
+    }
+}
+
 impl PortDirection {
     pub fn toggle(&self) -> Self {
         match self {
@@ -177,3 +194,7 @@ pub trait HardwareAdapter: Send {
         Err("This device does not support firmware reconnect".to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/adapter.rs"]
+mod tests;
