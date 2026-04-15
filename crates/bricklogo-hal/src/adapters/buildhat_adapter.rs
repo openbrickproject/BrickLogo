@@ -4,11 +4,38 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortDirection};
+#[cfg(test)]
+use crate::adapter::PortCommand;
 use crate::scheduler::{self, DeviceSlot};
 use rust_buildhat::constants::*;
 use rust_buildhat::protocol::*;
 use rust_buildhat::constants::{is_absolute_motor, needs_led_init};
 use rust_buildhat::firmware;
+
+/// Serial transport abstraction — lets tests inject a mock without a real
+/// Build HAT attached.
+pub trait BuildHATTransport: Send {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String>;
+    fn write_all(&mut self, data: &[u8]) -> Result<(), String>;
+    fn flush(&mut self) -> Result<(), String>;
+}
+
+impl BuildHATTransport for Box<dyn serialport::SerialPort> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+        match Read::read(self.as_mut(), buf) {
+            Ok(n) => Ok(n),
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(0),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(0),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn write_all(&mut self, data: &[u8]) -> Result<(), String> {
+        Write::write_all(self.as_mut(), data).map_err(|e| e.to_string())
+    }
+    fn flush(&mut self) -> Result<(), String> {
+        Write::flush(self.as_mut()).map_err(|e| e.to_string())
+    }
+}
 
 const SENSOR_POLL_INTERVAL_MS: u32 = 50;
 const ALL_PORTS: [&str; 4] = ["a", "b", "c", "d"];
@@ -75,7 +102,7 @@ struct PendingInit {
 }
 
 struct BuildHATSlot {
-    port: Box<dyn serialport::SerialPort>,
+    port: Box<dyn BuildHATTransport>,
     rx: mpsc::Receiver<BuildHATCommand>,
     shared: Arc<Mutex<BuildHATShared>>,
     read_buffer: String,
@@ -90,8 +117,8 @@ impl BuildHATSlot {
     }
 
     fn write_cmd_checked(&mut self, cmd: &str) -> Result<(), String> {
-        self.port.write_all(cmd.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
-        self.port.flush().map_err(|e| format!("Flush failed: {}", e))
+        self.port.write_all(cmd.as_bytes())?;
+        self.port.flush()
     }
 
     fn reply(tx: ReplyTx, result: Result<(), String>) {
@@ -420,12 +447,12 @@ impl HardwareAdapter for BuildHATAdapter {
         }
 
         // Initialize
-        port.write_all(cmd_echo_off().as_bytes()).map_err(|e| e.to_string())?;
-        port.flush().map_err(|e| e.to_string())?;
-        port.write_all(cmd_select_all_ports().as_bytes()).map_err(|e| e.to_string())?;
-        port.flush().map_err(|e| e.to_string())?;
-        port.write_all(cmd_list().as_bytes()).map_err(|e| e.to_string())?;
-        port.flush().map_err(|e| e.to_string())?;
+        Write::write_all(&mut port, cmd_echo_off().as_bytes()).map_err(|e| e.to_string())?;
+        Write::flush(&mut port).map_err(|e| e.to_string())?;
+        Write::write_all(&mut port, cmd_select_all_ports().as_bytes()).map_err(|e| e.to_string())?;
+        Write::flush(&mut port).map_err(|e| e.to_string())?;
+        Write::write_all(&mut port, cmd_list().as_bytes()).map_err(|e| e.to_string())?;
+        Write::flush(&mut port).map_err(|e| e.to_string())?;
 
         // Wait for device enumeration to complete
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -434,7 +461,7 @@ impl HardwareAdapter for BuildHATAdapter {
         let mut init_done = false;
 
         while Instant::now() < deadline && !init_done {
-            match port.read(&mut buf) {
+            match Read::read(&mut port, &mut buf) {
                 Ok(n) if n > 0 => {
                     response.push_str(&String::from_utf8_lossy(&buf[..n]));
                     if response.contains("Done initialising") {
@@ -462,7 +489,7 @@ impl HardwareAdapter for BuildHATAdapter {
         // Create driver slot — it will handle ongoing attach/detach events
         let (tx, rx) = mpsc::channel();
         let slot = BuildHATSlot {
-            port,
+            port: Box::new(port),
             rx,
             shared: shared.clone(),
             read_buffer: String::new(),
@@ -734,3 +761,7 @@ impl HardwareAdapter for BuildHATAdapter {
         self.connect()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/buildhat_adapter.rs"]
+mod tests;

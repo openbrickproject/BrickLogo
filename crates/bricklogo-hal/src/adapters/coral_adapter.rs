@@ -2,10 +2,38 @@ use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use bricklogo_lang::value::LogoValue;
 use rust_coral::ble::CoralBle;
 use rust_coral::constants::*;
+use rust_coral::coral::Coral;
 use rust_coral::protocol::{DeviceSensorPayload, MessageType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+/// BLE transport abstraction for Coral (LEGO Education Science).
+pub trait CoralBleHandle: Send {
+    fn coral(&self) -> &Coral;
+    fn is_connected(&self) -> bool;
+    fn connect(&mut self) -> Result<(), String>;
+    fn disconnect(&mut self);
+    fn send(&self, data: &[u8]) -> Result<(), String>;
+    fn request(&mut self, data: &[u8]) -> Result<(), String>;
+    fn request_all(&mut self, commands: &[(u8, u8, Vec<u8>)]) -> Result<(), String>;
+    fn poll(&mut self) -> Result<(), String>;
+    fn set_stop_flag(&mut self, flag: Arc<AtomicBool>);
+}
+
+impl CoralBleHandle for CoralBle {
+    fn coral(&self) -> &Coral { &self.coral }
+    fn is_connected(&self) -> bool { self.is_connected() }
+    fn connect(&mut self) -> Result<(), String> { self.connect() }
+    fn disconnect(&mut self) { self.disconnect() }
+    fn send(&self, data: &[u8]) -> Result<(), String> { self.send(data) }
+    fn request(&mut self, data: &[u8]) -> Result<(), String> { self.request(data) }
+    fn request_all(&mut self, commands: &[(u8, u8, Vec<u8>)]) -> Result<(), String> {
+        self.request_all(commands)
+    }
+    fn poll(&mut self) -> Result<(), String> { self.poll() }
+    fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) { self.set_stop_flag(flag) }
+}
 
 /// On the Double Motor, port "a" (left) is physically mirrored so Even
 /// (forward) must map to Counterclockwise. On the Single Motor there is
@@ -36,7 +64,7 @@ fn motor_bits_for_port(port: &str) -> Result<u8, String> {
 }
 
 pub struct CoralAdapter {
-    ble: CoralBle,
+    ble: Box<dyn CoralBleHandle>,
     output_ports: Vec<String>,
     port_modes: HashMap<String, Vec<String>>,
     display_name: String,
@@ -47,7 +75,7 @@ impl CoralAdapter {
     pub fn new() -> Self {
         let (runtime, adapter) = crate::ble::ble_context();
         CoralAdapter {
-            ble: CoralBle::new(runtime, adapter),
+            ble: Box::new(CoralBle::new(runtime, adapter)),
             output_ports: Vec::new(),
             port_modes: HashMap::new(),
             display_name: "LEGO Education Science".to_string(),
@@ -85,7 +113,7 @@ impl HardwareAdapter for CoralAdapter {
     fn connect(&mut self) -> Result<(), String> {
         super::ble_connect_with_retry(|| self.ble.connect(), 3)?;
 
-        if let Some(kind) = self.ble.coral.device_kind() {
+        if let Some(kind) = self.ble.coral().device_kind() {
             self.display_name = kind.display_name().to_string();
             self.port_modes.clear();
 
@@ -174,18 +202,18 @@ impl HardwareAdapter for CoralAdapter {
         power: u8,
     ) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
+        let cmd = self.ble.coral().cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
         let cmd = self
             .ble
-            .coral
+            .coral()
             .cmd_motor_run(bits, self.dir(direction, port));
         self.ble.send(&cmd)
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_motor_stop(bits);
+        let cmd = self.ble.coral().cmd_motor_stop(bits);
         self.ble.send(&cmd)
     }
 
@@ -197,9 +225,9 @@ impl HardwareAdapter for CoralAdapter {
         tenths: u32,
     ) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
+        let cmd = self.ble.coral().cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
-        let cmd = self.ble.coral.cmd_motor_run_for_time(
+        let cmd = self.ble.coral().cmd_motor_run_for_time(
             bits,
             tenths * 100,
             self.dir(direction, port),
@@ -215,11 +243,11 @@ impl HardwareAdapter for CoralAdapter {
         degrees: i32,
     ) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
+        let cmd = self.ble.coral().cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
         let cmd =
             self.ble
-                .coral
+                .coral()
                 .cmd_motor_run_for_degrees(bits, degrees, self.dir(direction, port));
         self.ble.request(&cmd)
     }
@@ -251,7 +279,7 @@ impl HardwareAdapter for CoralAdapter {
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_motor_reset_relative_position(bits, 0);
+        let cmd = self.ble.coral().cmd_motor_reset_relative_position(bits, 0);
         self.ble.send(&cmd)
     }
 
@@ -262,9 +290,9 @@ impl HardwareAdapter for CoralAdapter {
         power: u8,
     ) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
-        let cmd = self.ble.coral.cmd_set_motor_speed(bits, power as i8);
+        let cmd = self.ble.coral().cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
-        let cmd = self.ble.coral.cmd_motor_run_to_absolute_position(
+        let cmd = self.ble.coral().cmd_motor_run_to_absolute_position(
             bits,
             0,
             self.dir(direction, port),
@@ -289,17 +317,17 @@ impl HardwareAdapter for CoralAdapter {
         };
 
         match effective_mode {
-            "color" => match self.ble.coral.read("color") {
+            "color" => match self.ble.coral().read("color") {
                 Some(DeviceSensorPayload::Color(c)) => Ok(Some(LogoValue::Number(c.color as f64))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "light" => match self.ble.coral.read("color") {
+            "light" => match self.ble.coral().read("color") {
                 Some(DeviceSensorPayload::Color(c)) => {
                     Ok(Some(LogoValue::Number(c.reflection as f64)))
                 }
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "rgb" => match self.ble.coral.read("color") {
+            "rgb" => match self.ble.coral().read("color") {
                 Some(DeviceSensorPayload::Color(c)) => Ok(Some(LogoValue::List(vec![
                     LogoValue::Number(c.raw_red as f64),
                     LogoValue::Number(c.raw_green as f64),
@@ -309,7 +337,7 @@ impl HardwareAdapter for CoralAdapter {
             },
             "rotation" => {
                 if let Some(mask) = motor_bit_mask {
-                    match self.ble.coral.read_motor(mask) {
+                    match self.ble.coral().read_motor(mask) {
                         Some(DeviceSensorPayload::Motor(m)) => {
                             Ok(Some(LogoValue::Number(m.position as f64)))
                         }
@@ -321,7 +349,7 @@ impl HardwareAdapter for CoralAdapter {
             }
             "speed" => {
                 if let Some(mask) = motor_bit_mask {
-                    match self.ble.coral.read_motor(mask) {
+                    match self.ble.coral().read_motor(mask) {
                         Some(DeviceSensorPayload::Motor(m)) => {
                             Ok(Some(LogoValue::Number(m.speed as f64)))
                         }
@@ -331,14 +359,14 @@ impl HardwareAdapter for CoralAdapter {
                     Ok(Some(LogoValue::Number(0.0)))
                 }
             }
-            "tilt" => match self.ble.coral.read("motion") {
+            "tilt" => match self.ble.coral().read("motion") {
                 Some(DeviceSensorPayload::MotionSensor(m)) => Ok(Some(LogoValue::List(vec![
                     LogoValue::Number(m.pitch as f64),
                     LogoValue::Number(m.roll as f64),
                 ]))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "gyro" => match self.ble.coral.read("motion") {
+            "gyro" => match self.ble.coral().read("motion") {
                 Some(DeviceSensorPayload::MotionSensor(m)) => Ok(Some(LogoValue::List(vec![
                     LogoValue::Number(m.gyroscope_x as f64),
                     LogoValue::Number(m.gyroscope_y as f64),
@@ -346,7 +374,7 @@ impl HardwareAdapter for CoralAdapter {
                 ]))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "accel" => match self.ble.coral.read("motion") {
+            "accel" => match self.ble.coral().read("motion") {
                 Some(DeviceSensorPayload::MotionSensor(m)) => Ok(Some(LogoValue::List(vec![
                     LogoValue::Number(m.accelerometer_x as f64),
                     LogoValue::Number(m.accelerometer_y as f64),
@@ -354,19 +382,19 @@ impl HardwareAdapter for CoralAdapter {
                 ]))),
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "yaw" => match self.ble.coral.read("motion") {
+            "yaw" => match self.ble.coral().read("motion") {
                 Some(DeviceSensorPayload::MotionSensor(m)) => {
                     Ok(Some(LogoValue::Number(m.yaw as f64)))
                 }
                 _ => Ok(Some(LogoValue::Number(0.0))),
             },
-            "button" | "touch" => match self.ble.coral.read("button") {
+            "button" | "touch" => match self.ble.coral().read("button") {
                 Some(DeviceSensorPayload::Button(b)) => Ok(Some(LogoValue::Word(
                     if b.pressed { "true" } else { "false" }.to_string(),
                 ))),
                 _ => Ok(Some(LogoValue::Word("false".to_string()))),
             },
-            "joystick" => match self.ble.coral.read("joystick") {
+            "joystick" => match self.ble.coral().read("joystick") {
                 Some(DeviceSensorPayload::Joystick(j)) => Ok(Some(LogoValue::List(vec![
                     LogoValue::Number(j.left_percent as f64),
                     LogoValue::Number(j.right_percent as f64),
@@ -387,12 +415,12 @@ impl HardwareAdapter for CoralAdapter {
                 .iter()
                 .map(|c| motor_bits_for_port(c.port).unwrap())
                 .fold(0u8, |acc, b| acc | b);
-            let cmd = self.ble.coral.cmd_set_motor_speed(combined_bits, powers[0]);
+            let cmd = self.ble.coral().cmd_set_motor_speed(combined_bits, powers[0]);
             self.ble.send(&cmd)?;
         } else {
             for cmd in commands {
                 let bits = motor_bits_for_port(cmd.port)?;
-                let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+                let speed_cmd = self.ble.coral().cmd_set_motor_speed(bits, cmd.power as i8);
                 self.ble.send(&speed_cmd)?;
             }
         }
@@ -408,14 +436,14 @@ impl HardwareAdapter for CoralAdapter {
                 .iter()
                 .map(|c| motor_bits_for_port(c.port).unwrap())
                 .fold(0u8, |acc, b| acc | b);
-            let cmd = self.ble.coral.cmd_motor_run(combined_bits, dirs[0]);
+            let cmd = self.ble.coral().cmd_motor_run(combined_bits, dirs[0]);
             self.ble.send(&cmd)
         } else {
             for cmd in commands {
                 let bits = motor_bits_for_port(cmd.port)?;
                 let run_cmd = self
                     .ble
-                    .coral
+                    .coral()
                     .cmd_motor_run(bits, self.dir(cmd.direction, cmd.port));
                 self.ble.send(&run_cmd)?;
             }
@@ -428,7 +456,7 @@ impl HardwareAdapter for CoralAdapter {
             .iter()
             .map(|p| motor_bits_for_port(p).unwrap_or(0))
             .fold(0u8, |acc, b| acc | b);
-        let cmd = self.ble.coral.cmd_motor_stop(combined_bits);
+        let cmd = self.ble.coral().cmd_motor_stop(combined_bits);
         self.ble.send(&cmd)
     }
 
@@ -436,7 +464,7 @@ impl HardwareAdapter for CoralAdapter {
         // Set speed per motor
         for cmd in commands {
             let bits = motor_bits_for_port(cmd.port)?;
-            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            let speed_cmd = self.ble.coral().cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
         }
 
@@ -454,7 +482,7 @@ impl HardwareAdapter for CoralAdapter {
                     .fold(0u8, |acc, b| acc | b);
                 let cmd =
                     self.ble
-                        .coral
+                        .coral()
                         .cmd_motor_run_for_time(combined_bits, tenths * 100, dirs[0]);
                 return self.ble.request(&cmd);
             }
@@ -470,7 +498,7 @@ impl HardwareAdapter for CoralAdapter {
                 let dir = map_direction(cmd.direction, cmd.port, is_dm);
                 let msg = self
                     .ble
-                    .coral
+                    .coral()
                     .cmd_motor_run_for_time(bits, tenths * 100, dir);
                 (cmd_id, bits, msg)
             })
@@ -498,10 +526,10 @@ impl HardwareAdapter for CoralAdapter {
                 continue;
             }
             let bits = motor_bits_for_port(cmd.port)?;
-            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            let speed_cmd = self.ble.coral().cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
             let delta_dir = if delta > 0 { PortDirection::Even } else { PortDirection::Odd };
-            let msg = self.ble.coral.cmd_motor_run_for_degrees(
+            let msg = self.ble.coral().cmd_motor_run_for_degrees(
                 bits,
                 delta.abs(),
                 self.dir(delta_dir, cmd.port),
@@ -521,9 +549,9 @@ impl HardwareAdapter for CoralAdapter {
 
         for cmd in commands {
             let bits = motor_bits_for_port(cmd.port)?;
-            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            let speed_cmd = self.ble.coral().cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
-            let msg = self.ble.coral.cmd_motor_run_to_absolute_position(
+            let msg = self.ble.coral().cmd_motor_run_to_absolute_position(
                 bits,
                 0,
                 self.dir(cmd.direction, cmd.port),
@@ -545,7 +573,7 @@ impl HardwareAdapter for CoralAdapter {
         // Set speed per motor
         for cmd in commands {
             let bits = motor_bits_for_port(cmd.port)?;
-            let speed_cmd = self.ble.coral.cmd_set_motor_speed(bits, cmd.power as i8);
+            let speed_cmd = self.ble.coral().cmd_set_motor_speed(bits, cmd.power as i8);
             self.ble.send(&speed_cmd)?;
         }
 
@@ -557,10 +585,14 @@ impl HardwareAdapter for CoralAdapter {
             .map(|cmd| {
                 let bits = motor_bits_for_port(cmd.port).unwrap();
                 let dir = map_direction(cmd.direction, cmd.port, is_dm);
-                let msg = self.ble.coral.cmd_motor_run_for_degrees(bits, degrees, dir);
+                let msg = self.ble.coral().cmd_motor_run_for_degrees(bits, degrees, dir);
                 (cmd_id, bits, msg)
             })
             .collect();
         self.ble.request_all(&reqs)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/coral_adapter.rs"]
+mod tests;

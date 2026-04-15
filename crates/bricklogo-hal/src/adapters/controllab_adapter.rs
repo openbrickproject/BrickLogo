@@ -9,6 +9,31 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+/// Serial transport abstraction — lets tests inject a mock without a real
+/// Interface B plugged in.
+pub trait ControlLabTransport: Send {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String>;
+    fn write_all(&mut self, data: &[u8]) -> Result<(), String>;
+    fn flush(&mut self) -> Result<(), String>;
+}
+
+impl ControlLabTransport for Box<dyn serialport::SerialPort> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+        match Read::read(self.as_mut(), buf) {
+            Ok(n) => Ok(n),
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(0),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(0),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn write_all(&mut self, data: &[u8]) -> Result<(), String> {
+        Write::write_all(self.as_mut(), data).map_err(|e| e.to_string())
+    }
+    fn flush(&mut self) -> Result<(), String> {
+        Write::flush(self.as_mut()).map_err(|e| e.to_string())
+    }
+}
+
 const OUTPUT_PORTS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h"];
 const INPUT_PORTS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "8"];
 
@@ -57,7 +82,7 @@ impl ControlLabShared {
 }
 
 struct ControlLabSlot {
-    port: Box<dyn serialport::SerialPort>,
+    port: Box<dyn ControlLabTransport>,
     rx: mpsc::Receiver<ControlLabCommand>,
     shared: Arc<Mutex<ControlLabShared>>,
     read_buffer: Vec<u8>,
@@ -103,13 +128,13 @@ impl DeviceSlot for ControlLabSlot {
             for (power, mask) in &power_groups {
                 let encoded = encode_output_power(*mask, *power);
                 if let Err(e) = self.port.write_all(&encoded) {
-                    result = Err(format!("Write failed: {}", e));
+                    result = Err(e);
                     break;
                 }
             }
             if result.is_ok() {
                 if let Err(e) = self.port.flush() {
-                    result = Err(format!("Flush failed: {}", e));
+                    result = Err(e);
                 }
             }
             if result.is_ok() {
@@ -183,7 +208,7 @@ impl HardwareAdapter for ControlLabAdapter {
         let shared = Arc::new(Mutex::new(ControlLabShared::new()));
 
         let slot = ControlLabSlot {
-            port,
+            port: Box::new(port),
             rx,
             shared: shared.clone(),
             read_buffer: Vec::new(),
@@ -434,3 +459,7 @@ impl HardwareAdapter for ControlLabAdapter {
         self.stop_ports(&ports)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/controllab_adapter.rs"]
+mod tests;

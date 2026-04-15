@@ -671,3 +671,7 @@ impl HardwareAdapter for EV3Adapter {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/ev3_adapter.rs"]
+mod tests;

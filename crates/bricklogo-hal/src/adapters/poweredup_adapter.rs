@@ -3,9 +3,10 @@ use bricklogo_lang::value::LogoValue;
 use rust_poweredup::ble::PoweredUpBle;
 use rust_poweredup::constants::*;
 use rust_poweredup::devices::{self, SensorReading};
+use rust_poweredup::hub::Hub;
 use rust_poweredup::protocol;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 
 /// Powered UP / WeDo 2.0 native power range is 0..100 (LWP3 spec).
@@ -20,15 +21,47 @@ fn to_signed_speed(direction: PortDirection, power: u8) -> i8 {
     }
 }
 
+/// BLE transport abstraction for a Powered UP hub. Production uses
+/// `PoweredUpBle` (btleplug). Tests can plug in a mock.
+pub trait PupBle: Send {
+    fn hub(&self) -> &Arc<Mutex<Hub>>;
+    fn is_connected(&self) -> bool;
+    fn connect(&mut self) -> Result<(), String>;
+    fn disconnect(&mut self);
+    fn send(&self, data: &[u8]) -> Result<(), String>;
+    fn request(&self, port_id: u8, data: &[u8]) -> Result<bool, String>;
+    fn request_all(&self, commands: &[(u8, Vec<u8>)]) -> Result<(), String>;
+    fn subscribe(&self, port_id: u8, mode: u8) -> Result<(), String>;
+    fn set_stop_flag(&mut self, flag: Arc<AtomicBool>);
+}
+
+impl PupBle for PoweredUpBle {
+    fn hub(&self) -> &Arc<Mutex<Hub>> { &self.hub }
+    fn is_connected(&self) -> bool { self.is_connected() }
+    fn connect(&mut self) -> Result<(), String> { self.connect() }
+    fn disconnect(&mut self) { self.disconnect() }
+    fn send(&self, data: &[u8]) -> Result<(), String> { self.send(data) }
+    fn request(&self, port_id: u8, data: &[u8]) -> Result<bool, String> {
+        self.request(port_id, data)
+    }
+    fn request_all(&self, commands: &[(u8, Vec<u8>)]) -> Result<(), String> {
+        self.request_all(commands)
+    }
+    fn subscribe(&self, port_id: u8, mode: u8) -> Result<(), String> {
+        self.subscribe(port_id, mode)
+    }
+    fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) { self.set_stop_flag(flag) }
+}
+
 pub struct PoweredUpAdapter {
-    ble: PoweredUpBle,
+    ble: Box<dyn PupBle>,
 }
 
 impl PoweredUpAdapter {
     pub fn new() -> Self {
         let (runtime, adapter) = crate::ble::ble_context();
         PoweredUpAdapter {
-            ble: PoweredUpBle::new(runtime, adapter),
+            ble: Box::new(PoweredUpBle::new(runtime, adapter)),
         }
     }
 
@@ -38,7 +71,7 @@ impl PoweredUpAdapter {
 
     /// Get port name → port ID mapping for the current hub type.
     fn port_letters(&self) -> Vec<(&'static str, u8)> {
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         match hub.hub_type {
             HubType::WeDo2SmartHub => vec![("a", 1), ("b", 2)],
             HubType::MoveHub => vec![("a", 0), ("b", 1), ("c", 2), ("d", 3)],
@@ -59,7 +92,7 @@ impl PoweredUpAdapter {
             map.insert(name.to_string(), *id);
         }
 
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         for device in hub.get_attached_devices() {
             // If port ID doesn't match any letter, it's internal
             if !letters.iter().any(|(_, id)| *id == device.port_id) {
@@ -78,12 +111,12 @@ impl PoweredUpAdapter {
     }
 
     fn is_wedo2(&self) -> bool {
-        self.ble.hub.lock().unwrap().hub_type.is_wedo2()
+        self.ble.hub().lock().unwrap().hub_type.is_wedo2()
     }
 
     fn require_absolute_motor(&self, port: &str) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         match hub.get_device(port_id) {
             Some(device) if device.device_type.is_absolute_motor() => Ok(()),
             Some(device) => Err(format!(
@@ -150,7 +183,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         // Delegates to HubType::display_name so retail-product names are
         // maintained in one place. HubType is Copy and display_name returns
         // &'static str, so no lifetime juggling against the Mutex.
-        self.ble.hub.lock().unwrap().hub_type.display_name()
+        self.ble.hub().lock().unwrap().hub_type.display_name()
     }
 
     fn output_ports(&self) -> &[String] {
@@ -185,7 +218,7 @@ impl HardwareAdapter for PoweredUpAdapter {
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         match hub.get_device(port_id) {
             Some(device) if device.device_type.is_power_output() => Ok(()),
             Some(_) => Err(format!("Port \"{}\" is not a motor or light", port)),
@@ -195,7 +228,7 @@ impl HardwareAdapter for PoweredUpAdapter {
 
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
         let port_id = self.resolve_port_id(port)?;
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         let device = hub
             .get_device(port_id)
             .ok_or_else(|| format!("No device on port \"{}\"", port))?;
@@ -246,7 +279,7 @@ impl HardwareAdapter for PoweredUpAdapter {
 
         let is_wedo2 = self.is_wedo2();
         let is_tacho = !is_wedo2 && {
-            let hub = self.ble.hub.lock().unwrap();
+            let hub = self.ble.hub().lock().unwrap();
             hub.get_device(port_id)
                 .map_or(false, |d| d.device_type.is_tacho_motor())
         };
@@ -351,7 +384,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         let port_id = self.resolve_port_id(port)?;
 
         let (device_type, current_mode) = {
-            let hub = self.ble.hub.lock().unwrap();
+            let hub = self.ble.hub().lock().unwrap();
             let device = hub
                 .get_device(port_id)
                 .ok_or_else(|| format!("No device on port \"{}\"", port))?;
@@ -372,7 +405,7 @@ impl HardwareAdapter for PoweredUpAdapter {
             self.ble.subscribe(port_id, target_mode)?;
             // Wait for first reading
             for _ in 0..20 {
-                let hub = self.ble.hub.lock().unwrap();
+                let hub = self.ble.hub().lock().unwrap();
                 if hub.last_reading(port_id).is_some() {
                     let reading = hub.last_reading(port_id).map(reading_to_logo);
                     return Ok(reading);
@@ -382,7 +415,7 @@ impl HardwareAdapter for PoweredUpAdapter {
             }
         }
 
-        let hub = self.ble.hub.lock().unwrap();
+        let hub = self.ble.hub().lock().unwrap();
         let reading = hub.last_reading(port_id).map(reading_to_logo);
         Ok(reading)
     }
@@ -399,7 +432,7 @@ impl HardwareAdapter for PoweredUpAdapter {
             let port_id = self.resolve_port_id(cmd.port)?;
             let speed = to_signed_speed(cmd.direction, cmd.power);
             let is_tacho = !is_wedo2 && {
-                let hub = self.ble.hub.lock().unwrap();
+                let hub = self.ble.hub().lock().unwrap();
                 hub.get_device(port_id)
                     .map_or(false, |d| d.device_type.is_tacho_motor())
             };
@@ -536,3 +569,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/poweredup_adapter.rs"]
+mod tests;

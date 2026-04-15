@@ -1,4 +1,5 @@
 use super::*;
+use std::time::{Duration, Instant};
 
 struct MockAdapter {
     ports: Vec<String>,
@@ -42,6 +43,58 @@ impl HardwareAdapter for MockAdapter {
     fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
     fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
     fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+}
+
+/// Mock adapter whose batch methods sleep for the requested duration (or a
+/// fixed 200ms for the degree/position methods). Used to verify that
+/// PortManager fans out work across devices in parallel, not sequentially.
+struct SleepyAdapter {
+    ports: Vec<String>,
+}
+
+impl SleepyAdapter {
+    fn new(ports: &[&str]) -> Self {
+        SleepyAdapter {
+            ports: ports.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl HardwareAdapter for SleepyAdapter {
+    fn display_name(&self) -> &str { "Sleepy" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 100 }
+    fn start_port(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+
+    fn run_ports_for_time(&mut self, _commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(tenths as u64 * 100));
+        Ok(())
+    }
+    fn rotate_ports_by_degrees(&mut self, _commands: &[PortCommand], _degrees: i32) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+    fn rotate_ports_to_position(&mut self, _commands: &[PortCommand], _position: i32) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+    fn rotate_ports_to_home(&mut self, _commands: &[PortCommand]) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
 }
 
 #[test]
@@ -199,4 +252,92 @@ fn test_format_port_names() {
     let inputs = vec!["bot2.b".to_string()];
     let display = pm.format_port_names(&inputs);
     assert_eq!(display, vec!["bot2.b".to_string()]);
+}
+
+// ── Cross-device parallelism ──────────────────────
+//
+// Each SleepyAdapter::run_ports_for_time (and rotate/rotate_to/rotate_to_home)
+// sleeps for a fixed duration. With three devices, sequential dispatch would
+// take 3× the duration; parallel dispatch should take ~1×. We assert under
+// 2× the single-device duration — a generous margin for CI jitter that
+// still fails loudly on the original sequential bug.
+
+#[test]
+fn test_on_for_runs_across_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.on_for(&ports, 2).unwrap(); // 200ms per device
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "on_for ran sequentially: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_rotate_runs_across_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.rotate(&ports, 90).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "rotate ran sequentially: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_rotate_to_runs_across_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.rotate_to(&ports, 0).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "rotate_to ran sequentially: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_rotate_to_home_runs_across_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.rotate_to_home(&ports).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "rotate_to_home ran sequentially: took {:?}, expected <400ms",
+        elapsed
+    );
 }

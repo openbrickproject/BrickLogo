@@ -10,6 +10,22 @@ use rust_wedo::wedo::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
+/// HID read/write abstraction so tests can inject a mock without a real
+/// WeDo hub attached. `HidDevice` implements this directly.
+pub trait WeDoTransport: Send {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String>;
+    fn write(&mut self, data: &[u8]) -> Result<usize, String>;
+}
+
+impl WeDoTransport for HidDevice {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+        HidDevice::read(self, buf).map_err(|e| e.to_string())
+    }
+    fn write(&mut self, data: &[u8]) -> Result<usize, String> {
+        HidDevice::write(self, data).map_err(|e| e.to_string())
+    }
+}
+
 /// WeDo 1.0 native power range exposed to BrickLogo is 0..100; the rust-wedo
 /// `normalize_power` helper rescales to the hub's i8 wire range internally.
 const MAX_POWER: u8 = 100;
@@ -46,7 +62,7 @@ impl WeDoShared {
 }
 
 struct WeDoSlot {
-    device: HidDevice,
+    device: Box<dyn WeDoTransport>,
     rx: mpsc::Receiver<WeDoMotorCommand>,
     shared: Arc<Mutex<WeDoShared>>,
     output_bits: u8,
@@ -116,9 +132,7 @@ impl DeviceSlot for WeDoSlot {
             self.motor_values[1] = cmd.motor_b;
             let encoded =
                 encode_motor_command(self.output_bits, self.motor_values[0], self.motor_values[1]);
-            let result = self.device.write(&encoded)
-                .map(|_| ())
-                .map_err(|e| format!("HID write failed: {}", e));
+            let result = self.device.write(&encoded).map(|_| ());
             if let Some(tx) = cmd.reply_tx {
                 let _ = tx.send(result);
             }
@@ -221,7 +235,7 @@ impl HardwareAdapter for WeDoAdapter {
         let shared = Arc::new(Mutex::new(WeDoShared::new()));
 
         let slot = WeDoSlot {
-            device,
+            device: Box::new(device),
             rx,
             shared: shared.clone(),
             output_bits: 0,
@@ -391,3 +405,7 @@ impl HardwareAdapter for WeDoAdapter {
         self.stop_ports(&ports)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/wedo_adapter.rs"]
+mod tests;

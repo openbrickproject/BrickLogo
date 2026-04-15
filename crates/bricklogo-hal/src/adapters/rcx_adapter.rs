@@ -529,3 +529,7 @@ impl HardwareAdapter for RcxAdapter {
         self.connect()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/rcx_adapter.rs"]
+mod tests;

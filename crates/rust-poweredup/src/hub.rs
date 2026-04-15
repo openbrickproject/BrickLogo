@@ -224,6 +224,14 @@ impl Hub {
         events
     }
 
+    /// Programmatically attach a device. Normally devices are discovered
+    /// via HubAttachedIo messages from the hub; this helper is primarily
+    /// for tests that pre-populate a mock hub state.
+    pub fn attach_device(&mut self, port_id: u8, device_type: DeviceType) {
+        self.devices
+            .insert(port_id, AttachedDevice::new(port_id, device_type));
+    }
+
     // ── Device queries ──────────────────────────
 
     pub fn get_device(&self, port_id: u8) -> Option<&AttachedDevice> {
