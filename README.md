@@ -58,6 +58,7 @@ Connected to Boost Move Hub as "mybot"
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
 | LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
+| LEGO SPIKE Prime | `connectto "spike "name` | SPIKE Prime / Robot Inventor hub via USB or Bluetooth |
 | Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
 
 Multiple devices can be connected at the same time. Each is given a name and addressed by that name or by qualified port names (for example `"mybot.a`).

@@ -1,4 +1,5 @@
 {
   "controllab": ["/dev/tty.usbserial-AC018HBC"],
-  "ev3": ["/dev/cu.EV3-SerialPort-14"]
+  "ev3": ["/dev/cu.EV3-SerialPort-14"],
+  "spike": ["/dev/cu.LEGOHub-SerialPort"]
 }

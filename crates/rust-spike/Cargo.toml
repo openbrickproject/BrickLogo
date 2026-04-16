@@ -1,0 +1,10 @@
+[package]
+name = "rust-spike"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO SPIKE Prime / Robot Inventor hub JSON protocol library"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

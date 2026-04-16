@@ -44,6 +44,7 @@ Scans for and connects to a LEGO device. The *type* tells BrickLogo what kind of
 | `"wedo` | LEGO Education WeDo 1.0 — USB Hub |
 | `"controllab` | LEGO DACTA Control Lab — Interface B over serial |
 | `"rcx` | LEGO Mindstorms RCX — via serial or USB IR tower |
+| `"spike` | LEGO SPIKE Prime / Robot Inventor — via USB or Bluetooth serial |
 | `"buildhat` | Raspberry Pi Build HAT — Powered UP / SPIKE motors and sensors |
 
 ```
@@ -1449,6 +1450,14 @@ If you have multiple Control Labs, list all their serial ports:
 
 The first `connectto "controllab` uses the first path, the second uses the second, and so on.
 
+### SPIKE Prime
+
+The SPIKE Prime hub connects over USB serial (auto-detected) or Bluetooth SPP. USB connections require no configuration. For Bluetooth, pair the hub at the OS level and add the serial port path:
+
+```json
+{ "spike": ["/dev/cu.LEGOHub-SerialPort"] }
+```
+
 ### Build HAT
 
 The Build HAT requires no configuration. It always uses `/dev/serial0` on the Raspberry Pi. See [NOTES.md](../NOTES.md) for Raspberry Pi setup instructions.
@@ -1565,6 +1574,22 @@ Example:
 - Firmware upload and file transfer are not supported.
 - Daisy-chained bricks are not supported (layer is always 0).
 
+### LEGO SPIKE Prime / Robot Inventor
+
+Connects via USB serial or Bluetooth SPP. Use `connectto "spike`. Supports the same LPF2 motors and sensors as the Powered UP family and Build HAT.
+
+| Output Ports | Input Ports |
+| --- | --- |
+| a, b, c, d, e, f | a, b, c, d, e, f |
+
+Any port can host a motor or sensor. The hub also has a built-in IMU accessible as sensor ports `tilt`, `gyro`, and `accel`.
+
+USB connections are auto-detected. For Bluetooth, pair the hub at the OS level, then add the serial port path to `bricklogo.config.json`:
+
+```json
+{ "spike": ["/dev/cu.LEGOHub-SerialPort"] }
+```
+
 ### Raspberry Pi Build HAT
 
 Connects via serial on the Raspberry Pi. Use `connectto "buildhat`. Supports the same Powered UP / SPIKE motors and sensors as the Powered UP family over wired LPF2 ports.
@@ -1653,6 +1678,21 @@ Sensor modes depend on the sensor type plugged into the port. Both EV3 and NXT s
 | Motor ports (a–d) | rotation, raw |
 
 Use `"raw` on any sensor port to read the default mode as a percentage.
+
+### SPIKE Prime / Robot Inventor
+
+Sensor modes depend on which device is attached to each port. The hub streams telemetry continuously — sensor reads return the latest cached value.
+
+| Device | Modes |
+| --- | --- |
+| Color Sensor | color, light |
+| Distance Sensor | distance |
+| Force Sensor | force, touched |
+| Tacho Motors | rotation, speed |
+| Absolute Motors (Technic) | rotation, speed, absolute |
+| Hub IMU (tilt) | tilt |
+| Hub IMU (gyro) | gyro |
+| Hub IMU (accel) | accel |
 
 ### Powered UP / Build HAT
 
