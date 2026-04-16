@@ -713,8 +713,6 @@ impl PortManager {
             for port in &ports {
                 let state = entry.port_states.get_mut(port).unwrap();
                 state.is_running = false;
-                state.direction = PortDirection::Even;
-                state.power = 8;
                 entry.last_sent.remove(port);
                 let _ = entry.adapter.stop_port(port);
             }

@@ -82,7 +82,7 @@ Disconnects the active device. Takes no arguments. To disconnect a specific devi
 ? disconnect
 ```
 
-Errors if there is no active device.
+Errors if there is no active device. To disconnect all devices, call `disconnect` once per device.
 
 ### `use`
 
@@ -184,7 +184,7 @@ Runs the motors for 1 second.
 
 Runs the motors for 5 seconds.
 
-> On devices with encoder motors (Science, Powered UP tacho motors, Build HAT tacho motors), the device handles the timing internally and reports when it finishes. On devices without encoders (WeDo, Control Lab, basic Powered UP motors), BrickLogo times the run in software.
+> On devices with encoder motors (Science, Powered UP tacho motors, Build HAT tacho motors, EV3), the device handles the timing internally and reports when it finishes. On devices without encoders (WeDo, Control Lab, RCX, basic Powered UP motors), BrickLogo times the run in software.
 
 ### `setpower`
 
@@ -224,6 +224,14 @@ seteven
 
 Sets the direction of the selected ports to "even" (the default forward direction). If the motors are running, the direction change takes effect immediately.
 
+### `setleft`
+
+```
+setleft
+```
+
+Same as `seteven`. Sets the direction of the selected ports to "even" (the default forward direction).
+
 ### `setodd`
 
 *alias: setright*
@@ -233,6 +241,14 @@ setodd
 ```
 
 Sets the direction of the selected ports to "odd" (the reverse direction).
+
+### `setright`
+
+```
+setright
+```
+
+Same as `setodd`. Sets the direction of the selected ports to "odd" (the reverse direction).
 
 ### `rd`
 
@@ -412,7 +428,7 @@ Shorthand for reading the selected sensor in color mode. Returns the color ID as
 light
 ```
 
-Shorthand for reading the selected sensor in reflect mode. Returns the reflected light intensity as a number.
+Shorthand for reading the selected sensor in light mode. Returns the reflected light intensity as a number.
 
 ### `force`
 
@@ -422,13 +438,13 @@ force
 
 Shorthand for reading the selected sensor in force mode. Returns the force value as a number.
 
-### `angle`
+### `rotation`
 
 ```
-angle
+rotation
 ```
 
-Shorthand for reading the selected sensor in rotate mode. Returns the motor position in degrees as a number.
+Shorthand for reading the selected sensor in rotation mode. Returns the motor position in degrees as a number.
 
 ---
 
@@ -663,6 +679,34 @@ Pauses execution until the condition becomes `"true`. The condition is re-evalua
 ? waituntil [timer > 100]
 ```
 
+### `launch`
+
+```
+launch [commands]
+```
+
+Runs the commands in a background thread. Execution continues immediately — `launch` does not wait for the commands to finish. Useful for running independent motor sequences or sensor monitors in parallel.
+
+```
+? launch [forever [onfor 10 wait 5]]
+? print "launched
+launched
+```
+
+Background threads share variables with the main program. Press Escape to stop the foreground program; use `stopall` to stop all background threads.
+
+### `stopall`
+
+```
+stopall
+```
+
+Stops all background threads started with `launch`.
+
+```
+? stopall
+```
+
 ### `carefully`
 
 ```
@@ -892,7 +936,7 @@ Returns a random integer from 0 up to (but not including) *max*.
 int number
 ```
 
-Returns the integer part of a number (truncates toward zero).
+Truncates a number toward zero, removing the fractional part.
 
 ```
 ? print int 3.7
@@ -1445,7 +1489,7 @@ Connects via Bluetooth Low Energy. Use `connectto "science`.
 | --- | --- | --- |
 | Double Motor | a, b | tilt, gyro, accel, yaw |
 | Single Motor | a | tilt, gyro, accel, yaw |
-| Color Sensor | — | color, reflect, rgb |
+| Color Sensor | — | color, light, rgb |
 | Controller | — | button, joystick |
 
 ### LEGO Powered UP
@@ -1551,6 +1595,8 @@ Connects via serial on the Raspberry Pi. Use `connectto "buildhat`. Supports the
 | `"tilt` | Tilt event (0=level, 1=front, 2=back, 3=left, 4=right) |
 | `"raw` | Raw sensor value |
 
+Note: WeDo 1.0 sensors are auto-detected — distance and tilt sensors can be plugged into either port.
+
 ### Science — Double Motor / Single Motor
 
 | Port | Mode | Returns |
@@ -1567,7 +1613,7 @@ Connects via serial on the Raspberry Pi. Use `connectto "buildhat`. Supports the
 | Port | Mode | Returns |
 | --- | --- | --- |
 | color | `"color` | Color ID number |
-| reflect | `"reflect` | Reflected light intensity |
+| light | `"light` | Reflected light intensity |
 | rgb | `"rgb` | List of [red green blue] values |
 
 ### Science — Controller
@@ -1588,6 +1634,26 @@ Connects via serial on the Raspberry Pi. Use `connectto "buildhat`. Supports the
 | `"rotation` | Accumulated rotation count |
 | `"raw` | Raw sensor value (0–1023) |
 
+### EV3
+
+Sensor modes depend on the sensor type plugged into the port. Both EV3 and NXT sensors are supported.
+
+| Sensor | Modes |
+| --- | --- |
+| EV3 Color Sensor | light, ambient, color, rgb |
+| EV3 Touch Sensor | touch |
+| EV3 Ultrasonic Sensor | distance |
+| EV3 Gyro Sensor | angle, rate |
+| EV3 Infrared Sensor | distance, seek, remote |
+| NXT Touch Sensor | touch |
+| NXT Light Sensor | light, ambient |
+| NXT Sound Sensor | sound |
+| NXT Ultrasonic Sensor | distance |
+| NXT Temperature Sensor | temperature |
+| Motor ports (a–d) | rotation, raw |
+
+Use `"raw` on any sensor port to read the default mode as a percentage.
+
 ### Powered UP / Build HAT
 
 Sensor modes depend on which device is attached to each port. Common modes include:
@@ -1598,8 +1664,10 @@ Sensor modes depend on which device is attached to each port. Common modes inclu
 | Technic Color Sensor | color, light, ambient, rgb, hsv, hsvambient |
 | Technic Force Sensor | force, touched, tapped |
 | Technic Distance Sensor | distance, fastDistance |
-| Tacho Motors | rotation, speed |
-| Absolute Motors | rotation, speed, absolute |
+| Tacho Motors | rotation |
+| Absolute Motors (Technic) | rotation, absolute |
 | Tilt Sensor | tilt |
 | Internal Voltage | voltage |
+
+Build HAT motors additionally support a `speed` mode via combined sensor data.
 

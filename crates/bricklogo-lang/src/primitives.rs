@@ -152,7 +152,7 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         PrimitiveSpec {
             min_args: 1,
             max_args: 1,
-            func: Arc::new(|args, _, _| Ok(Some(LogoValue::Number(args[0].as_number()?.floor())))),
+            func: Arc::new(|args, _, _| Ok(Some(LogoValue::Number(args[0].as_number()?.trunc())))),
         },
     );
     eval.register_primitive(
