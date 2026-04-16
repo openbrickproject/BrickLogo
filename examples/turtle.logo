@@ -63,5 +63,5 @@ end
 
 to fix
   talkto "b
-  setpower 4 ; Adjust if your turtle is veering one way or the other
+  setpower 50 ; Adjust if your turtle is veering one way or the other
 end
