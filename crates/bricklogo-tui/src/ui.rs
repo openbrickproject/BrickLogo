@@ -101,6 +101,15 @@ fn draw_divider(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    if app.ctrlc_message {
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            "Press Ctrl+C again to exit",
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
     let mut spans: Vec<Span> = Vec::new();
 
     spans.extend(format_device_line(app));

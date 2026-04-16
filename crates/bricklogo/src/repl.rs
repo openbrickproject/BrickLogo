@@ -8,7 +8,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bricklogo_tui::app::App;
 use bricklogo_tui::ui;
@@ -92,6 +92,7 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut needs_draw = true;
+    let mut ctrlc_at: Option<Instant> = None;
 
     // SIGINT: flag a quit request. The main loop polls this so cleanup runs.
     let sigint = Arc::new(AtomicBool::new(false));
@@ -104,6 +105,15 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if sigint.load(Ordering::SeqCst) {
             break;
+        }
+
+        // Expire the Ctrl+C confirmation window
+        if let Some(at) = ctrlc_at {
+            if at.elapsed() > Duration::from_secs(1) {
+                ctrlc_at = None;
+                app.ctrlc_message = false;
+                needs_draw = true;
+            }
         }
 
         if needs_draw {
@@ -134,9 +144,15 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // Ctrl+C to quit
+                // Ctrl+C — double-press to quit
                 if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                    break;
+                    if ctrlc_at.is_some() {
+                        break;
+                    }
+                    ctrlc_at = Some(Instant::now());
+                    app.ctrlc_message = true;
+                    needs_draw = true;
+                    continue;
                 }
 
                 // Escape
