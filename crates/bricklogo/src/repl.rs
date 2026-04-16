@@ -150,6 +150,9 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                let word_mod = key.modifiers.contains(KeyModifiers::ALT)
+                    || key.modifiers.contains(KeyModifiers::CONTROL);
+
                 match key.code {
                     KeyCode::Enter => {
                         if !app.busy {
@@ -159,10 +162,62 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    // Ctrl+A — home
+                    KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.cursor_position = 0;
+                    }
+                    // Ctrl+E — end
+                    KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.cursor_position = app.input.len();
+                    }
+                    // Ctrl+U — delete to start of line
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if !app.busy && app.cursor_position > 0 {
+                            app.input.drain(..app.cursor_position);
+                            app.cursor_position = 0;
+                        }
+                    }
+                    // Ctrl+K — delete to end of line
+                    KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if !app.busy {
+                            app.input.truncate(app.cursor_position);
+                        }
+                    }
+                    // Ctrl+W — delete word backward
+                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if !app.busy && app.cursor_position > 0 {
+                            let target = word_boundary_left(&app.input, app.cursor_position);
+                            app.input.drain(target..app.cursor_position);
+                            app.cursor_position = target;
+                        }
+                    }
+                    // Alt+B (macOS Option+Left sends ESC+b) — move word left
+                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        app.cursor_position = word_boundary_left(&app.input, app.cursor_position);
+                    }
+                    // Alt+F (macOS Option+Right sends ESC+f) — move word right
+                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        app.cursor_position = word_boundary_right(&app.input, app.cursor_position);
+                    }
+                    // Alt+D (macOS Option+Delete sends ESC+d) — delete word forward
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        if !app.busy && app.cursor_position < app.input.len() {
+                            let target = word_boundary_right(&app.input, app.cursor_position);
+                            app.input.drain(app.cursor_position..target);
+                        }
+                    }
                     KeyCode::Char(c) => {
                         if !app.busy {
                             app.input.insert(app.cursor_position, c);
                             app.cursor_position += 1;
+                        }
+                    }
+                    // Alt+Backspace (macOS) / Ctrl+Backspace (Win/Linux) — delete word backward
+                    KeyCode::Backspace if word_mod => {
+                        if !app.busy && app.cursor_position > 0 {
+                            let target = word_boundary_left(&app.input, app.cursor_position);
+                            app.input.drain(target..app.cursor_position);
+                            app.cursor_position = target;
                         }
                     }
                     KeyCode::Backspace => {
@@ -171,15 +226,30 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                             app.input.remove(app.cursor_position);
                         }
                     }
+                    // Alt+Delete (macOS) / Ctrl+Delete (Win/Linux) — delete word forward
+                    KeyCode::Delete if word_mod => {
+                        if !app.busy && app.cursor_position < app.input.len() {
+                            let target = word_boundary_right(&app.input, app.cursor_position);
+                            app.input.drain(app.cursor_position..target);
+                        }
+                    }
                     KeyCode::Delete => {
                         if !app.busy && app.cursor_position < app.input.len() {
                             app.input.remove(app.cursor_position);
                         }
                     }
+                    // Alt+Left (macOS) / Ctrl+Left (Win/Linux) — move word left
+                    KeyCode::Left if word_mod => {
+                        app.cursor_position = word_boundary_left(&app.input, app.cursor_position);
+                    }
                     KeyCode::Left => {
                         if app.cursor_position > 0 {
                             app.cursor_position -= 1;
                         }
+                    }
+                    // Alt+Right (macOS) / Ctrl+Right (Win/Linux) — move word right
+                    KeyCode::Right if word_mod => {
+                        app.cursor_position = word_boundary_right(&app.input, app.cursor_position);
                     }
                     KeyCode::Right => {
                         if app.cursor_position < app.input.len() {
@@ -220,6 +290,37 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
     lifecycle.restore(&mut restorer)?;
 
     Ok(())
+}
+
+/// Find the start of the previous word (skip whitespace, then non-whitespace).
+fn word_boundary_left(s: &str, pos: usize) -> usize {
+    let bytes = s.as_bytes();
+    let mut i = pos;
+    // Skip whitespace going left
+    while i > 0 && bytes[i - 1] == b' ' {
+        i -= 1;
+    }
+    // Skip word characters going left
+    while i > 0 && bytes[i - 1] != b' ' {
+        i -= 1;
+    }
+    i
+}
+
+/// Find the end of the next word (skip non-whitespace, then whitespace).
+fn word_boundary_right(s: &str, pos: usize) -> usize {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = pos;
+    // Skip word characters going right
+    while i < len && bytes[i] != b' ' {
+        i += 1;
+    }
+    // Skip whitespace going right
+    while i < len && bytes[i] == b' ' {
+        i += 1;
+    }
+    i
 }
 
 #[cfg(test)]
