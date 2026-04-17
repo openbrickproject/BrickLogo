@@ -84,6 +84,9 @@ impl Parser {
             "repeat" => self.parse_repeat(),
             "forever" => self.parse_forever(),
             "launch" => self.parse_launch(),
+            "foreach" => self.parse_foreach(),
+            "while" => self.parse_while(),
+            "until" => self.parse_until(),
             "if" => self.parse_if(),
             "ifelse" => self.parse_ifelse(),
             "waituntil" => self.parse_waituntil(),
@@ -210,6 +213,38 @@ impl Parser {
         let body = self.parse_list_body()?;
         let handler = self.parse_list_body()?;
         Ok(AstNode::Carefully { body, handler })
+    }
+
+    /// `foreach "var list [body]` or `foreach "var [a b c] [body]`
+    fn parse_foreach(&mut self) -> LogoResult<AstNode> {
+        let var_expr = self.parse_expression()?;
+        let var = match var_expr {
+            AstNode::Word(w) => w,
+            _ => {
+                return Err(LogoError::Runtime(
+                    "foreach: first argument must be a variable name".to_string(),
+                ));
+            }
+        };
+        let list = self.parse_expression()?;
+        let body = self.parse_list_body()?;
+        Ok(AstNode::ForEach {
+            var,
+            list: Box::new(list),
+            body,
+        })
+    }
+
+    fn parse_while(&mut self) -> LogoResult<AstNode> {
+        let condition = self.parse_list_body()?;
+        let body = self.parse_list_body()?;
+        Ok(AstNode::While { condition, body })
+    }
+
+    fn parse_until(&mut self) -> LogoResult<AstNode> {
+        let condition = self.parse_list_body()?;
+        let body = self.parse_list_body()?;
+        Ok(AstNode::Until { condition, body })
     }
 
     /// Parse [...] as a raw data list — bare words become word literals.

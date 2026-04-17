@@ -603,6 +603,32 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         },
     );
 
+    eval.register_primitive(
+        "local",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(|args, env, _| {
+                let name = args[0].as_string();
+                env.set_local(&name, LogoValue::Word(String::new()));
+                Ok(None)
+            }),
+        },
+    );
+    eval.register_primitive(
+        "localmake",
+        PrimitiveSpec {
+            min_args: 2,
+            max_args: 2,
+            func: Arc::new(|args, env, _| {
+                let name = args[0].as_string();
+                let value = args[1].clone();
+                env.set_local(&name, value);
+                Ok(None)
+            }),
+        },
+    );
+
     // ── Wait ────────────────────────────────
     eval.register_primitive(
         "wait",

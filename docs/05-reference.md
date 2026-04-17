@@ -666,6 +666,61 @@ Runs the first block if the condition is `"true`, the second block if `"false`.
 ? make "label ifelse :speed > 5 ["fast] ["slow]
 ```
 
+### `foreach`
+
+```
+foreach "var list [commands]
+```
+
+Runs the commands once for each item in the list. The variable is set to the current item on each iteration.
+
+```
+? foreach "x [1 2 3] [print :x]
+1
+2
+3
+```
+
+If a word is given instead of a list, iterates over its characters.
+
+```
+? foreach "p [a b c] [talkto :p on]
+```
+
+### `while`
+
+```
+while [condition] [commands]
+```
+
+Runs the commands repeatedly as long as the condition is `"true`. The condition is evaluated before each iteration.
+
+```
+? make "n 5
+? while [:n > 0] [print :n make "n :n - 1]
+5
+4
+3
+2
+1
+```
+
+### `until`
+
+```
+until [condition] [commands]
+```
+
+Runs the commands repeatedly until the condition becomes `"true`. The condition is evaluated before each iteration.
+
+```
+? make "n 1
+? until [:n > 3] [print :n make "n :n + 1]
+1
+2
+3
+```
+
 ### `waituntil`
 
 ```
@@ -768,6 +823,45 @@ Returns the value of a variable. Equivalent to `:name`, but takes the name as a 
 ? make "x 42
 ? print thing "x
 42
+```
+
+### `local`
+
+```
+local "name
+```
+
+Creates a local variable in the current procedure's scope. The variable starts empty and does not affect any global variable with the same name. Must be used inside a procedure.
+
+```
+? to test
+> local "x
+> make "x 42
+> print :x
+> end
+
+? test
+42
+? print :x
+I don't know about "x"
+```
+
+### `localmake`
+
+```
+localmake "name value
+```
+
+Creates a local variable and sets its value in one step. Equivalent to `local "name` followed by `make "name value`. The variable does not affect any global variable with the same name.
+
+```
+? to double :n
+> localmake "result :n * 2
+> output :result
+> end
+
+? print double 5
+10
 ```
 
 ---

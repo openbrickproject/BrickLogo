@@ -487,3 +487,98 @@ fn test_global_visible_after_procedure() {
     eval.evaluate("print :secret").unwrap();
     assert_eq!(output.lock().unwrap().as_slice(), &["42"]);
 }
+
+// ── foreach ─────────────────────────────────
+
+#[test]
+fn test_foreach_list() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("foreach \"x [1 2 3] [print :x]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["1", "2", "3"]);
+}
+
+#[test]
+fn test_foreach_word() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("foreach \"c \"abc [print :c]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["a", "b", "c"]);
+}
+
+#[test]
+fn test_foreach_with_computed_list() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"ports [a b c]").unwrap();
+    eval.evaluate("foreach \"p :ports [print :p]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["a", "b", "c"]);
+}
+
+#[test]
+fn test_foreach_empty_list() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("foreach \"x [] [print :x]").unwrap();
+    assert!(output.lock().unwrap().is_empty());
+}
+
+// ── while / until ───────────────────────────
+
+#[test]
+fn test_while_loop() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"n 3").unwrap();
+    eval.evaluate("while [:n > 0] [print :n make \"n :n - 1]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["3", "2", "1"]);
+}
+
+#[test]
+fn test_while_false_immediately() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("while [\"false] [print \"nope]").unwrap();
+    assert!(output.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_until_loop() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"n 1").unwrap();
+    eval.evaluate("until [:n > 3] [print :n make \"n :n + 1]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["1", "2", "3"]);
+}
+
+#[test]
+fn test_until_true_immediately() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("until [\"true] [print \"nope]").unwrap();
+    assert!(output.lock().unwrap().is_empty());
+}
+
+// ── local / localmake ───────────────────────
+
+#[test]
+fn test_localmake_stays_local() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("to test localmake \"x 42 end").unwrap();
+    eval.evaluate("test").unwrap();
+    let result = eval.evaluate("print :x");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_local_then_make() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test local \"x make \"x 99 print :x end").unwrap();
+    eval.evaluate("test").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["99"]);
+    // x should not leak to global
+    let result = eval.evaluate("print :x");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_localmake_shadows_global() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"x 10").unwrap();
+    eval.evaluate("to test localmake \"x 20 print :x end").unwrap();
+    eval.evaluate("test").unwrap();
+    eval.evaluate("print :x").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["20", "10"]);
+}

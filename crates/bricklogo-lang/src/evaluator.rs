@@ -479,6 +479,9 @@ impl Evaluator {
                 else_body,
             } => self.eval_ifelse(condition, then_body, else_body, env),
             AstNode::WaitUntil { condition } => self.eval_waituntil(condition, env),
+            AstNode::ForEach { var, list, body } => self.eval_foreach(var, list, body, env),
+            AstNode::While { condition, body } => self.eval_while(condition, body, env),
+            AstNode::Until { condition, body } => self.eval_until(condition, body, env),
             AstNode::Carefully { body, handler } => self.eval_carefully(body, handler, env),
             AstNode::Output(value) => {
                 let val = self.require_value(value, env)?;
@@ -739,6 +742,85 @@ impl Evaluator {
                     result = self.eval_node(node, env)?;
                 }
                 Ok(result)
+            }
+        }
+    }
+
+    fn eval_foreach(
+        &mut self,
+        var: &str,
+        list_node: &AstNode,
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
+        let list_val = self.require_value(list_node, env)?;
+        let items = match list_val {
+            LogoValue::List(l) => l,
+            LogoValue::Word(w) => w.chars().map(|c| LogoValue::Word(c.to_string())).collect(),
+            LogoValue::Number(_) => {
+                return Err(LogoError::Runtime(
+                    "foreach expects a list or word".to_string(),
+                ));
+            }
+        };
+        for item in items {
+            self.check_stop()?;
+            env.set_local(var, item);
+            for node in body {
+                self.eval_node(node, env)?;
+            }
+        }
+        Ok(None)
+    }
+
+    fn eval_while(
+        &mut self,
+        condition: &[AstNode],
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
+        loop {
+            self.check_stop()?;
+            let mut result = None;
+            for node in condition {
+                result = self.eval_node(node, env)?;
+            }
+            let truthy = result
+                .as_ref()
+                .map(|v| v.is_truthy())
+                .unwrap_or(Ok(false))
+                .map_err(|e| LogoError::Runtime(e))?;
+            if !truthy {
+                return Ok(None);
+            }
+            for node in body {
+                self.eval_node(node, env)?;
+            }
+        }
+    }
+
+    fn eval_until(
+        &mut self,
+        condition: &[AstNode],
+        body: &[AstNode],
+        env: &mut Environment,
+    ) -> LogoResult<Option<LogoValue>> {
+        loop {
+            self.check_stop()?;
+            let mut result = None;
+            for node in condition {
+                result = self.eval_node(node, env)?;
+            }
+            let truthy = result
+                .as_ref()
+                .map(|v| v.is_truthy())
+                .unwrap_or(Ok(false))
+                .map_err(|e| LogoError::Runtime(e))?;
+            if truthy {
+                return Ok(None);
+            }
+            for node in body {
+                self.eval_node(node, env)?;
             }
         }
     }

@@ -98,6 +98,28 @@ fn node_to_source(node: &AstNode) -> String {
                 body_to_source(handler)
             )
         }
+        AstNode::ForEach { var, list, body } => {
+            format!(
+                "foreach \"{}  {} [{}]",
+                var,
+                node_to_source(list),
+                body_to_source(body)
+            )
+        }
+        AstNode::While { condition, body } => {
+            format!(
+                "while [{}] [{}]",
+                body_to_source(condition),
+                body_to_source(body)
+            )
+        }
+        AstNode::Until { condition, body } => {
+            format!(
+                "until [{}] [{}]",
+                body_to_source(condition),
+                body_to_source(body)
+            )
+        }
         AstNode::Output(value) => {
             format!("output {}", node_to_source(value))
         }

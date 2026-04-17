@@ -51,6 +51,19 @@ pub enum AstNode {
     Launch {
         body: Vec<AstNode>,
     },
+    ForEach {
+        var: String,
+        list: Box<AstNode>,
+        body: Vec<AstNode>,
+    },
+    While {
+        condition: Vec<AstNode>,
+        body: Vec<AstNode>,
+    },
+    Until {
+        condition: Vec<AstNode>,
+        body: Vec<AstNode>,
+    },
     Output(Box<AstNode>),
     Stop,
 }
