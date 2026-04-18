@@ -582,3 +582,245 @@ fn test_localmake_shadows_global() {
     eval.evaluate("print :x").unwrap();
     assert_eq!(output.lock().unwrap().as_slice(), &["20", "10"]);
 }
+
+// ── power ───────────────────────────────────
+
+#[test]
+fn test_power_integer() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("power 2 10").unwrap(), Some(LogoValue::Number(1024.0)));
+}
+
+#[test]
+fn test_power_fractional_exponent() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("power 9 0.5").unwrap(), Some(LogoValue::Number(3.0)));
+}
+
+#[test]
+fn test_power_negative_exponent() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("power 2 (minus 1)").unwrap(), Some(LogoValue::Number(0.5)));
+}
+
+#[test]
+fn test_power_zero_exponent() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("power 5 0").unwrap(), Some(LogoValue::Number(1.0)));
+}
+
+#[test]
+fn test_power_zero_base() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("power 0 5").unwrap(), Some(LogoValue::Number(0.0)));
+}
+
+// ── modulo ──────────────────────────────────
+
+#[test]
+fn test_modulo_positive() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("modulo 10 3").unwrap(), Some(LogoValue::Number(1.0)));
+}
+
+#[test]
+fn test_modulo_negative_dividend() {
+    let (mut eval, _) = create_evaluator();
+    // sign follows divisor (positive)
+    assert_eq!(eval.evaluate("modulo (minus 10) 3").unwrap(), Some(LogoValue::Number(2.0)));
+}
+
+#[test]
+fn test_modulo_negative_divisor() {
+    let (mut eval, _) = create_evaluator();
+    // sign follows divisor (negative)
+    assert_eq!(eval.evaluate("modulo 10 (minus 3)").unwrap(), Some(LogoValue::Number(-2.0)));
+}
+
+#[test]
+fn test_modulo_zero_dividend() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("modulo 0 5").unwrap(), Some(LogoValue::Number(0.0)));
+}
+
+#[test]
+fn test_modulo_angle_wrapping() {
+    let (mut eval, _) = create_evaluator();
+    // Classic use case: wrap negative angle into 0..360
+    assert_eq!(eval.evaluate("modulo (minus 30) 360").unwrap(), Some(LogoValue::Number(330.0)));
+}
+
+// ── uppercase / lowercase ───────────────────
+
+#[test]
+fn test_uppercase_basic() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("uppercase \"hello").unwrap(), Some(LogoValue::Word("HELLO".to_string())));
+}
+
+#[test]
+fn test_lowercase_basic() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("lowercase \"HELLO").unwrap(), Some(LogoValue::Word("hello".to_string())));
+}
+
+#[test]
+fn test_uppercase_mixed() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("uppercase \"HeLLo").unwrap(), Some(LogoValue::Word("HELLO".to_string())));
+}
+
+#[test]
+fn test_lowercase_mixed() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("lowercase \"HeLLo").unwrap(), Some(LogoValue::Word("hello".to_string())));
+}
+
+#[test]
+fn test_uppercase_number_passthrough() {
+    let (mut eval, _) = create_evaluator();
+    // Numbers are converted to string representation then uppercased (no-op for digits)
+    assert_eq!(eval.evaluate("uppercase 42").unwrap(), Some(LogoValue::Word("42".to_string())));
+}
+
+#[test]
+fn test_lowercase_already_lowercase() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("lowercase \"abc").unwrap(), Some(LogoValue::Word("abc".to_string())));
+}
+
+// ── comparison operators ────────────────────
+
+#[test]
+fn test_greater_equal() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("5 >= 5").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("5 >= 6").unwrap(), Some(LogoValue::Word("false".to_string())));
+    assert_eq!(eval.evaluate("6 >= 5").unwrap(), Some(LogoValue::Word("true".to_string())));
+}
+
+#[test]
+fn test_greater_equal_negative() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("-3 >= -5").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("-5 >= -3").unwrap(), Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_less_equal() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("5 <= 5").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("6 <= 5").unwrap(), Some(LogoValue::Word("false".to_string())));
+    assert_eq!(eval.evaluate("5 <= 6").unwrap(), Some(LogoValue::Word("true".to_string())));
+}
+
+#[test]
+fn test_less_equal_negative() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("-5 <= -3").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("-3 <= -5").unwrap(), Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_not_equal_numbers() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("3 <> 4").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("3 <> 3").unwrap(), Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_not_equal_words() {
+    let (mut eval, _) = create_evaluator();
+    assert_eq!(eval.evaluate("\"hello <> \"world").unwrap(), Some(LogoValue::Word("true".to_string())));
+    assert_eq!(eval.evaluate("\"hello <> \"hello").unwrap(), Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_not_equal_case_insensitive() {
+    let (mut eval, _) = create_evaluator();
+    // <> should match equal? behavior — case insensitive
+    assert_eq!(eval.evaluate("\"hello <> \"HELLO").unwrap(), Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_comparison_in_condition() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("if 5 >= 3 [print \"yes]").unwrap();
+    eval.evaluate("if 5 <= 3 [print \"no]").unwrap();
+    eval.evaluate("if 5 <> 3 [print \"diff]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["yes", "diff"]);
+}
+
+// ── foreach (extended) ──────────────────────
+
+#[test]
+fn test_foreach_modifies_outer_variable() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("make \"total 0").unwrap();
+    eval.evaluate("foreach \"n [1 2 3] [make \"total :total + :n]").unwrap();
+    assert_eq!(eval.evaluate(":total").unwrap(), Some(LogoValue::Number(6.0)));
+}
+
+#[test]
+fn test_foreach_nested() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("foreach \"x [a b] [foreach \"y [1 2] [print word :x :y]]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["a1", "a2", "b1", "b2"]);
+}
+
+// ── while / until (extended) ────────────────
+
+#[test]
+fn test_while_counter() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("make \"i 0").unwrap();
+    eval.evaluate("while [:i < 5] [make \"i :i + 1]").unwrap();
+    assert_eq!(eval.evaluate(":i").unwrap(), Some(LogoValue::Number(5.0)));
+}
+
+#[test]
+fn test_until_counter() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("make \"i 0").unwrap();
+    eval.evaluate("until [:i = 5] [make \"i :i + 1]").unwrap();
+    assert_eq!(eval.evaluate(":i").unwrap(), Some(LogoValue::Number(5.0)));
+}
+
+#[test]
+fn test_while_with_comparison_operators() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"n 1").unwrap();
+    eval.evaluate("while [:n <= 3] [print :n make \"n :n + 1]").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["1", "2", "3"]);
+}
+
+// ── local / localmake (extended) ────────────
+
+#[test]
+fn test_localmake_in_foreach() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test foreach \"x [1 2 3] [localmake \"doubled :x * 2 print :doubled] end").unwrap();
+    eval.evaluate("test").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["2", "4", "6"]);
+    // doubled should not leak
+    assert!(eval.evaluate(":doubled").is_err());
+}
+
+#[test]
+fn test_local_without_make_reads_empty() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test local \"x print :x end").unwrap();
+    eval.evaluate("test").unwrap();
+    // local initializes to empty string
+    assert_eq!(output.lock().unwrap().as_slice(), &[""]);
+}
+
+#[test]
+fn test_localmake_multiple_variables() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to test localmake \"a 1 localmake \"b 2 print :a + :b end").unwrap();
+    eval.evaluate("test").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["3"]);
+    assert!(eval.evaluate(":a").is_err());
+    assert!(eval.evaluate(":b").is_err());
+}

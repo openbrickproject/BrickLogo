@@ -77,6 +77,30 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         },
     );
     eval.register_primitive(
+        "power",
+        PrimitiveSpec {
+            min_args: 2,
+            max_args: 2,
+            func: Arc::new(|args, _, _| {
+                Ok(Some(LogoValue::Number(
+                    args[0].as_number()?.powf(args[1].as_number()?),
+                )))
+            }),
+        },
+    );
+    eval.register_primitive(
+        "modulo",
+        PrimitiveSpec {
+            min_args: 2,
+            max_args: 2,
+            func: Arc::new(|args, _, _| {
+                let a = args[0].as_number()?;
+                let b = args[1].as_number()?;
+                Ok(Some(LogoValue::Number(((a % b) + b) % b)))
+            }),
+        },
+    );
+    eval.register_primitive(
         "abs",
         PrimitiveSpec {
             min_args: 1,
@@ -515,6 +539,27 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
                     args[0].as_string(),
                     args[1].as_string()
                 ))))
+            }),
+        },
+    );
+
+    eval.register_primitive(
+        "uppercase",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(|args, _, _| {
+                Ok(Some(LogoValue::Word(args[0].as_string().to_uppercase())))
+            }),
+        },
+    );
+    eval.register_primitive(
+        "lowercase",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(|args, _, _| {
+                Ok(Some(LogoValue::Word(args[0].as_string().to_lowercase())))
             }),
         },
     );

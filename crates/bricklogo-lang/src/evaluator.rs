@@ -533,6 +533,25 @@ impl Evaluator {
                 }
                 .to_string(),
             )),
+            ">=" => Ok(LogoValue::Word(
+                if l.as_number()? >= r.as_number()? {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            )),
+            "<=" => Ok(LogoValue::Word(
+                if l.as_number()? <= r.as_number()? {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            )),
+            "<>" => Ok(LogoValue::Word(
+                if !l.logo_equal(r) { "true" } else { "false" }.to_string(),
+            )),
             _ => Err(LogoError::Runtime(format!("Unknown operator '{}'", op))),
         }
     }

@@ -143,14 +143,37 @@ pub fn tokenize(source: &str) -> LogoResult<Vec<Token>> {
                     continue;
                 }
             }
-            tokens.push(Token {
-                token_type: TokenType::Infix,
-                value: ch.to_string(),
-                line,
-                col,
-            });
-            i += 1;
-            col += 1;
+            // Two-character operators: >=, <=, <>
+            let two_char = if i + 1 < chars.len() {
+                match (ch, chars[i + 1]) {
+                    ('>', '=') | ('<', '=') | ('<', '>') => {
+                        let op: String = chars[i..i + 2].iter().collect();
+                        Some(op)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(op) = two_char {
+                tokens.push(Token {
+                    token_type: TokenType::Infix,
+                    value: op,
+                    line,
+                    col,
+                });
+                i += 2;
+                col += 2;
+            } else {
+                tokens.push(Token {
+                    token_type: TokenType::Infix,
+                    value: ch.to_string(),
+                    line,
+                    col,
+                });
+                i += 1;
+                col += 1;
+            }
             continue;
         }
 
