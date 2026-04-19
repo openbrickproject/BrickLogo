@@ -283,18 +283,19 @@ impl HardwareAdapter for CoralAdapter {
         self.ble.send(&cmd)
     }
 
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         port: &str,
         direction: PortDirection,
         power: u8,
+        position: i32,
     ) -> Result<(), String> {
         let bits = motor_bits_for_port(port)?;
         let cmd = self.ble.coral().cmd_set_motor_speed(bits, power as i8);
         self.ble.send(&cmd)?;
         let cmd = self.ble.coral().cmd_motor_run_to_absolute_position(
             bits,
-            0,
+            position as u16,
             self.dir(direction, port),
         );
         self.ble.request(&cmd)
@@ -543,7 +544,7 @@ impl HardwareAdapter for CoralAdapter {
         Ok(())
     }
 
-    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
         let cmd_id = MessageType::MotorRunToAbsolutePositionCommand as u8;
         let mut reqs: Vec<(u8, u8, Vec<u8>)> = Vec::new();
 
@@ -553,7 +554,7 @@ impl HardwareAdapter for CoralAdapter {
             self.ble.send(&speed_cmd)?;
             let msg = self.ble.coral().cmd_motor_run_to_absolute_position(
                 bits,
-                0,
+                position as u16,
                 self.dir(cmd.direction, cmd.port),
             );
             reqs.push((cmd_id, bits, msg));

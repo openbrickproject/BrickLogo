@@ -333,11 +333,12 @@ impl HardwareAdapter for WeDoAdapter {
         Err("WeDo does not support position reset".to_string())
     }
 
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         _port: &str,
         _direction: PortDirection,
         _power: u8,
+        _position: i32,
     ) -> Result<(), String> {
         Err("WeDo does not support absolute positioning".to_string())
     }

@@ -395,7 +395,7 @@ impl HardwareAdapter for RcxAdapter {
         Err("RCX does not support position reset".to_string())
     }
 
-    fn rotate_to_home(&mut self, _port: &str, _direction: PortDirection, _power: u8) -> Result<(), String> {
+    fn rotate_to_abs(&mut self, _port: &str, _direction: PortDirection, _power: u8, _position: i32) -> Result<(), String> {
         Err("RCX does not support absolute positioning".to_string())
     }
 

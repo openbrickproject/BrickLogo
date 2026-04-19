@@ -158,10 +158,10 @@ fn test_ev3_run_ports_for_time_single_port_not_degraded() {
 }
 
 #[test]
-fn test_ev3_rotate_to_home_errors() {
-    // EV3 motors have no absolute-position encoder — rotate_to_home
+fn test_ev3_rotate_to_abs_errors() {
+    // EV3 motors have no absolute-position encoder — rotate_to_abs
     // should return an error, and the batch method inherits the default
-    // which loops over rotate_to_home and therefore errors on the first
+    // which loops over rotate_to_abs and therefore errors on the first
     // port.
     let (mut adapter, _sent) = make_adapter_with_mock();
     let commands = vec![PortCommand {
@@ -169,7 +169,7 @@ fn test_ev3_rotate_to_home_errors() {
         direction: PortDirection::Even,
         power: 50,
     }];
-    let r = adapter.rotate_ports_to_home(&commands);
+    let r = adapter.rotate_ports_to_abs(&commands, 0);
     adapter.disconnect();
-    assert!(r.is_err(), "EV3 should reject rotate_to_home");
+    assert!(r.is_err(), "EV3 should reject rotate_to_abs");
 }

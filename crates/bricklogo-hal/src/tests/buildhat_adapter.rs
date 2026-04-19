@@ -147,14 +147,14 @@ fn make_adapter_with_absolute_motors(
 }
 
 #[test]
-fn test_buildhat_rotate_ports_to_home_both_at_home_is_noop() {
+fn test_buildhat_rotate_ports_to_abs_both_at_home_is_noop() {
     // Both motors already at APOS=0 → no ramps issued, returns immediately.
     let (mut adapter, writes, _) = make_adapter_with_absolute_motors(0.0, 0.0);
     let commands = vec![
         PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
         PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
     ];
-    adapter.rotate_ports_to_home(&commands).unwrap();
+    adapter.rotate_ports_to_abs(&commands, 0).unwrap();
     adapter.disconnect();
 
     let writes = writes.lock().unwrap();
@@ -167,7 +167,7 @@ fn test_buildhat_rotate_ports_to_home_both_at_home_is_noop() {
 }
 
 #[test]
-fn test_buildhat_rotate_ports_to_home_fires_both_ramps_before_waiting() {
+fn test_buildhat_rotate_ports_to_abs_fires_both_ramps_before_waiting() {
     // Both motors at APOS=60 (needing rotation). The batch must issue BOTH
     // `ramp` commands before blocking on completions — i.e. while the main
     // thread is in the wait loop, both ramps should already be visible in
@@ -212,7 +212,7 @@ fn test_buildhat_rotate_ports_to_home_fires_both_ramps_before_waiting() {
         ramp_count
     });
 
-    adapter.rotate_ports_to_home(&commands).unwrap();
+    adapter.rotate_ports_to_abs(&commands, 0).unwrap();
     let ramps_observed = ramps_at_flip.join().unwrap();
     adapter.disconnect();
 

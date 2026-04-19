@@ -82,11 +82,12 @@ impl HardwareAdapter for MockAdapter {
     fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> {
         Ok(())
     }
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         _port: &str,
         _direction: PortDirection,
         _power: u8,
+        _position: i32,
     ) -> Result<(), String> {
         Ok(())
     }

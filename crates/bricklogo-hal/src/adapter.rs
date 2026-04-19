@@ -24,20 +24,21 @@ pub fn rotateto_delta(current_position: i32, target: i32, direction: PortDirecti
     }
 }
 
-/// Compute the rotation delta for `rotatetohome` on an absolute-encoder
-/// motor, given the mechanical angle `apos` (in [-180, 180]). The result
-/// brings the shaft to mechanical home (APOS = 0) by less than one
-/// revolution, in the direction specified.
+/// Compute the rotation delta for `rotatetoabs` on an absolute-encoder
+/// motor, given the current mechanical angle `apos` (in [-180, 180]) and
+/// a `target` angle. The result moves the shaft to `target` by less than
+/// one revolution, in the direction specified.
 ///
 ///   - `Even` (forward): delta in `[0, 360)` — smallest forward rotation.
 ///   - `Odd` (backward): delta in `(-360, 0]` — smallest backward rotation.
 ///
 /// Bounded via `rem_euclid(360)` so a noisy or out-of-range `apos` never
 /// causes more than a single revolution.
-pub fn rotate_home_delta(apos: i32, direction: PortDirection) -> i32 {
+pub fn rotate_abs_delta(apos: i32, target: i32, direction: PortDirection) -> i32 {
+    let diff = target - apos;
     match direction {
-        PortDirection::Even => (-apos).rem_euclid(360),
-        PortDirection::Odd => -apos.rem_euclid(360),
+        PortDirection::Even => diff.rem_euclid(360),
+        PortDirection::Odd => -((-diff).rem_euclid(360)),
     }
 }
 
@@ -110,11 +111,12 @@ pub trait HardwareAdapter: Send {
         position: i32,
     ) -> Result<(), String>;
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String>;
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         port: &str,
         direction: PortDirection,
         power: u8,
+        position: i32,
     ) -> Result<(), String>;
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String>;
@@ -173,10 +175,10 @@ pub trait HardwareAdapter: Send {
         Ok(())
     }
 
-    /// Rotate multiple ports to home (absolute zero) simultaneously.
-    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+    /// Rotate multiple ports to an absolute position simultaneously.
+    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
         for cmd in commands {
-            self.rotate_to_home(cmd.port, cmd.direction, cmd.power)?;
+            self.rotate_to_abs(cmd.port, cmd.direction, cmd.power, position)?;
         }
         Ok(())
     }

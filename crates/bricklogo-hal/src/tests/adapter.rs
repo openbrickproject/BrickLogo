@@ -1,50 +1,68 @@
 use super::*;
 
-// ── rotate_home_delta ──────────────────────────────
+// ── rotate_abs_delta ──────────────────────────────
 //
-// Delta is a function of APOS and direction only — POS does not enter the
-// computation. The motor rotates less than one full revolution toward
-// mechanical home (APOS=0) in the specified direction.
+// Delta is a function of APOS, target, and direction. The motor rotates
+// less than one full revolution toward the target absolute angle in the
+// specified direction.
 
 #[test]
-fn test_rotate_home_already_at_home() {
-    assert_eq!(rotate_home_delta(0, PortDirection::Even), 0);
-    assert_eq!(rotate_home_delta(0, PortDirection::Odd), 0);
+fn test_rotate_abs_already_at_target() {
+    assert_eq!(rotate_abs_delta(0, 0, PortDirection::Even), 0);
+    assert_eq!(rotate_abs_delta(0, 0, PortDirection::Odd), 0);
+    assert_eq!(rotate_abs_delta(90, 90, PortDirection::Even), 0);
+    assert_eq!(rotate_abs_delta(90, 90, PortDirection::Odd), 0);
 }
 
 #[test]
-fn test_rotate_home_positive_apos() {
-    // APOS=60 (60° forward of home). Shortest backward path: -60°.
-    // Forward path must go the long way around: +300°.
-    assert_eq!(rotate_home_delta(60, PortDirection::Odd), -60);
-    assert_eq!(rotate_home_delta(60, PortDirection::Even), 300);
+fn test_rotate_abs_to_zero_positive_apos() {
+    // Equivalent to old rotate_home_delta(60, dir) with target=0
+    assert_eq!(rotate_abs_delta(60, 0, PortDirection::Odd), -60);
+    assert_eq!(rotate_abs_delta(60, 0, PortDirection::Even), 300);
 }
 
 #[test]
-fn test_rotate_home_negative_apos() {
-    // APOS=-60 (60° backward of home). Short forward path: +60°.
-    // Backward path must go the long way: -300°.
-    assert_eq!(rotate_home_delta(-60, PortDirection::Even), 60);
-    assert_eq!(rotate_home_delta(-60, PortDirection::Odd), -300);
+fn test_rotate_abs_to_zero_negative_apos() {
+    assert_eq!(rotate_abs_delta(-60, 0, PortDirection::Even), 60);
+    assert_eq!(rotate_abs_delta(-60, 0, PortDirection::Odd), -300);
 }
 
 #[test]
-fn test_rotate_home_apos_boundary() {
-    assert_eq!(rotate_home_delta(180, PortDirection::Even), 180);
-    assert_eq!(rotate_home_delta(180, PortDirection::Odd), -180);
-    assert_eq!(rotate_home_delta(-180, PortDirection::Even), 180);
-    assert_eq!(rotate_home_delta(-180, PortDirection::Odd), -180);
+fn test_rotate_abs_to_zero_boundary() {
+    assert_eq!(rotate_abs_delta(180, 0, PortDirection::Even), 180);
+    assert_eq!(rotate_abs_delta(180, 0, PortDirection::Odd), -180);
+    assert_eq!(rotate_abs_delta(-180, 0, PortDirection::Even), 180);
+    assert_eq!(rotate_abs_delta(-180, 0, PortDirection::Odd), -180);
 }
 
 #[test]
-fn test_rotate_home_bounded_to_one_revolution() {
-    // If APOS comes in outside the nominal [-180, 180] range (bad read,
-    // stale data, whatever), the delta must still be bounded to a single
-    // revolution — rem_euclid(360) guarantees that.
-    assert_eq!(rotate_home_delta(700, PortDirection::Even), 20);
-    assert_eq!(rotate_home_delta(700, PortDirection::Odd), -340);
-    assert_eq!(rotate_home_delta(-700, PortDirection::Even), 340);
-    assert_eq!(rotate_home_delta(-700, PortDirection::Odd), -20);
+fn test_rotate_abs_to_nonzero_target() {
+    // From 0 to 90: forward is +90, backward is -270
+    assert_eq!(rotate_abs_delta(0, 90, PortDirection::Even), 90);
+    assert_eq!(rotate_abs_delta(0, 90, PortDirection::Odd), -270);
+}
+
+#[test]
+fn test_rotate_abs_backward_to_target() {
+    // From 90 to 0: backward is -90, forward is +270
+    assert_eq!(rotate_abs_delta(90, 0, PortDirection::Odd), -90);
+    assert_eq!(rotate_abs_delta(90, 0, PortDirection::Even), 270);
+}
+
+#[test]
+fn test_rotate_abs_across_boundary() {
+    // From -170 to 170: forward crosses 360 boundary (+340), backward is -20
+    assert_eq!(rotate_abs_delta(-170, 170, PortDirection::Even), 340);
+    assert_eq!(rotate_abs_delta(-170, 170, PortDirection::Odd), -20);
+}
+
+#[test]
+fn test_rotate_abs_bounded_to_one_revolution() {
+    // Out-of-range APOS values still produce sub-360 deltas
+    assert_eq!(rotate_abs_delta(700, 0, PortDirection::Even), 20);
+    assert_eq!(rotate_abs_delta(700, 0, PortDirection::Odd), -340);
+    assert_eq!(rotate_abs_delta(-700, 0, PortDirection::Even), 340);
+    assert_eq!(rotate_abs_delta(-700, 0, PortDirection::Odd), -20);
 }
 
 // ── rotateto_delta ─────────────────────────────────

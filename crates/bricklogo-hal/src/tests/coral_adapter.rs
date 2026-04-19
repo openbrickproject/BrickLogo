@@ -143,13 +143,13 @@ fn test_coral_rotate_ports_by_degrees_batches() {
 }
 
 #[test]
-fn test_coral_rotate_ports_to_home_batches() {
+fn test_coral_rotate_ports_to_abs_batches() {
     let (mut adapter, handles) = make_double_motor_adapter();
     let commands = vec![
         PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
         PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
     ];
-    adapter.rotate_ports_to_home(&commands).unwrap();
+    adapter.rotate_ports_to_abs(&commands, 0).unwrap();
 
     let request_all_calls = handles.request_all_calls.lock().unwrap();
     assert_eq!(request_all_calls.len(), 1, "expected 1 request_all batch");

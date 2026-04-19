@@ -635,9 +635,7 @@ impl HardwareAdapter for BuildHATAdapter {
         self.send_cmd(BuildHATCommand::Preset { port: idx, mode: 2, value: 0.0 })
     }
 
-    fn rotate_to_home(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
-        // Target is the motor's mechanical home (APOS, combi mode 3). Read
-        // APOS and rotate by the shortest direction-respecting delta.
+    fn rotate_to_abs(&mut self, port: &str, direction: PortDirection, power: u8, position: i32) -> Result<(), String> {
         let idx = self.port_index(port)?;
         let type_id = self.require_device(idx)?;
         if !is_absolute_motor(type_id) {
@@ -650,7 +648,7 @@ impl HardwareAdapter for BuildHATAdapter {
             Some(LogoValue::Number(n)) => n as i32,
             _ => return Err("Could not read absolute position".to_string()),
         };
-        let delta = crate::adapter::rotate_home_delta(apos, direction);
+        let delta = crate::adapter::rotate_abs_delta(apos, position, direction);
         if delta == 0 {
             return Ok(());
         }
@@ -662,7 +660,7 @@ impl HardwareAdapter for BuildHATAdapter {
         self.rotate_port_by_degrees(port, delta_dir, power, delta.abs())
     }
 
-    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
         // Plan every port first (read APOS, compute delta, build MotorRamp
         // args), then fire all commands without blocking between them, and
         // finally poll each port's completion flag. This gives within-hub
@@ -682,7 +680,7 @@ impl HardwareAdapter for BuildHATAdapter {
                 Some(LogoValue::Number(n)) => n as i32,
                 _ => return Err("Could not read absolute position".to_string()),
             };
-            let delta = crate::adapter::rotate_home_delta(apos, cmd.direction);
+            let delta = crate::adapter::rotate_abs_delta(apos, position, cmd.direction);
             if delta == 0 {
                 continue;
             }

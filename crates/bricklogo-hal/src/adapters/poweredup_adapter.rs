@@ -365,22 +365,20 @@ impl HardwareAdapter for PoweredUpAdapter {
         self.ble.send(&cmd)
     }
 
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         port: &str,
         direction: PortDirection,
         power: u8,
+        position: i32,
     ) -> Result<(), String> {
-        // Target is the motor's mechanical home (APOS=0). LWP3's
-        // GotoAbsolutePosition operates on POS in practice, not APOS, so we
-        // read APOS and rotate by the shortest direction-respecting delta.
         self.reject_if_wedo2("absolute positioning")?;
         self.require_absolute_motor(port)?;
         let apos = match self.read_sensor(port, Some("absolute"))? {
             Some(LogoValue::Number(n)) => n as i32,
             _ => return Err("Could not read absolute position".to_string()),
         };
-        let delta = crate::adapter::rotate_home_delta(apos, direction);
+        let delta = crate::adapter::rotate_abs_delta(apos, position, direction);
         if delta == 0 {
             return Ok(());
         }
@@ -539,9 +537,7 @@ impl HardwareAdapter for PoweredUpAdapter {
         Ok(())
     }
 
-    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
-        // Read each port's APOS, compute shortest direction-respecting delta
-        // to mechanical home, fire all port commands in parallel.
+    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
         self.reject_if_wedo2("absolute positioning")?;
         for cmd in commands {
             self.require_absolute_motor(cmd.port)?;
@@ -552,7 +548,7 @@ impl HardwareAdapter for PoweredUpAdapter {
                 Some(LogoValue::Number(n)) => n as i32,
                 _ => continue,
             };
-            let delta = crate::adapter::rotate_home_delta(apos, cmd.direction);
+            let delta = crate::adapter::rotate_abs_delta(apos, position, cmd.direction);
             if delta == 0 {
                 continue;
             }

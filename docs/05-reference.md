@@ -309,13 +309,25 @@ resetzero
 
 Resets the encoder zero point on the selected ports. After this command, the current physical position of the motor is considered angle 0 for `rotateto`.
 
-### `rotatetohome`
+### `rotatetoabs`
 
 ```
-rotatetohome
+rotatetoabs angle
 ```
 
-Rotates the selected ports back to the motor's physical absolute zero. The command does not return until the motors reach home. Requires motors with an absolute-position encoder (Technic angular motors). Non-absolute tacho motors (Boost motors, train motors, EV3 motors) do not support this command — use `rotateto 0` after `resetzero` instead.
+Rotates the selected ports to an absolute angular position on the motor's physical encoder. The command does not return until the motors reach the position. Requires motors with an absolute-position encoder (Technic angular motors). Non-absolute tacho motors (Boost motors, train motors, EV3 motors) do not support this command — use `rotateto` after `resetzero` instead.
+
+```
+? rotatetoabs 0
+```
+
+Returns to the motor's physical zero (home).
+
+```
+? rotatetoabs 90
+```
+
+Rotates to 90 degrees on the absolute encoder.
 
 ### `flash`
 
@@ -1660,7 +1672,7 @@ Powered UP hubs also expose internal sensors (tilt, voltage, temperature, etc.) 
 
 Multiple Powered UP hubs can be connected at once — BrickLogo skips any hub already claimed by another `connectto` and picks the next one during the scan.
 
-**WeDo 2.0 Smart Hub:** tacho-motor operations (`rotate`, `rotateto`, `rotatetohome`, `resetzero`) are rejected with a clear error, since the WeDo 2.0 hub firmware does not implement position feedback. Basic motor control (`on`, `off`, `setpower`, `onfor`, `setodd`/`seteven`) and sensors work normally.
+**WeDo 2.0 Smart Hub:** tacho-motor operations (`rotate`, `rotateto`, `rotatetoabs`, `resetzero`) are rejected with a clear error, since the WeDo 2.0 hub firmware does not implement position feedback. Basic motor control (`on`, `off`, `setpower`, `onfor`, `setodd`/`seteven`) and sensors work normally.
 
 ### LEGO Education WeDo 1.0
 
@@ -1710,7 +1722,7 @@ Example:
 **Limitations on EV3:**
 
 - `rotateto` works on EV3 — it rotates to the given angle relative to the last `resetzero`, same as every other adapter with encoder motors.
-- `rotatetohome` errors out — EV3 motors have no absolute-position encoder. Use `rotateto 0` after `resetzero` instead.
+- `rotatetoabs` errors out — EV3 motors have no absolute-position encoder. Use `rotateto 0` after `resetzero` instead.
 - Motor control uses raw PWM power (matching every other BrickLogo adapter). Motors load-droop under heavy loads — this is intentional and consistent across devices.
 - Firmware upload and file transfer are not supported.
 - Daisy-chained bricks are not supported (layer is always 0).

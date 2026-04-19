@@ -485,11 +485,12 @@ impl HardwareAdapter for EV3Adapter {
         self.send_and_wait(|tx| EV3Command::MotorClrCount { mask, reply_tx: tx })
     }
 
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         _port: &str,
         _direction: PortDirection,
         _power: u8,
+        _position: i32,
     ) -> Result<(), String> {
         Err("EV3 motors have no absolute-position encoder; use rotate (relative) instead"
             .to_string())

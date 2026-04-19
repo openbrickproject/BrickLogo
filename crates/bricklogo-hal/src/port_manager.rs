@@ -635,7 +635,7 @@ impl PortManager {
         Ok(())
     }
 
-    pub fn rotate_to_home(&mut self, port_strs: &[String]) -> Result<(), String> {
+    pub fn rotate_to_abs(&mut self, port_strs: &[String], position: i32) -> Result<(), String> {
         let ports = self.resolve_ports(port_strs)?;
         for qp in &ports {
             let entry = self.devices.get(&qp.device_name)
@@ -645,8 +645,8 @@ impl PortManager {
         for qp in &ports { self.cancel_flash(qp); }
 
         let groups = self.group_by_device(&ports);
-        let result = self.run_parallel_by_device(groups, |adapter, commands| {
-            adapter.rotate_ports_to_home(commands)
+        let result = self.run_parallel_by_device(groups, move |adapter, commands| {
+            adapter.rotate_ports_to_abs(commands, position)
         });
 
         for qp in &ports { self.get_state(qp).is_running = false; }

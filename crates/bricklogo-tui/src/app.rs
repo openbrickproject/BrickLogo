@@ -542,7 +542,7 @@ impl App {
             "    rotate <degrees>                     Rotate by degrees".to_string(),
             "    rotateto <position>                  Rotate to position".to_string(),
             "    resetzero                            Reset encoder zero".to_string(),
-            "    rotatetohome                         Rotate to hardware zero".to_string(),
+            "    rotatetoabs                         Rotate to hardware zero".to_string(),
             "    flash <on> <off>                     Flash on/off cycle".to_string(),
             "    alloff                               Stop all ports".to_string(),
             String::new(),

@@ -153,8 +153,8 @@ fn test_pup_rotate_ports_to_position_batches() {
 }
 
 #[test]
-fn test_pup_rotate_ports_to_home_batches() {
-    // rotate_to_home requires absolute motor — Technic angular motors qualify.
+fn test_pup_rotate_ports_to_abs_batches() {
+    // rotate_to_abs requires absolute motor — Technic angular motors qualify.
     // Seed each port's last_reading with a non-zero APOS so the adapter
     // computes a non-zero delta and actually fires commands.
     let (mut adapter, handles) = make_adapter_with_mock(HubType::TechnicMediumHub);
@@ -173,7 +173,7 @@ fn test_pup_rotate_ports_to_home_batches() {
         PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
         PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
     ];
-    adapter.rotate_ports_to_home(&commands).unwrap();
+    adapter.rotate_ports_to_abs(&commands, 0).unwrap();
 
     let calls = handles.request_all_calls.lock().unwrap();
     assert_eq!(calls.len(), 1, "expected one request_all batch");
@@ -181,8 +181,8 @@ fn test_pup_rotate_ports_to_home_batches() {
 }
 
 #[test]
-fn test_pup_rotate_to_home_reads_apos_not_pos() {
-    // Regression: rotatetohome must target mechanical zero (APOS), not the
+fn test_pup_rotate_to_abs_reads_apos_not_pos() {
+    // Regression: rotatetoabs must target mechanical zero (APOS), not the
     // relative encoder's zero (POS). With APOS=80, the adapter must issue
     // a StartSpeedForDegrees(|80|, odd) — NOT a GotoAbsolutePosition(0).
     let (mut adapter, handles) = make_adapter_with_mock(HubType::TechnicMediumHub);
@@ -194,7 +194,7 @@ fn test_pup_rotate_to_home_reads_apos_not_pos() {
         }
     }
 
-    adapter.rotate_to_home("a", PortDirection::Even, 50).unwrap();
+    adapter.rotate_to_abs("a", PortDirection::Even, 50, 0).unwrap();
 
     let calls = handles.request_all_calls.lock().unwrap();
     // rotate_port_by_degrees uses `self.ble.request` (single), not

@@ -478,11 +478,12 @@ pub fn register_hardware_primitives(
     });
 
     let pm_ref = pm.clone();
-    eval.register_primitive("rotatetohome", PrimitiveSpec {
-        min_args: 0, max_args: 0,
-        func: Arc::new(move |_, _, eval| {
+    eval.register_primitive("rotatetoabs", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let position = args[0].as_number()? as i32;
             let ports = eval.selected_outputs().to_vec();
-            pm_ref.lock().unwrap().rotate_to_home(&ports).map_err(|e| LogoError::Runtime(e))?;
+            pm_ref.lock().unwrap().rotate_to_abs(&ports, position).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
     });

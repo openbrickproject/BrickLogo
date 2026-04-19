@@ -41,7 +41,7 @@ impl HardwareAdapter for MockAdapter {
     fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
     fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
     fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
-    fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
     fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
 }
 
@@ -76,7 +76,7 @@ impl HardwareAdapter for SleepyAdapter {
     fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
     fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
     fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
-    fn rotate_to_home(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
     fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
 
     fn run_ports_for_time(&mut self, _commands: &[PortCommand], tenths: u32) -> Result<(), String> {
@@ -91,7 +91,7 @@ impl HardwareAdapter for SleepyAdapter {
         std::thread::sleep(Duration::from_millis(200));
         Ok(())
     }
-    fn rotate_ports_to_home(&mut self, _commands: &[PortCommand]) -> Result<(), String> {
+    fn rotate_ports_to_abs(&mut self, _commands: &[PortCommand], _position: i32) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(200));
         Ok(())
     }
@@ -256,7 +256,7 @@ fn test_format_port_names() {
 
 // ── Cross-device parallelism ──────────────────────
 //
-// Each SleepyAdapter::run_ports_for_time (and rotate/rotate_to/rotate_to_home)
+// Each SleepyAdapter::run_ports_for_time (and rotate/rotate_to/rotate_to_abs)
 // sleeps for a fixed duration. With three devices, sequential dispatch would
 // take 3× the duration; parallel dispatch should take ~1×. We assert under
 // 2× the single-device duration — a generous margin for CI jitter that
@@ -323,7 +323,7 @@ fn test_rotate_to_runs_across_devices_in_parallel() {
 }
 
 #[test]
-fn test_rotate_to_home_runs_across_devices_in_parallel() {
+fn test_rotate_to_abs_runs_across_devices_in_parallel() {
     let mut pm = PortManager::new();
     pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])), "mock");
     pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])), "mock");
@@ -332,12 +332,12 @@ fn test_rotate_to_home_runs_across_devices_in_parallel() {
     pm.ensure_port_states(&ports).unwrap();
 
     let start = Instant::now();
-    pm.rotate_to_home(&ports).unwrap();
+    pm.rotate_to_abs(&ports, 0).unwrap();
     let elapsed = start.elapsed();
 
     assert!(
         elapsed < Duration::from_millis(400),
-        "rotate_to_home ran sequentially: took {:?}, expected <400ms",
+        "rotate_to_abs ran sequentially: took {:?}, expected <400ms",
         elapsed
     );
 }
