@@ -90,7 +90,7 @@ Motor control:
 - `talkto "port` or `talkto [a b]`
 - `on`, `off`, `onfor`, `setpower`
 - `seteven`, `setodd`, `rd`
-- `rotate`, `rotateto`, `resetzero`, `rotatetohome`
+- `rotate`, `rotateto`, `resetzero`, `rotatetoabs`
 - `flash`, `alloff`
 
 Sensors:
