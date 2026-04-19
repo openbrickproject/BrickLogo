@@ -120,6 +120,7 @@ dependencies = [
  "rust-ev3",
  "rust-poweredup",
  "rust-rcx",
+ "rust-spike",
  "rust-wedo",
  "serialport",
  "tokio",
@@ -1135,6 +1136,14 @@ dependencies = [
  "libusb1-sys",
  "rusb",
  "serialport",
+]
+
+[[package]]
+name = "rust-spike"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

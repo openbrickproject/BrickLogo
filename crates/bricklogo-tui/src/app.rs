@@ -523,7 +523,7 @@ impl App {
             String::new(),
             "  Connection".to_string(),
             "    connectto \"type \"name                Connect to a device".to_string(),
-            "      Device types: \"science \"pup \"wedo \"controllab \"rcx \"buildhat \"ev3".to_string(),
+            "      Device types: \"science \"pup \"wedo \"controllab \"rcx \"buildhat \"ev3 \"spike".to_string(),
             "    use \"name                            Set active device".to_string(),
             "    disconnect                           Disconnect active device".to_string(),
             String::new(),
