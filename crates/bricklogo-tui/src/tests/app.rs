@@ -256,8 +256,8 @@ fn test_tick_syncs_device_and_selection_context() {
     let mut app = App::new(None, "0.0.0", None).unwrap();
     {
         let mut pm = app.port_manager.lock().unwrap();
-        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-        pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "pup");
+        pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])), "pup");
     }
     // Set selections on the evaluator
     if let Some(ref mut eval) = app.evaluator {

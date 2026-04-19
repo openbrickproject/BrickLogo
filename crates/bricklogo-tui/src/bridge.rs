@@ -179,7 +179,7 @@ pub fn register_hardware_primitives(
 
                 // Brief lock to register the connected adapter
                 let display = adapter.display_name().to_string();
-                pm_ref.lock().unwrap().add_device(&name, adapter);
+                pm_ref.lock().unwrap().add_device(&name, adapter, &device_type);
                 system_fn_ref(&format!("Connected to {} as \"{}\"", display, name));
                 Ok(None)
             }),
@@ -218,6 +218,98 @@ pub fn register_hardware_primitives(
                     .set_active_device(&name)
                     .map_err(|e| LogoError::Runtime(e))?;
                 Ok(None)
+            }),
+        },
+    );
+
+    // ── Device queries ──────────────────────────
+
+    let pm_ref = pm.clone();
+    eval.register_primitive(
+        "connected",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(move |_, _, _| {
+                let pm = pm_ref.lock().unwrap();
+                let names: Vec<LogoValue> = pm
+                    .get_connected_device_names()
+                    .into_iter()
+                    .map(LogoValue::Word)
+                    .collect();
+                Ok(Some(LogoValue::List(names)))
+            }),
+        },
+    );
+
+    let pm_ref = pm.clone();
+    eval.register_primitive(
+        "connected?",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(move |args, _, _| {
+                let name = args[0].as_string().to_lowercase();
+                let pm = pm_ref.lock().unwrap();
+                let result = pm.is_device_connected(&name);
+                Ok(Some(LogoValue::Word(
+                    if result { "true" } else { "false" }.to_string(),
+                )))
+            }),
+        },
+    );
+
+    let pm_ref = pm.clone();
+    eval.register_primitive(
+        "device",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(move |args, _, _| {
+                let name = args[0].as_string().to_lowercase();
+                let pm = pm_ref.lock().unwrap();
+                let dtype = pm
+                    .get_device_type(&name)
+                    .map_err(|e| LogoError::Runtime(e))?;
+                Ok(Some(LogoValue::Word(dtype)))
+            }),
+        },
+    );
+
+    let pm_ref = pm.clone();
+    eval.register_primitive(
+        "outputs",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(move |args, _, _| {
+                let name = args[0].as_string().to_lowercase();
+                let pm = pm_ref.lock().unwrap();
+                let ports = pm
+                    .get_device_outputs(&name)
+                    .map_err(|e| LogoError::Runtime(e))?;
+                Ok(Some(LogoValue::List(
+                    ports.into_iter().map(LogoValue::Word).collect(),
+                )))
+            }),
+        },
+    );
+
+    let pm_ref = pm.clone();
+    eval.register_primitive(
+        "inputs",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(move |args, _, _| {
+                let name = args[0].as_string().to_lowercase();
+                let pm = pm_ref.lock().unwrap();
+                let ports = pm
+                    .get_device_inputs(&name)
+                    .map_err(|e| LogoError::Runtime(e))?;
+                Ok(Some(LogoValue::List(
+                    ports.into_iter().map(LogoValue::Word).collect(),
+                )))
             }),
         },
     );

@@ -504,7 +504,7 @@ You set a variable with `make` and read it with a colon:
 
 ### Infix operators
 
-BrickLogo supports `+`, `-`, `*`, `/`, `=`, `<`, and `>` as infix operators:
+BrickLogo supports `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`, and `<>` as infix operators:
 
 ```
 ? print 3 + 4
@@ -926,11 +926,41 @@ Returns *a* divided by *b*.
 remainder a b
 ```
 
-Returns the remainder when *a* is divided by *b*.
+Returns the remainder when *a* is divided by *b*. The sign of the result follows the dividend.
 
 ```
 ? print remainder 10 3
 1
+```
+
+### `modulo`
+
+```
+modulo a b
+```
+
+Returns *a* modulo *b*. Unlike `remainder`, the sign of the result follows the divisor. Useful for wrapping angles into a positive range.
+
+```
+? print modulo 10 3
+1
+? print modulo (minus 10) 3
+2
+```
+
+### `power`
+
+```
+power base exponent
+```
+
+Returns *base* raised to the *exponent*.
+
+```
+? print power 2 10
+1024
+? print power 9 0.5
+3
 ```
 
 ### `minus`
@@ -1321,6 +1351,32 @@ Joins two words into a single word.
 ```
 ? print word "hello "world
 helloworld
+```
+
+### `uppercase`
+
+```
+uppercase word
+```
+
+Returns the word converted to uppercase.
+
+```
+? print uppercase "hello
+HELLO
+```
+
+### `lowercase`
+
+```
+lowercase word
+```
+
+Returns the word converted to lowercase.
+
+```
+? print lowercase "HELLO
+hello
 ```
 
 ---

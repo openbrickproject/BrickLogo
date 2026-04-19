@@ -100,15 +100,15 @@ impl HardwareAdapter for SleepyAdapter {
 #[test]
 fn test_first_device_becomes_active() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])), "mock");
     assert_eq!(pm.get_active_device_name(), Some("bot"));
 }
 
 #[test]
 fn test_second_device_not_active() {
     let mut pm = PortManager::new();
-    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])), "mock");
     assert_eq!(pm.get_active_device_name(), Some("bot1"));
     assert_eq!(pm.get_connected_device_names(), vec!["bot1".to_string(), "bot2".to_string()]);
 }
@@ -116,8 +116,8 @@ fn test_second_device_not_active() {
 #[test]
 fn test_use_switches_active() {
     let mut pm = PortManager::new();
-    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])), "mock");
     pm.set_active_device("bot2").unwrap();
     assert_eq!(pm.get_active_device_name(), Some("bot2"));
 }
@@ -125,8 +125,8 @@ fn test_use_switches_active() {
 #[test]
 fn test_remove_device_fallback() {
     let mut pm = PortManager::new();
-    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])), "mock");
     pm.remove_device("bot1");
     assert_eq!(pm.get_active_device_name(), Some("bot2"));
     assert_eq!(pm.get_connected_device_names(), vec!["bot2".to_string()]);
@@ -135,21 +135,21 @@ fn test_remove_device_fallback() {
 #[test]
 fn test_ensure_port_states() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])), "mock");
     pm.ensure_port_states(&["a".to_string()]).unwrap();
 }
 
 #[test]
 fn test_ensure_port_states_qualified() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])), "mock");
     pm.ensure_port_states(&["bot.a".to_string()]).unwrap();
 }
 
 #[test]
 fn test_on_off() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])), "mock");
     let ports = vec!["a".to_string(), "b".to_string()];
     pm.ensure_port_states(&ports).unwrap();
     pm.on(&ports).unwrap();
@@ -159,7 +159,7 @@ fn test_on_off() {
 #[test]
 fn test_set_power() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "mock");
     let ports = vec!["a".to_string()];
     pm.ensure_port_states(&ports).unwrap();
     pm.set_power(&ports, 8);
@@ -169,7 +169,7 @@ fn test_set_power() {
 #[test]
 fn test_all_off() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a", "b"])), "mock");
     let ports = vec!["a".to_string(), "b".to_string()];
     pm.ensure_port_states(&ports).unwrap();
     pm.on(&ports).unwrap();
@@ -179,15 +179,15 @@ fn test_all_off() {
 #[test]
 fn test_read_sensor_no_port() {
     let mut pm = PortManager::new();
-    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "mock");
     assert!(pm.read_sensor(&[], None).is_err());
 }
 
 #[test]
 fn test_remove_all() {
     let mut pm = PortManager::new();
-    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("bot2", Box::new(MockAdapter::new(&["a"])), "mock");
     pm.remove_all();
     assert!(pm.get_active_device_name().is_none());
     assert!(pm.get_connected_device_names().is_empty());
@@ -196,9 +196,9 @@ fn test_remove_all() {
 #[test]
 fn test_connection_order_preserved_after_use_and_remove() {
     let mut pm = PortManager::new();
-    pm.add_device("alpha", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("beta", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("gamma", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("alpha", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("beta", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("gamma", Box::new(MockAdapter::new(&["a"])), "mock");
     pm.set_active_device("gamma").unwrap();
 
     assert_eq!(
@@ -217,9 +217,9 @@ fn test_connection_order_preserved_after_use_and_remove() {
 #[test]
 fn test_mru_fallback_after_multiple_use_calls() {
     let mut pm = PortManager::new();
-    pm.add_device("alpha", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("beta", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("gamma", Box::new(MockAdapter::new(&["a"])));
+    pm.add_device("alpha", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("beta", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("gamma", Box::new(MockAdapter::new(&["a"])), "mock");
     // use beta, then gamma, then alpha — MRU = [beta, gamma, alpha]
     pm.set_active_device("beta").unwrap();
     pm.set_active_device("gamma").unwrap();
@@ -241,8 +241,8 @@ fn test_mru_fallback_after_multiple_use_calls() {
 #[test]
 fn test_format_port_names() {
     let mut pm = PortManager::new();
-    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-    pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
+    pm.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "mock");
+    pm.add_device("bot2", Box::new(MockAdapter::new(&["b"])), "mock");
 
     // Active device is bot1, so "a" stays short, "bot2.b" stays qualified
     let outputs = vec!["a".to_string(), "bot2.b".to_string()];
@@ -265,9 +265,9 @@ fn test_format_port_names() {
 #[test]
 fn test_on_for_runs_across_devices_in_parallel() {
     let mut pm = PortManager::new();
-    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])), "mock");
     let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
     pm.ensure_port_states(&ports).unwrap();
 
@@ -285,9 +285,9 @@ fn test_on_for_runs_across_devices_in_parallel() {
 #[test]
 fn test_rotate_runs_across_devices_in_parallel() {
     let mut pm = PortManager::new();
-    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])), "mock");
     let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
     pm.ensure_port_states(&ports).unwrap();
 
@@ -305,9 +305,9 @@ fn test_rotate_runs_across_devices_in_parallel() {
 #[test]
 fn test_rotate_to_runs_across_devices_in_parallel() {
     let mut pm = PortManager::new();
-    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])), "mock");
     let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
     pm.ensure_port_states(&ports).unwrap();
 
@@ -325,9 +325,9 @@ fn test_rotate_to_runs_across_devices_in_parallel() {
 #[test]
 fn test_rotate_to_home_runs_across_devices_in_parallel() {
     let mut pm = PortManager::new();
-    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])));
-    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])));
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["a"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["a"])), "mock");
     let ports = vec!["a.a".into(), "b.a".into(), "c.a".into()];
     pm.ensure_port_states(&ports).unwrap();
 

@@ -28,6 +28,7 @@ struct QualifiedPort {
 
 struct DeviceEntry {
     adapter: Box<dyn HardwareAdapter>,
+    device_type: String,
     port_states: HashMap<String, OutputPortState>,
     last_sent: HashMap<String, SentState>,
 }
@@ -60,7 +61,7 @@ impl PortManager {
         self.mru.push(name.to_string());
     }
 
-    pub fn add_device(&mut self, name: &str, adapter: Box<dyn HardwareAdapter>) {
+    pub fn add_device(&mut self, name: &str, adapter: Box<dyn HardwareAdapter>, device_type: &str) {
         // Default power on a fresh port is half the device's native maximum,
         // so `on` without a prior `setpower` runs at ~50% on every hub.
         let default_power = adapter.max_power() / 2;
@@ -79,6 +80,7 @@ impl PortManager {
             name.to_string(),
             DeviceEntry {
                 adapter,
+                device_type: device_type.to_string(),
                 port_states,
                 last_sent: HashMap::new(),
             },
@@ -173,6 +175,33 @@ impl PortManager {
 
     pub fn get_active_device_name_owned(&self) -> Option<String> {
         self.active_device.clone()
+    }
+
+    pub fn is_device_connected(&self, name: &str) -> bool {
+        self.devices
+            .get(name)
+            .is_some_and(|entry| entry.adapter.connected())
+    }
+
+    pub fn get_device_type(&self, name: &str) -> Result<String, String> {
+        self.devices
+            .get(name)
+            .map(|entry| entry.device_type.clone())
+            .ok_or_else(|| format!("No device named \"{}\"", name))
+    }
+
+    pub fn get_device_outputs(&self, name: &str) -> Result<Vec<String>, String> {
+        self.devices
+            .get(name)
+            .map(|entry| entry.adapter.output_ports().to_vec())
+            .ok_or_else(|| format!("No device named \"{}\"", name))
+    }
+
+    pub fn get_device_inputs(&self, name: &str) -> Result<Vec<String>, String> {
+        self.devices
+            .get(name)
+            .map(|entry| entry.adapter.input_ports().to_vec())
+            .ok_or_else(|| format!("No device named \"{}\"", name))
     }
 
     pub fn format_port_names(&self, ports: &[String]) -> Vec<String> {

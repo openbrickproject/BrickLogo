@@ -113,8 +113,8 @@ fn test_bridge_primitives_update_port_manager_state() {
     let (mut eval, pm) = setup_eval();
     {
         let mut manager = pm.lock().unwrap();
-        manager.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-        manager.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
+        manager.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("bot2", Box::new(MockAdapter::new(&["b"])), "pup");
     }
 
     eval.evaluate("use \"bot2").unwrap();
@@ -133,8 +133,8 @@ fn test_bridge_disconnect_removes_active_device() {
     let (mut eval, pm) = setup_eval();
     {
         let mut manager = pm.lock().unwrap();
-        manager.add_device("bot1", Box::new(MockAdapter::new(&["a"])));
-        manager.add_device("bot2", Box::new(MockAdapter::new(&["b"])));
+        manager.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("bot2", Box::new(MockAdapter::new(&["b"])), "pup");
     }
 
     eval.evaluate("use \"bot2").unwrap();
@@ -156,4 +156,232 @@ fn test_bridge_connect_rejects_unknown_type() {
         err.to_string(),
         "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", or \"ev3\""
     );
+}
+
+// ── connected ───────────────────────────────
+
+#[test]
+fn test_connected_empty() {
+    let (mut eval, _) = setup_eval();
+    let result = eval.evaluate("connected").unwrap();
+    assert_eq!(result, Some(LogoValue::List(vec![])));
+}
+
+#[test]
+fn test_connected_with_devices() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("alpha", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("beta", Box::new(MockAdapter::new(&["b"])), "science");
+    }
+    let result = eval.evaluate("connected").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![
+            LogoValue::Word("alpha".to_string()),
+            LogoValue::Word("beta".to_string()),
+        ]))
+    );
+}
+
+#[test]
+fn test_connected_after_disconnect() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot1", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("bot2", Box::new(MockAdapter::new(&["b"])), "pup");
+    }
+    eval.evaluate("disconnect").unwrap(); // disconnects bot1 (active)
+    let result = eval.evaluate("connected").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![LogoValue::Word("bot2".to_string())]))
+    );
+}
+
+// ── connected? ──────────────────────────────
+
+#[test]
+fn test_connected_query_true() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    let result = eval.evaluate("connected? \"bot").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("true".to_string())));
+}
+
+#[test]
+fn test_connected_query_false_nonexistent() {
+    let (mut eval, _) = setup_eval();
+    let result = eval.evaluate("connected? \"nope").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_connected_query_false_after_disconnect() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    eval.evaluate("disconnect").unwrap();
+    let result = eval.evaluate("connected? \"bot").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_connected_query_case_insensitive() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("mybot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    let result = eval.evaluate("connected? \"MYBOT").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("true".to_string())));
+}
+
+// ── device ──────────────────────────────────
+
+#[test]
+fn test_device_returns_type() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    let result = eval.evaluate("device \"bot").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("pup".to_string())));
+}
+
+#[test]
+fn test_device_different_types() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("hub", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("lab", Box::new(MockAdapter::new(&["a"])), "controllab");
+        manager.add_device("hat", Box::new(MockAdapter::new(&["a"])), "buildhat");
+    }
+    assert_eq!(eval.evaluate("device \"hub").unwrap(), Some(LogoValue::Word("pup".to_string())));
+    assert_eq!(eval.evaluate("device \"lab").unwrap(), Some(LogoValue::Word("controllab".to_string())));
+    assert_eq!(eval.evaluate("device \"hat").unwrap(), Some(LogoValue::Word("buildhat".to_string())));
+}
+
+#[test]
+fn test_device_nonexistent_errors() {
+    let (mut eval, _) = setup_eval();
+    let result = eval.evaluate("device \"nope");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_device_case_insensitive() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("mybot", Box::new(MockAdapter::new(&["a"])), "science");
+    }
+    assert_eq!(eval.evaluate("device \"MYBOT").unwrap(), Some(LogoValue::Word("science".to_string())));
+}
+
+// ── outputs ─────────────────────────────────
+
+#[test]
+fn test_outputs_returns_port_list() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a", "b", "c"])), "pup");
+    }
+    let result = eval.evaluate("outputs \"bot").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![
+            LogoValue::Word("a".to_string()),
+            LogoValue::Word("b".to_string()),
+            LogoValue::Word("c".to_string()),
+        ]))
+    );
+}
+
+#[test]
+fn test_outputs_single_port() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "science");
+    }
+    let result = eval.evaluate("outputs \"bot").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![LogoValue::Word("a".to_string())]))
+    );
+}
+
+#[test]
+fn test_outputs_nonexistent_errors() {
+    let (mut eval, _) = setup_eval();
+    assert!(eval.evaluate("outputs \"nope").is_err());
+}
+
+// ── inputs ──────────────────────────────────
+
+#[test]
+fn test_inputs_returns_empty_for_mock() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    // MockAdapter returns empty input_ports
+    let result = eval.evaluate("inputs \"bot").unwrap();
+    assert_eq!(result, Some(LogoValue::List(vec![])));
+}
+
+#[test]
+fn test_inputs_nonexistent_errors() {
+    let (mut eval, _) = setup_eval();
+    assert!(eval.evaluate("inputs \"nope").is_err());
+}
+
+// ── combined usage ──────────────────────────
+
+#[test]
+fn test_foreach_connected_devices() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("alpha", Box::new(MockAdapter::new(&["a"])), "pup");
+        manager.add_device("beta", Box::new(MockAdapter::new(&["b"])), "science");
+    }
+    // Use connected + foreach to iterate device names
+    eval.evaluate("make \"types []").unwrap();
+    eval.evaluate("foreach \"d connected [make \"types lput device :d :types]").unwrap();
+    let result = eval.evaluate(":types").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![
+            LogoValue::Word("pup".to_string()),
+            LogoValue::Word("science".to_string()),
+        ]))
+    );
+}
+
+#[test]
+fn test_if_connected_pattern() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    }
+    // Common pattern: conditionally use a device
+    eval.evaluate("make \"result \"no").unwrap();
+    eval.evaluate("if connected? \"bot [make \"result \"yes]").unwrap();
+    assert_eq!(eval.evaluate(":result").unwrap(), Some(LogoValue::Word("yes".to_string())));
+    eval.evaluate("if connected? \"nope [make \"result \"bad]").unwrap();
+    assert_eq!(eval.evaluate(":result").unwrap(), Some(LogoValue::Word("yes".to_string())));
 }
