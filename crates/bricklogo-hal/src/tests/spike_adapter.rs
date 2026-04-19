@@ -210,7 +210,7 @@ fn test_require_absolute_rejects_tacho_only() {
         let mut shared = adapter.shared.lock().unwrap();
         shared.ports[0].device_type = DEVICE_MEDIUM_LINEAR_MOTOR; // tacho but not absolute
     }
-    let err = adapter.rotate_to_home("a", PortDirection::Even, 50);
+    let err = adapter.rotate_to_abs("a", PortDirection::Even, 50, 0);
     assert!(err.is_err());
     assert!(err.unwrap_err().contains("absolute position"));
     adapter.disconnect();

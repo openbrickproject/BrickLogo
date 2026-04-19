@@ -502,16 +502,17 @@ impl HardwareAdapter for SpikeAdapter {
         })
     }
 
-    fn rotate_to_home(
+    fn rotate_to_abs(
         &mut self,
         port: &str,
         direction: PortDirection,
         power: u8,
+        position: i32,
     ) -> Result<(), String> {
         self.require_absolute(port)?;
         let data = self.read_motor_data(port)?;
         let apos = data[2] as i32; // absolute position
-        let delta = crate::adapter::rotate_home_delta(apos, direction);
+        let delta = crate::adapter::rotate_abs_delta(apos, position, direction);
         if delta == 0 {
             return Ok(());
         }
@@ -724,13 +725,13 @@ impl HardwareAdapter for SpikeAdapter {
         Ok(())
     }
 
-    fn rotate_ports_to_home(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
         let mut receivers = Vec::with_capacity(commands.len());
         for cmd in commands {
             self.require_absolute(cmd.port)?;
             let data = self.read_motor_data(cmd.port)?;
             let apos = data[2] as i32;
-            let delta = crate::adapter::rotate_home_delta(apos, cmd.direction);
+            let delta = crate::adapter::rotate_abs_delta(apos, position, cmd.direction);
             if delta == 0 {
                 continue;
             }
