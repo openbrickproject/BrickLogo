@@ -1,12 +1,12 @@
 //! LEGO SPIKE Prime / Robot Inventor adapter.
 //!
-//! Talks to the hub's Scratch VM runtime over serial (USB or Bluetooth SPP).
-//! The protocol is JSON lines terminated with \r. The hub enters "play" mode
-//! on init and accepts `scratch.*` motor/sensor commands, responding with
-//! task-ID-correlated completions and continuous telemetry.
+//! Talks to the hub's MicroPython REPL over USB serial. Uses raw REPL mode
+//! (Ctrl+A) for code execution. Motor commands are Python one-liners;
+//! parallel operations use `runloop.gather()`. Sensor reads use `print()`
+//! and parse stdout.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use bricklogo_lang::value::LogoValue;
@@ -46,82 +46,40 @@ impl SpikeTransport for Box<dyn serialport::SerialPort> {
 
 // ── Helpers ─────────────────────────────────────
 
-fn to_signed_speed(direction: PortDirection, power: u8) -> i32 {
-    let p = power.min(MAX_POWER) as i32;
+/// Convert BrickLogo power (0-100) to SPIKE velocity (deg/s).
+/// SPIKE motors max around 1000 deg/s; map power linearly.
+fn to_velocity(direction: PortDirection, power: u8) -> i32 {
+    let vel = power.min(MAX_POWER) as i32 * 10;
     match direction {
-        PortDirection::Even => p,
-        PortDirection::Odd => -p,
-    }
-}
-
-fn port_to_upper(port: &str) -> String {
-    port.to_uppercase()
-}
-
-// ── Shared state ────────────────────────────────
-
-pub struct SpikeShared {
-    pub ports: [PortTelemetry; PORT_COUNT],
-    pub imu: ImuData,
-}
-
-impl SpikeShared {
-    fn new() -> Self {
-        SpikeShared {
-            ports: Default::default(),
-            imu: ImuData::default(),
-        }
+        PortDirection::Even => vel,
+        PortDirection::Odd => -vel,
     }
 }
 
 // ── Slot commands ───────────────────────────────
 
-type ReplyTx = mpsc::Sender<Result<(), String>>;
+type ReplyTx = mpsc::Sender<Result<String, String>>;
 
 enum SpikeCommand {
-    /// Fire-and-forget motor start.
-    MotorStart { port: String, speed: i32, reply_tx: ReplyTx },
-    /// Fire-and-forget motor stop.
-    MotorStop { port: String, stop: u8, reply_tx: ReplyTx },
-    /// Awaited: run for time.
-    MotorRunTimed { port: String, speed: i32, time_ms: u32, stop: u8, reply_tx: ReplyTx },
-    /// Awaited: run for degrees.
-    MotorRunDegrees { port: String, speed: i32, degrees: i32, stop: u8, reply_tx: ReplyTx },
-    /// Awaited: go to absolute position with direction.
-    MotorGoToPosition { port: String, position: i32, speed: i32, direction: String, stop: u8, reply_tx: ReplyTx },
-    /// Fire-and-forget: reset encoder.
-    MotorSetPosition { port: String, offset: i32, reply_tx: ReplyTx },
-    /// Fire-and-forget: dual motor start.
-    MoveStartSpeeds { lmotor: String, rmotor: String, lspeed: i32, rspeed: i32, reply_tx: ReplyTx },
-    /// Fire-and-forget: dual motor stop.
-    MoveStop { lmotor: String, rmotor: String, stop: u8, reply_tx: ReplyTx },
+    /// Send raw REPL code and get the response.
+    Execute { code: Vec<u8>, reply_tx: ReplyTx },
 }
 
 // ── Slot ────────────────────────────────────────
 
-struct PendingTask {
-    task_id: String,
-    reply_tx: ReplyTx,
-}
-
 struct SpikeSlot {
     port: Box<dyn SpikeTransport>,
     rx: mpsc::Receiver<SpikeCommand>,
-    shared: Arc<Mutex<SpikeShared>>,
-    read_buffer: String,
+    response_buf: Vec<u8>,
     alive: bool,
-    task_id_gen: TaskIdGen,
-    pending: Vec<PendingTask>,
+    /// The reply channel for the currently-executing command, if any.
+    pending: Option<ReplyTx>,
 }
 
 impl SpikeSlot {
-    fn write_cmd(&mut self, cmd: &str) -> Result<(), String> {
-        self.port.write_all(cmd.as_bytes())?;
-        self.port.flush()
-    }
-
-    fn next_id(&mut self) -> String {
-        self.task_id_gen.next()
+    /// Count how many \x04 bytes are in the response buffer.
+    fn eot_count(&self) -> usize {
+        self.response_buf.iter().filter(|&&b| b == CTRL_D).count()
     }
 }
 
@@ -131,7 +89,7 @@ impl DeviceSlot for SpikeSlot {
         let mut buf = [0u8; 1024];
         match self.port.read(&mut buf) {
             Ok(n) if n > 0 => {
-                self.read_buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
+                self.response_buf.extend_from_slice(&buf[..n]);
             }
             Err(_) => {
                 self.alive = false;
@@ -140,84 +98,31 @@ impl DeviceSlot for SpikeSlot {
             _ => {}
         }
 
-        // Process complete lines (terminated by \r)
-        while let Some(cr_pos) = self.read_buffer.find('\r') {
-            let line = self.read_buffer[..cr_pos].trim().to_string();
-            self.read_buffer = self.read_buffer[cr_pos + 1..].to_string();
-
-            if line.is_empty() {
-                continue;
-            }
-
-            match parse_message(&line) {
-                SpikeMessage::TaskComplete { task_id, result } => {
-                    // Fire any pending reply for this task ID.
-                    if let Some(idx) = self.pending.iter().position(|p| p.task_id == task_id) {
-                        let entry = self.pending.remove(idx);
-                        // result == 0 or null typically means success
-                        let _ = entry.reply_tx.send(Ok(()));
-                        let _ = result; // consumed
-                    }
-                }
-                SpikeMessage::Telemetry(data) => {
-                    let mut shared = self.shared.lock().unwrap();
-                    shared.ports = data.ports;
-                    shared.imu = data.imu;
-                }
-                _ => {}
-            }
+        // ── Check for command completion ──────
+        // Raw REPL response ends with two \x04 bytes: OK<stdout>\x04<stderr>\x04
+        if self.pending.is_some() && self.eot_count() >= 2 {
+            let reply_tx = self.pending.take().unwrap();
+            let result = parse_raw_repl_response(&self.response_buf);
+            let _ = reply_tx.send(result);
+            self.response_buf.clear();
         }
 
         // ── Drain command queue ───────────────
-        while let Ok(cmd) = self.rx.try_recv() {
-            match cmd {
-                SpikeCommand::MotorStart { port, speed, reply_tx } => {
-                    let id = self.next_id();
-                    let r = self.write_cmd(&cmd_motor_start(&id, &port, speed, true));
-                    let _ = reply_tx.send(r);
-                }
-                SpikeCommand::MotorStop { port, stop, reply_tx } => {
-                    let id = self.next_id();
-                    let r = self.write_cmd(&cmd_motor_stop(&id, &port, stop, DEFAULT_DECEL));
-                    let _ = reply_tx.send(r);
-                }
-                SpikeCommand::MotorRunTimed { port, speed, time_ms, stop, reply_tx } => {
-                    let id = self.next_id();
-                    match self.write_cmd(&cmd_motor_run_timed(&id, &port, speed, time_ms, true, stop)) {
-                        Ok(()) => self.pending.push(PendingTask { task_id: id, reply_tx }),
-                        Err(e) => { let _ = reply_tx.send(Err(e)); }
+        // Only send next command if no command is pending.
+        if self.pending.is_none() {
+            if let Ok(cmd) = self.rx.try_recv() {
+                match cmd {
+                    SpikeCommand::Execute { code, reply_tx } => {
+                        self.response_buf.clear();
+                        match self.port.write_all(&code).and_then(|_| self.port.flush()) {
+                            Ok(()) => {
+                                self.pending = Some(reply_tx);
+                            }
+                            Err(e) => {
+                                let _ = reply_tx.send(Err(e));
+                            }
+                        }
                     }
-                }
-                SpikeCommand::MotorRunDegrees { port, speed, degrees, stop, reply_tx } => {
-                    let id = self.next_id();
-                    match self.write_cmd(&cmd_motor_run_for_degrees(&id, &port, speed, degrees, true, stop)) {
-                        Ok(()) => self.pending.push(PendingTask { task_id: id, reply_tx }),
-                        Err(e) => { let _ = reply_tx.send(Err(e)); }
-                    }
-                }
-                SpikeCommand::MotorGoToPosition { port, position, speed, direction, stop, reply_tx } => {
-                    let id = self.next_id();
-                    match self.write_cmd(&cmd_motor_go_direction_to_position(
-                        &id, &port, position, speed, &direction, true, stop,
-                    )) {
-                        Ok(()) => self.pending.push(PendingTask { task_id: id, reply_tx }),
-                        Err(e) => { let _ = reply_tx.send(Err(e)); }
-                    }
-                }
-                SpikeCommand::MotorSetPosition { port, offset, reply_tx } => {
-                    let id = self.next_id();
-                    let r = self.write_cmd(&cmd_motor_set_position(&id, &port, offset));
-                    let _ = reply_tx.send(r);
-                }
-                SpikeCommand::MoveStartSpeeds { lmotor, rmotor, lspeed, rspeed, reply_tx } => {
-                    let id = self.next_id();
-                    let r = self.write_cmd(&cmd_move_start_speeds(&id, &lmotor, &rmotor, lspeed, rspeed));
-                    let _ = reply_tx.send(r);
-                }
-                SpikeCommand::MoveStop { lmotor, rmotor, stop, reply_tx } => {
-                    let id = self.next_id();
-                    let r = self.write_cmd(&cmd_move_stop(&id, &lmotor, &rmotor, stop));
-                    let _ = reply_tx.send(r);
                 }
             }
         }
@@ -232,7 +137,6 @@ impl DeviceSlot for SpikeSlot {
 
 pub struct SpikeAdapter {
     tx: Option<mpsc::Sender<SpikeCommand>>,
-    shared: Arc<Mutex<SpikeShared>>,
     slot_id: Option<usize>,
     display_name: String,
     identifier: Option<String>,
@@ -242,70 +146,41 @@ impl SpikeAdapter {
     pub fn new(identifier: Option<&str>) -> Self {
         SpikeAdapter {
             tx: None,
-            shared: Arc::new(Mutex::new(SpikeShared::new())),
             slot_id: None,
             display_name: "LEGO SPIKE Prime".to_string(),
             identifier: identifier.map(|s| s.to_string()),
         }
     }
 
-    fn send_and_wait(&self, cmd_builder: impl FnOnce(ReplyTx) -> SpikeCommand) -> Result<(), String> {
+    /// Send a raw REPL command and wait for the response.
+    fn execute(&self, code: Vec<u8>) -> Result<String, String> {
         let (tx, rx) = mpsc::channel();
         self.tx
             .as_ref()
             .ok_or("Not connected")?
-            .send(cmd_builder(tx))
+            .send(SpikeCommand::Execute { code, reply_tx: tx })
             .map_err(|_| "SPIKE slot channel closed".to_string())?;
         rx.recv_timeout(Duration::from_secs(30))
             .map_err(|_| "SPIKE command timed out".to_string())?
     }
 
-    fn require_tacho(&self, port: &str) -> Result<(), String> {
-        let idx = port_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        let shared = self.shared.lock().unwrap();
-        let type_id = shared.ports[idx].device_type;
-        if type_id == 0 {
-            return Err(format!("No device connected on port {}", port));
-        }
-        if !is_tacho_motor(type_id) {
-            return Err(format!("Device on port {} is not a tacho motor", port));
-        }
-        Ok(())
-    }
-
-    fn require_absolute(&self, port: &str) -> Result<(), String> {
-        let idx = port_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        let shared = self.shared.lock().unwrap();
-        let type_id = shared.ports[idx].device_type;
-        if !is_absolute_motor(type_id) {
-            return Err(format!(
-                "Device on port {} does not support absolute position — use rotateto after resetzero instead",
-                port
-            ));
-        }
-        Ok(())
-    }
-
-    fn read_motor_data(&self, port: &str) -> Result<[f64; 4], String> {
-        let idx = port_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        let shared = self.shared.lock().unwrap();
-        Ok(shared.ports[idx].data)
+    /// Execute a command, ignore stdout, return Ok/Err.
+    fn execute_void(&self, code: Vec<u8>) -> Result<(), String> {
+        self.execute(code).map(|_| ())
     }
 }
 
 impl HardwareAdapter for SpikeAdapter {
     fn display_name(&self) -> &str { &self.display_name }
-    fn output_ports(&self) -> &[String] { &[] } // populated after connect
+    fn output_ports(&self) -> &[String] { &[] }
     fn input_ports(&self) -> &[String] { &[] }
     fn connected(&self) -> bool { self.tx.is_some() }
     fn max_power(&self) -> u8 { MAX_POWER }
 
     fn connect(&mut self) -> Result<(), String> {
-        // Open serial port — either from identifier (config) or auto-detect USB
         let path = if let Some(ref id) = self.identifier {
             id.clone()
         } else {
-            // Auto-detect: scan for LEGO USB VID
             let ports = serialport::available_ports().map_err(|e| e.to_string())?;
             let lego_port = ports.iter().find(|p| {
                 if let serialport::SerialPortType::UsbPort(info) = &p.port_type {
@@ -327,50 +202,60 @@ impl HardwareAdapter for SpikeAdapter {
 
         let mut transport: Box<dyn SpikeTransport> = Box::new(serial);
 
-        // Wait for hub to be ready
-        std::thread::sleep(Duration::from_secs(2));
+        // Interrupt any running program and get to REPL
+        transport.write_all(&[CTRL_C])?;
+        transport.flush()?;
+        std::thread::sleep(Duration::from_millis(500));
+        transport.write_all(&[CTRL_C])?;
+        transport.flush()?;
+        std::thread::sleep(Duration::from_millis(500));
 
-        // Enter play mode
-        let modechange = cmd_program_modechange();
-        transport.write_all(modechange.as_bytes())?;
+        // Enter raw REPL mode
+        transport.write_all(&[CTRL_A])?;
+        transport.flush()?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Drain any startup text
+        let mut drain_buf = [0u8; 4096];
+        let _ = transport.read(&mut drain_buf);
+
+        // Send imports and verify we get OK back
+        let init = cmd_init_imports();
+        transport.write_all(&init)?;
         transport.flush()?;
 
-        // Read initial telemetry for ~1 second to populate port info
-        let shared = Arc::new(Mutex::new(SpikeShared::new()));
-        let deadline = Instant::now() + Duration::from_secs(1);
-        let mut buf = [0u8; 1024];
-        let mut read_buffer = String::new();
+        // Wait for the response (OK\x04\x04)
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut response = Vec::new();
         while Instant::now() < deadline {
+            let mut buf = [0u8; 256];
             match transport.read(&mut buf) {
                 Ok(n) if n > 0 => {
-                    read_buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
-                    while let Some(cr_pos) = read_buffer.find('\r') {
-                        let line = read_buffer[..cr_pos].trim().to_string();
-                        read_buffer = read_buffer[cr_pos + 1..].to_string();
-                        if let SpikeMessage::Telemetry(data) = parse_message(&line) {
-                            let mut s = shared.lock().unwrap();
-                            s.ports = data.ports;
-                            s.imu = data.imu;
-                        }
+                    response.extend_from_slice(&buf[..n]);
+                    let eot_count = response.iter().filter(|&&b| b == CTRL_D).count();
+                    if eot_count >= 2 {
+                        break;
                     }
                 }
                 _ => std::thread::sleep(Duration::from_millis(50)),
             }
         }
 
+        let init_result = parse_raw_repl_response(&response);
+        if let Err(ref e) = init_result {
+            return Err(format!("SPIKE init failed: {}", e));
+        }
+
         let (tx, rx) = mpsc::channel();
         let slot = SpikeSlot {
             port: transport,
             rx,
-            shared: shared.clone(),
-            read_buffer,
+            response_buf: Vec::new(),
             alive: true,
-            task_id_gen: TaskIdGen::new(),
-            pending: Vec::new(),
+            pending: None,
         };
         let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
-        self.shared = shared;
         self.slot_id = Some(slot_id);
         Ok(())
     }
@@ -379,7 +264,7 @@ impl HardwareAdapter for SpikeAdapter {
         // Stop all motors
         if self.tx.is_some() {
             for port in OUTPUT_PORTS {
-                let _ = self.stop_port(port);
+                let _ = self.execute_void(cmd_motor_stop(port));
             }
         }
         if let Some(id) = self.slot_id.take() {
@@ -397,7 +282,6 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
-        // Accept any port letter (motors have encoder sensors) or IMU names
         if port_index(port).is_some() {
             if let Some(m) = mode {
                 let known = matches!(
@@ -411,28 +295,15 @@ impl HardwareAdapter for SpikeAdapter {
             }
             return Ok(());
         }
-        // Hub-level IMU sensors
-        if matches!(port, "tilt" | "gyro" | "accel") {
-            return Ok(());
-        }
         Err(format!("Unknown sensor port \"{}\"", port))
     }
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
-        let speed = to_signed_speed(direction, power);
-        self.send_and_wait(|tx| SpikeCommand::MotorStart {
-            port: port_to_upper(port),
-            speed,
-            reply_tx: tx,
-        })
+        self.execute_void(cmd_motor_run(port, to_velocity(direction, power)))
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
-        self.send_and_wait(|tx| SpikeCommand::MotorStop {
-            port: port_to_upper(port),
-            stop: STOP_BRAKE,
-            reply_tx: tx,
-        })
+        self.execute_void(cmd_motor_stop(port))
     }
 
     fn run_port_for_time(
@@ -442,14 +313,9 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         tenths: u32,
     ) -> Result<(), String> {
-        let speed = to_signed_speed(direction, power);
-        self.send_and_wait(|tx| SpikeCommand::MotorRunTimed {
-            port: port_to_upper(port),
-            speed,
-            time_ms: tenths * 100,
-            stop: STOP_BRAKE,
-            reply_tx: tx,
-        })
+        let ms = tenths * 100;
+        let vel = to_velocity(direction, power);
+        self.execute_void(cmd_motor_run_for_time(port, ms, vel))
     }
 
     fn rotate_port_by_degrees(
@@ -459,15 +325,8 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         degrees: i32,
     ) -> Result<(), String> {
-        self.require_tacho(port)?;
-        let speed = to_signed_speed(direction, power);
-        self.send_and_wait(|tx| SpikeCommand::MotorRunDegrees {
-            port: port_to_upper(port),
-            speed,
-            degrees: degrees.abs(),
-            stop: STOP_BRAKE,
-            reply_tx: tx,
-        })
+        let vel = to_velocity(direction, power);
+        self.execute_void(cmd_motor_run_for_degrees(port, degrees.abs(), vel))
     }
 
     fn rotate_port_to_position(
@@ -477,29 +336,23 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
-        self.require_tacho(port)?;
-        let speed = power.min(MAX_POWER) as i32;
-        let dir = match direction {
-            PortDirection::Even => "clockwise",
-            PortDirection::Odd => "counterclockwise",
+        // Read current relative position, compute delta
+        let current = self.execute(cmd_read_relative_position(port))?
+            .trim().parse::<i32>().map_err(|e| e.to_string())?;
+        let delta = crate::adapter::rotateto_delta(current, position, direction);
+        if delta == 0 {
+            return Ok(());
+        }
+        let speed = if delta > 0 {
+            (power.min(MAX_POWER) as i32) * 10
+        } else {
+            -((power.min(MAX_POWER) as i32) * 10)
         };
-        self.send_and_wait(|tx| SpikeCommand::MotorGoToPosition {
-            port: port_to_upper(port),
-            position: position % 360,
-            speed,
-            direction: dir.to_string(),
-            stop: STOP_BRAKE,
-            reply_tx: tx,
-        })
+        self.execute_void(cmd_motor_run_for_degrees(port, delta.abs(), speed))
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
-        self.require_tacho(port)?;
-        self.send_and_wait(|tx| SpikeCommand::MotorSetPosition {
-            port: port_to_upper(port),
-            offset: 0,
-            reply_tx: tx,
-        })
+        self.execute_void(cmd_motor_reset_relative_position(port, 0))
     }
 
     fn rotate_to_abs(
@@ -509,155 +362,55 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
-        self.require_absolute(port)?;
-        let data = self.read_motor_data(port)?;
-        let apos = data[2] as i32; // absolute position
-        let delta = crate::adapter::rotate_abs_delta(apos, position, direction);
-        if delta == 0 {
-            return Ok(());
-        }
-        let speed = if delta > 0 {
-            power.min(MAX_POWER) as i32
-        } else {
-            -(power.min(MAX_POWER) as i32)
+        let vel = (power.min(MAX_POWER) as i32) * 10;
+        let dir = match direction {
+            PortDirection::Even => 1, // clockwise
+            PortDirection::Odd => 2,  // counterclockwise
         };
-        self.send_and_wait(|tx| SpikeCommand::MotorRunDegrees {
-            port: port_to_upper(port),
-            speed,
-            degrees: delta.abs(),
-            stop: STOP_BRAKE,
-            reply_tx: tx,
-        })
+        self.execute_void(cmd_motor_run_to_absolute_position(port, position, vel, dir))
     }
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
-        // Hub-level IMU sensors
-        match port {
-            "tilt" => {
-                let shared = self.shared.lock().unwrap();
-                let ypr = &shared.imu.yaw_pitch_roll;
-                return Ok(Some(LogoValue::List(vec![
-                    LogoValue::Number(ypr[1]), // pitch
-                    LogoValue::Number(ypr[2]), // roll
-                ])));
-            }
-            "gyro" => {
-                let shared = self.shared.lock().unwrap();
-                let g = &shared.imu.gyro;
-                return Ok(Some(LogoValue::List(vec![
-                    LogoValue::Number(g[0]),
-                    LogoValue::Number(g[1]),
-                    LogoValue::Number(g[2]),
-                ])));
-            }
-            "accel" => {
-                let shared = self.shared.lock().unwrap();
-                let a = &shared.imu.accel;
-                return Ok(Some(LogoValue::List(vec![
-                    LogoValue::Number(a[0]),
-                    LogoValue::Number(a[1]),
-                    LogoValue::Number(a[2]),
-                ])));
-            }
-            _ => {}
-        }
-
-        let idx = port_index(port).ok_or_else(|| format!("Unknown sensor port \"{}\"", port))?;
-        let shared = self.shared.lock().unwrap();
-        let pt = &shared.ports[idx];
-
-        if pt.device_type == 0 {
-            return Err(format!("No device connected on port {}", port));
-        }
-
         let mode_name = mode.unwrap_or("raw");
-        match mode_name {
-            // Motor modes
-            "rotation" => Ok(Some(LogoValue::Number(pt.data[1]))),
-            "speed" => Ok(Some(LogoValue::Number(pt.data[0]))),
-            "absolute" => {
-                if !is_absolute_motor(pt.device_type) {
-                    return Err("This motor does not have an absolute position encoder".to_string());
-                }
-                Ok(Some(LogoValue::Number(pt.data[2])))
-            }
-            // Color sensor
-            "color" => Ok(Some(LogoValue::Number(pt.data[1]))),
-            "light" => Ok(Some(LogoValue::Number(pt.data[0]))),
-            // Distance sensor
-            "distance" => Ok(Some(LogoValue::Number(pt.data[0]))),
-            // Force sensor
-            "force" => Ok(Some(LogoValue::Number(pt.data[0]))),
-            "touched" => {
-                let pressed = pt.data[0] > 0.0;
-                Ok(Some(LogoValue::Word(if pressed { "true" } else { "false" }.to_string())))
-            }
-            // Raw: return first data value
-            "raw" => Ok(Some(LogoValue::Number(pt.data[0]))),
-            _ => Err(format!("Unsupported sensor mode \"{}\"", mode_name)),
+        let code = match mode_name {
+            "rotation" => cmd_read_relative_position(port),
+            "speed" => cmd_read_velocity(port),
+            "absolute" => cmd_read_absolute_position(port),
+            "color" => cmd_read_color(port),
+            "light" => cmd_read_reflection(port),
+            "distance" => cmd_read_distance(port),
+            "force" => cmd_read_force(port),
+            "touched" => cmd_read_force_touched(port),
+            "raw" => cmd_read_relative_position(port),
+            _ => return Err(format!("Unsupported sensor mode \"{}\"", mode_name)),
+        };
+        let stdout = self.execute(code)?;
+        if stdout.is_empty() {
+            return Ok(Some(LogoValue::Number(0.0)));
+        }
+        // "touched" / "pressed" returns True/False
+        if mode_name == "touched" {
+            let pressed = stdout.to_lowercase().contains("true");
+            return Ok(Some(LogoValue::Word(
+                if pressed { "true" } else { "false" }.to_string(),
+            )));
+        }
+        // Numeric value
+        match stdout.trim().parse::<f64>() {
+            Ok(n) => Ok(Some(LogoValue::Number(n))),
+            Err(_) => Ok(Some(LogoValue::Word(stdout))),
         }
     }
 
     // ── Batch overrides ─────────────────────────
 
-    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
-        if commands.len() == 2 {
-            let lspeed = to_signed_speed(commands[0].direction, commands[0].power);
-            let rspeed = to_signed_speed(commands[1].direction, commands[1].power);
-            return self.send_and_wait(|tx| SpikeCommand::MoveStartSpeeds {
-                lmotor: port_to_upper(commands[0].port),
-                rmotor: port_to_upper(commands[1].port),
-                lspeed,
-                rspeed,
-                reply_tx: tx,
-            });
-        }
-        for cmd in commands {
-            self.start_port(cmd.port, cmd.direction, cmd.power)?;
-        }
-        Ok(())
-    }
-
-    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
-        if ports.len() == 2 {
-            return self.send_and_wait(|tx| SpikeCommand::MoveStop {
-                lmotor: port_to_upper(ports[0]),
-                rmotor: port_to_upper(ports[1]),
-                stop: STOP_BRAKE,
-                reply_tx: tx,
-            });
-        }
-        for port in ports {
-            self.stop_port(port)?;
-        }
-        Ok(())
-    }
-
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
-        // Send all timed-run commands without blocking between them
-        let mut receivers = Vec::with_capacity(commands.len());
-        for cmd in commands {
-            let speed = to_signed_speed(cmd.direction, cmd.power);
-            let (tx, rx) = mpsc::channel();
-            self.tx
-                .as_ref()
-                .ok_or("Not connected")?
-                .send(SpikeCommand::MotorRunTimed {
-                    port: port_to_upper(cmd.port),
-                    speed,
-                    time_ms: tenths * 100,
-                    stop: STOP_BRAKE,
-                    reply_tx: tx,
-                })
-                .map_err(|_| "SPIKE slot channel closed".to_string())?;
-            receivers.push(rx);
-        }
-        // Wait for all completions
-        for rx in receivers {
-            rx.recv_timeout(Duration::from_secs(30))
-                .map_err(|_| "SPIKE command timed out".to_string())??;
-        }
-        Ok(())
+        let ms = tenths * 100;
+        let entries: Vec<(&str, i32)> = commands
+            .iter()
+            .map(|c| (c.port, to_velocity(c.direction, c.power)))
+            .collect();
+        self.execute_void(cmd_parallel_run_for_time(&entries, ms))
     }
 
     fn rotate_ports_by_degrees(
@@ -665,100 +418,30 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         degrees: i32,
     ) -> Result<(), String> {
-        let mut receivers = Vec::with_capacity(commands.len());
-        for cmd in commands {
-            self.require_tacho(cmd.port)?;
-            let speed = to_signed_speed(cmd.direction, cmd.power);
-            let (tx, rx) = mpsc::channel();
-            self.tx
-                .as_ref()
-                .ok_or("Not connected")?
-                .send(SpikeCommand::MotorRunDegrees {
-                    port: port_to_upper(cmd.port),
-                    speed,
-                    degrees: degrees.abs(),
-                    stop: STOP_BRAKE,
-                    reply_tx: tx,
-                })
-                .map_err(|_| "SPIKE slot channel closed".to_string())?;
-            receivers.push(rx);
-        }
-        for rx in receivers {
-            rx.recv_timeout(Duration::from_secs(30))
-                .map_err(|_| "SPIKE command timed out".to_string())??;
-        }
-        Ok(())
+        let entries: Vec<(&str, i32, i32)> = commands
+            .iter()
+            .map(|c| (c.port, degrees.abs(), to_velocity(c.direction, c.power)))
+            .collect();
+        self.execute_void(cmd_parallel_run_for_degrees(&entries))
     }
 
-    fn rotate_ports_to_position(
+    fn rotate_ports_to_abs(
         &mut self,
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
-        let mut receivers = Vec::with_capacity(commands.len());
-        for cmd in commands {
-            self.require_tacho(cmd.port)?;
-            let speed = cmd.power.min(MAX_POWER) as i32;
-            let dir = match cmd.direction {
-                PortDirection::Even => "clockwise",
-                PortDirection::Odd => "counterclockwise",
-            };
-            let (tx, rx) = mpsc::channel();
-            self.tx
-                .as_ref()
-                .ok_or("Not connected")?
-                .send(SpikeCommand::MotorGoToPosition {
-                    port: port_to_upper(cmd.port),
-                    position: position % 360,
-                    speed,
-                    direction: dir.to_string(),
-                    stop: STOP_BRAKE,
-                    reply_tx: tx,
-                })
-                .map_err(|_| "SPIKE slot channel closed".to_string())?;
-            receivers.push(rx);
-        }
-        for rx in receivers {
-            rx.recv_timeout(Duration::from_secs(30))
-                .map_err(|_| "SPIKE command timed out".to_string())??;
-        }
-        Ok(())
-    }
-
-    fn rotate_ports_to_abs(&mut self, commands: &[PortCommand], position: i32) -> Result<(), String> {
-        let mut receivers = Vec::with_capacity(commands.len());
-        for cmd in commands {
-            self.require_absolute(cmd.port)?;
-            let data = self.read_motor_data(cmd.port)?;
-            let apos = data[2] as i32;
-            let delta = crate::adapter::rotate_abs_delta(apos, position, cmd.direction);
-            if delta == 0 {
-                continue;
-            }
-            let speed = if delta > 0 {
-                cmd.power.min(MAX_POWER) as i32
-            } else {
-                -(cmd.power.min(MAX_POWER) as i32)
-            };
-            let (tx, rx) = mpsc::channel();
-            self.tx
-                .as_ref()
-                .ok_or("Not connected")?
-                .send(SpikeCommand::MotorRunDegrees {
-                    port: port_to_upper(cmd.port),
-                    speed,
-                    degrees: delta.abs(),
-                    stop: STOP_BRAKE,
-                    reply_tx: tx,
-                })
-                .map_err(|_| "SPIKE slot channel closed".to_string())?;
-            receivers.push(rx);
-        }
-        for rx in receivers {
-            rx.recv_timeout(Duration::from_secs(30))
-                .map_err(|_| "SPIKE command timed out".to_string())??;
-        }
-        Ok(())
+        let entries: Vec<(&str, i32, i32, u8)> = commands
+            .iter()
+            .map(|c| {
+                let vel = (c.power.min(MAX_POWER) as i32) * 10;
+                let dir = match c.direction {
+                    PortDirection::Even => 1,
+                    PortDirection::Odd => 2,
+                };
+                (c.port, position, vel, dir)
+            })
+            .collect();
+        self.execute_void(cmd_parallel_run_to_absolute(&entries))
     }
 }
 

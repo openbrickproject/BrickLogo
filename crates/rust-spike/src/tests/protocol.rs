@@ -1,156 +1,125 @@
 use super::*;
 
 #[test]
-fn test_task_id_id_gen() {
-    let mut id_gen = TaskIdGen::new();
-    assert_eq!(id_gen.next(), "0000");
-    assert_eq!(id_gen.next(), "0001");
-    assert_eq!(id_gen.next(), "0002");
+fn test_cmd_init_imports() {
+    let cmd = cmd_init_imports();
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("import motor"));
+    assert!(s.contains("from hub import port"));
+    assert_eq!(*cmd.last().unwrap(), CTRL_D);
 }
 
 #[test]
-fn test_task_id_wraps() {
-    let mut id_gen = TaskIdGen { counter: 0xFFFE };
-    assert_eq!(id_gen.next(), "fffe");
-    assert_eq!(id_gen.next(), "ffff");
-    assert_eq!(id_gen.next(), "0000");
-}
-
-#[test]
-fn test_cmd_program_modechange() {
-    let cmd = cmd_program_modechange();
-    assert!(cmd.ends_with('\r'));
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "program_modechange");
-    assert_eq!(v["p"]["mode"], "play");
-}
-
-#[test]
-fn test_cmd_motor_start() {
-    let cmd = cmd_motor_start("0001", "A", 75, true);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["i"], "0001");
-    assert_eq!(v["m"], "scratch.motor_start");
-    assert_eq!(v["p"]["port"], "A");
-    assert_eq!(v["p"]["speed"], 75);
-    assert_eq!(v["p"]["stall"], true);
+fn test_cmd_motor_run() {
+    let cmd = cmd_motor_run("a", 500);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("motor.run(port.A, 500)"));
+    assert_eq!(*cmd.last().unwrap(), CTRL_D);
 }
 
 #[test]
 fn test_cmd_motor_stop() {
-    let cmd = cmd_motor_stop("0002", "B", 1, 100);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.motor_stop");
-    assert_eq!(v["p"]["stop"], 1);
-}
-
-#[test]
-fn test_cmd_motor_run_timed() {
-    let cmd = cmd_motor_run_timed("0003", "C", 50, 2000, true, 1);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.motor_run_timed");
-    assert_eq!(v["p"]["time"], 2000);
-    assert_eq!(v["p"]["speed"], 50);
+    let cmd = cmd_motor_stop("b");
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("motor.stop(port.B)"));
 }
 
 #[test]
 fn test_cmd_motor_run_for_degrees() {
-    let cmd = cmd_motor_run_for_degrees("0004", "D", -80, 360, false, 2);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.motor_run_for_degrees");
-    assert_eq!(v["p"]["degrees"], 360);
-    assert_eq!(v["p"]["speed"], -80);
-    assert_eq!(v["p"]["stop"], 2);
+    let cmd = cmd_motor_run_for_degrees("c", 360, 750);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("runloop.run(motor.run_for_degrees(port.C, 360, 750))"));
 }
 
 #[test]
-fn test_cmd_motor_go_direction_to_position() {
-    let cmd = cmd_motor_go_direction_to_position("0005", "E", 90, 50, "clockwise", true, 1);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.motor_go_direction_to_position");
-    assert_eq!(v["p"]["position"], 90);
-    assert_eq!(v["p"]["direction"], "clockwise");
+fn test_cmd_motor_run_for_time() {
+    let cmd = cmd_motor_run_for_time("d", 2000, -500);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("motor.run_for_time(port.D, 2000, -500)"));
+    assert!(s.contains("runloop.run("));
 }
 
 #[test]
-fn test_cmd_motor_set_position() {
-    let cmd = cmd_motor_set_position("0006", "F", 0);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.motor_set_position");
-    assert_eq!(v["p"]["offset"], 0);
+fn test_cmd_motor_run_to_absolute_position() {
+    let cmd = cmd_motor_run_to_absolute_position("e", 90, 500, 1);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("motor.run_to_absolute_position(port.E, 90, 500, direction=1)"));
 }
 
 #[test]
-fn test_cmd_move_start_speeds() {
-    let cmd = cmd_move_start_speeds("0007", "A", "B", 50, -50);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.move_start_speeds");
-    assert_eq!(v["p"]["lmotor"], "A");
-    assert_eq!(v["p"]["rmotor"], "B");
-    assert_eq!(v["p"]["lspeed"], 50);
-    assert_eq!(v["p"]["rspeed"], -50);
+fn test_cmd_motor_reset_relative_position() {
+    let cmd = cmd_motor_reset_relative_position("f", 0);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("motor.reset_relative_position(port.F, 0)"));
+    // Not wrapped in runloop — non-blocking
+    assert!(!s.contains("runloop"));
 }
 
 #[test]
-fn test_cmd_move_stop() {
-    let cmd = cmd_move_stop("0008", "A", "B", 0);
-    let v: serde_json::Value = serde_json::from_str(cmd.trim_end_matches('\r')).unwrap();
-    assert_eq!(v["m"], "scratch.move_stop");
-    assert_eq!(v["p"]["stop"], 0);
+fn test_cmd_parallel_run_for_degrees() {
+    let cmd = cmd_parallel_run_for_degrees(&[("a", 360, 500), ("b", 360, -500)]);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("runloop.run("));
+    assert!(s.contains("motor.run_for_degrees(port.A, 360, 500)"));
+    assert!(s.contains("motor.run_for_degrees(port.B, 360, -500)"));
 }
 
 #[test]
-fn test_parse_task_complete() {
-    let line = r#"{"i":"0001","r":0}"#;
-    match parse_message(line) {
-        SpikeMessage::TaskComplete { task_id, result } => {
-            assert_eq!(task_id, "0001");
-            assert_eq!(result, 0);
-        }
-        other => panic!("Expected TaskComplete, got {:?}", other),
-    }
+fn test_cmd_parallel_run_for_time() {
+    let cmd = cmd_parallel_run_for_time(&[("a", 500), ("b", -500)], 2000);
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("runloop.run("));
+    assert!(s.contains("motor.run_for_time(port.A, 2000, 500)"));
+    assert!(s.contains("motor.run_for_time(port.B, 2000, -500)"));
 }
 
 #[test]
-fn test_parse_battery() {
-    let line = r#"{"m":2,"p":[7.8,95]}"#;
-    match parse_message(line) {
-        SpikeMessage::Battery { voltage, percentage } => {
-            assert!((voltage - 7.8).abs() < 0.01);
-            assert!((percentage - 95.0).abs() < 0.01);
-        }
-        other => panic!("Expected Battery, got {:?}", other),
-    }
+fn test_cmd_read_relative_position() {
+    let cmd = cmd_read_relative_position("a");
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("print(motor.relative_position(port.A))"));
 }
 
 #[test]
-fn test_parse_telemetry() {
-    // Minimal telemetry with one motor on port 0 and empty remaining ports
-    let motor_data = "[49,[10,180,45,50]]";
-    let empty = "[0,[]]";
-    let ports = format!("[{},{},{},{},{},{}]", motor_data, empty, empty, empty, empty, empty);
-    let line = format!(
-        r#"{{"m":0,"p":[{},null,null,null,null,null,[1.0,2.0,3.0],[4.0,5.0,6.0],[7.0,8.0,9.0]]}}"#,
-        ports
-    );
-    match parse_message(&line) {
-        SpikeMessage::Telemetry(data) => {
-            assert_eq!(data.ports[0].device_type, 49);
-            assert!((data.ports[0].data[0] - 10.0).abs() < 0.01); // speed
-            assert!((data.ports[0].data[1] - 180.0).abs() < 0.01); // rel pos
-            assert!((data.ports[0].data[2] - 45.0).abs() < 0.01); // abs pos
-            assert!((data.ports[0].data[3] - 50.0).abs() < 0.01); // power
-            assert_eq!(data.ports[1].device_type, 0);
-            assert!((data.imu.accel[0] - 1.0).abs() < 0.01);
-            assert!((data.imu.gyro[1] - 5.0).abs() < 0.01);
-            assert!((data.imu.yaw_pitch_roll[2] - 9.0).abs() < 0.01);
-        }
-        other => panic!("Expected Telemetry, got {:?}", other),
-    }
+fn test_cmd_read_color() {
+    let cmd = cmd_read_color("c");
+    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
+    assert!(s.contains("import color_sensor"));
+    assert!(s.contains("print(color_sensor.color(port.C))"));
 }
 
 #[test]
-fn test_parse_unknown() {
-    assert!(matches!(parse_message("garbage"), SpikeMessage::Unknown));
-    assert!(matches!(parse_message(r#"{"m":3,"p":[1]}"#), SpikeMessage::Unknown));
+fn test_parse_raw_repl_response_success() {
+    let data = b"OK42\x04\x04";
+    assert_eq!(parse_raw_repl_response(data), Ok("42".to_string()));
+}
+
+#[test]
+fn test_parse_raw_repl_response_empty_output() {
+    let data = b"OK\x04\x04";
+    assert_eq!(parse_raw_repl_response(data), Ok("".to_string()));
+}
+
+#[test]
+fn test_parse_raw_repl_response_error() {
+    let data = b"OK\x04Traceback: something went wrong\x04";
+    assert!(parse_raw_repl_response(data).is_err());
+    assert!(parse_raw_repl_response(data).unwrap_err().contains("Traceback"));
+}
+
+#[test]
+fn test_parse_raw_repl_response_multiline_output() {
+    let data = b"OK[1, 2, 3]\r\n\x04\x04";
+    assert_eq!(parse_raw_repl_response(data), Ok("[1, 2, 3]".to_string()));
+}
+
+#[test]
+fn test_port_ref_uppercase() {
+    let cmd = cmd_motor_run("a", 100);
+    let s = String::from_utf8_lossy(&cmd);
+    assert!(s.contains("port.A"));
+
+    let cmd = cmd_motor_run("F", 100);
+    let s = String::from_utf8_lossy(&cmd);
+    assert!(s.contains("port.F"));
 }
