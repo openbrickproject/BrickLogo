@@ -364,8 +364,8 @@ impl HardwareAdapter for SpikeAdapter {
     ) -> Result<(), String> {
         let vel = (power.min(MAX_POWER) as i32) * 10;
         let dir = match direction {
-            PortDirection::Even => 1, // clockwise
-            PortDirection::Odd => 2,  // counterclockwise
+            PortDirection::Even => 0, // motor.CLOCKWISE
+            PortDirection::Odd => 1,  // motor.COUNTERCLOCKWISE
         };
         self.execute_void(cmd_motor_run_to_absolute_position(port, position, vel, dir))
     }
@@ -435,8 +435,8 @@ impl HardwareAdapter for SpikeAdapter {
             .map(|c| {
                 let vel = (c.power.min(MAX_POWER) as i32) * 10;
                 let dir = match c.direction {
-                    PortDirection::Even => 1,
-                    PortDirection::Odd => 2,
+                    PortDirection::Even => 0,  // motor.CLOCKWISE
+                    PortDirection::Odd => 1,   // motor.COUNTERCLOCKWISE
                 };
                 (c.port, position, vel, dir)
             })

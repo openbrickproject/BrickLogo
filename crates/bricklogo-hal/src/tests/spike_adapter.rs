@@ -164,7 +164,7 @@ fn test_rotate_to_abs() {
     adapter.disconnect();
 
     let writes = writes.lock().unwrap();
-    assert!(writes_contain(&writes, "motor.run_to_absolute_position(port.E, 90, 500, direction=1)"));
+    assert!(writes_contain(&writes, "motor.run_to_absolute_position(port.E, 90, 500, direction=0)"));
 }
 
 #[test]
