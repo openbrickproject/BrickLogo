@@ -44,7 +44,7 @@ Scans for and connects to a LEGO device. The *type* tells BrickLogo what kind of
 | `"wedo` | LEGO Education WeDo 1.0 — USB Hub |
 | `"controllab` | LEGO DACTA Control Lab — Interface B over serial |
 | `"rcx` | LEGO Mindstorms RCX — via serial or USB IR tower |
-| `"spike` | LEGO SPIKE Prime / Robot Inventor — via USB or Bluetooth serial |
+| `"spike` | LEGO SPIKE Prime / Robot Inventor — via USB or Bluetooth Low Energy |
 | `"buildhat` | Raspberry Pi Build HAT — Powered UP / SPIKE motors and sensors |
 
 ```
@@ -1614,11 +1614,7 @@ The first `connectto "controllab` uses the first path, the second uses the secon
 
 ### SPIKE Prime
 
-The SPIKE Prime hub connects over USB serial (auto-detected) or Bluetooth SPP. USB connections require no configuration. For Bluetooth, pair the hub at the OS level and add the serial port path:
-
-```json
-{ "spike": ["/dev/cu.LEGOHub-SerialPort"] }
-```
+Connects via USB or Bluetooth Low Energy. No configuration needed. `connectto "spike` uses USB if a hub is attached, otherwise scans for a hub over BLE. The hub must be running Hub OS 3.0 or later; update it through the LEGO Education SPIKE app.
 
 ### Build HAT
 
@@ -1738,19 +1734,15 @@ Example:
 
 ### LEGO SPIKE Prime / Robot Inventor
 
-Connects via USB serial or Bluetooth SPP. Use `connectto "spike`. Supports the same LPF2 motors and sensors as the Powered UP family and Build HAT.
+Connects via USB or Bluetooth Low Energy. Use `connectto "spike`. Supports the same LPF2 motors and sensors as the Powered UP family and Build HAT.
+
+Requires Hub OS 3.0 or later. Update the hub through the LEGO Education SPIKE app.
 
 | Output Ports | Input Ports |
 | --- | --- |
 | a, b, c, d, e, f | a, b, c, d, e, f |
 
 Any port can host a motor or sensor. The hub also has a built-in IMU accessible as sensor ports `tilt`, `gyro`, and `accel`.
-
-USB connections are auto-detected. For Bluetooth, pair the hub at the OS level, then add the serial port path to `bricklogo.config.json`:
-
-```json
-{ "spike": ["/dev/cu.LEGOHub-SerialPort"] }
-```
 
 ### Raspberry Pi Build HAT
 
@@ -1843,7 +1835,7 @@ Use `"raw` on any sensor port to read the default mode as a percentage.
 
 ### SPIKE Prime / Robot Inventor
 
-Sensor modes depend on which device is attached to each port. The hub streams telemetry continuously — sensor reads return the latest cached value.
+Sensor modes depend on which device is attached to each port.
 
 | Device | Modes |
 | --- | --- |
