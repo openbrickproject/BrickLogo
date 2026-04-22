@@ -189,6 +189,14 @@ fn upload_agent(
     let source = AGENT_SOURCE.as_bytes();
     let total_crc = agent_crc32();
 
+    // Stop anything currently running in the slot so it can't race with our
+    // upload. Any response / flow notification emitted by the old program's
+    // shutdown is drained along with the reply.
+    let _ = write_frame(transport, &atlantis::program_flow_request(true, AGENT_SLOT));
+    let _ = read_until(transport, framer, Duration::from_secs(2), |m| {
+        matches!(m, Message::ProgramFlowResponse { .. })
+    });
+
     // Clear the slot first.
     write_frame(transport, &atlantis::clear_slot_request(AGENT_SLOT))?;
     let _ = read_until(transport, framer, Duration::from_secs(5), |m| {
@@ -266,15 +274,11 @@ fn start_agent_and_wait_ready(
                 last_error = Some(text.clone());
                 debug_spike(&format!("console: {}", text));
             }
-            Message::ProgramFlowNotification { stop: true } => {
-                return Err(format!(
-                    "Agent exited before ready{}",
-                    last_error
-                        .as_deref()
-                        .map(|s| format!(" — hub console: {}", s))
-                        .unwrap_or_default()
-                ));
-            }
+            // Stop notifications during bootstrap are almost always the
+            // *previous* agent dying (ClearSlot on a running program emits
+            // one). Ignore them — if the new agent truly fails to come
+            // up, the 5 s ready timeout catches it.
+            Message::ProgramFlowNotification { .. } => {}
             _ => {}
         }
         if Instant::now() >= deadline {
@@ -312,6 +316,11 @@ type ReplyTx = mpsc::Sender<Result<Value, String>>;
 
 enum SpikeCommand {
     Send { payload: Vec<u8>, id: u64, reply_tx: ReplyTx },
+    /// Write a `ProgramFlowRequest(stop, slot=0)` Atlantis frame directly
+    /// and then let the slot die. Used during `disconnect` so the hub's
+    /// running agent is cleanly terminated even if the agent is
+    /// unresponsive.
+    StopAgent { ack_tx: mpsc::Sender<()> },
 }
 
 struct SpikeSlot {
@@ -370,20 +379,37 @@ impl DeviceSlot for SpikeSlot {
 
         // Drain outgoing command queue.
         while let Ok(cmd) = self.rx.try_recv() {
-            let SpikeCommand::Send { payload, id, reply_tx } = cmd;
-            debug_spike(&format!("tx id={} payload={:?}", id, String::from_utf8_lossy(&payload)));
-            let message = atlantis::tunnel_message(&payload);
-            let framed = cobs::pack(&message);
-            match self
-                .transport
-                .write_all(&framed)
-                .and_then(|_| self.transport.flush())
-            {
-                Ok(()) => {
-                    self.pending.insert(id, reply_tx);
+            match cmd {
+                SpikeCommand::Send { payload, id, reply_tx } => {
+                    debug_spike(&format!(
+                        "tx id={} payload={:?}",
+                        id,
+                        String::from_utf8_lossy(&payload)
+                    ));
+                    let message = atlantis::tunnel_message(&payload);
+                    let framed = cobs::pack(&message);
+                    match self
+                        .transport
+                        .write_all(&framed)
+                        .and_then(|_| self.transport.flush())
+                    {
+                        Ok(()) => {
+                            self.pending.insert(id, reply_tx);
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(Err(e));
+                        }
+                    }
                 }
-                Err(e) => {
-                    let _ = reply_tx.send(Err(e));
+                SpikeCommand::StopAgent { ack_tx } => {
+                    let frame = cobs::pack(&atlantis::program_flow_request(true, AGENT_SLOT));
+                    let _ = self
+                        .transport
+                        .write_all(&frame)
+                        .and_then(|_| self.transport.flush());
+                    let _ = ack_tx.send(());
+                    self.mark_dead("disconnect requested");
+                    return;
                 }
             }
         }
@@ -574,9 +600,16 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn disconnect(&mut self) {
-        if self.connected() {
-            for port in OUTPUT_PORTS {
-                let _ = self.send_void(protocol::motor_stop(port));
+        // Ask the slot to send ProgramFlowRequest(stop) directly — this
+        // kills the agent program on the hub, which in turn halts every
+        // motor the user had running. Going through the slot channel (not
+        // the transport directly) keeps exclusive transport ownership with
+        // the scheduler thread. Short timeout: if the slot thread has
+        // already died there's nothing to wait for.
+        if let Some(tx) = self.tx.as_ref() {
+            let (ack_tx, ack_rx) = mpsc::channel();
+            if tx.send(SpikeCommand::StopAgent { ack_tx }).is_ok() {
+                let _ = ack_rx.recv_timeout(Duration::from_millis(500));
             }
         }
         self.alive.store(false, Ordering::SeqCst);
@@ -746,6 +779,17 @@ impl HardwareAdapter for SpikeAdapter {
             return Ok(());
         }
         self.send_void(protocol::parallel_run_for_degrees(&entries))
+    }
+}
+
+impl Drop for SpikeAdapter {
+    fn drop(&mut self) {
+        // Belt-and-braces cleanup: if the adapter goes out of scope without
+        // an explicit disconnect (panic, unexpected shutdown), still try to
+        // stop the agent so the hub's motors don't keep running.
+        if self.tx.is_some() {
+            self.disconnect();
+        }
     }
 }
 
