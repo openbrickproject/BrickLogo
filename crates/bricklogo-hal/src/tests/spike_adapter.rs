@@ -3,13 +3,13 @@ use crate::adapter::{PortCommand, PortDirection};
 use crate::scheduler;
 use rust_spike::atlantis;
 use rust_spike::cobs;
-use rust_spike::protocol;
+use rust_spike::protocol::{self, Event, Reply};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-/// Mock Atlantis transport. Records incoming frames and auto-replies with
-/// plausible agent responses: motor commands get `{"id":N,"ok":true}`,
-/// reads get `{"id":N,"value":0}`.
+/// Mock Atlantis transport. Records incoming tunnel payloads (already
+/// unwrapped from TunnelMessage framing) and auto-replies with plausible
+/// agent responses.
 struct MockTransport {
     state: Arc<Mutex<MockState>>,
 }
@@ -17,14 +17,14 @@ struct MockTransport {
 struct MockState {
     /// Raw bytes written by the adapter (exactly as sent to the wire).
     writes: Vec<Vec<u8>>,
-    /// Decoded JSON command payloads carried by TunnelMessage frames.
-    commands: Vec<serde_json::Value>,
+    /// Decoded tunnel command payloads (opcode + args).
+    commands: Vec<Vec<u8>>,
     /// Raw bytes queued for the adapter to read.
     outgoing: VecDeque<u8>,
     /// If set, the mock auto-generates agent replies for tunnel commands.
     auto_reply: bool,
-    /// Optional override returning a specific value for a `read` op.
-    read_override: Option<serde_json::Value>,
+    /// Optional override returning a specific reply for `read` ops.
+    read_override: Option<Reply>,
     /// Accumulates partial frames from the adapter side.
     frame_buf: Vec<u8>,
 }
@@ -46,7 +46,6 @@ impl SpikeTransport for MockTransport {
         state.writes.push(data.to_vec());
         state.frame_buf.extend_from_slice(data);
 
-        // Extract complete frames and handle each.
         loop {
             let pos = match state.frame_buf.iter().position(|&b| b == cobs::END_FRAME) {
                 Some(p) => p,
@@ -57,13 +56,12 @@ impl SpikeTransport for MockTransport {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            // Host→hub TunnelMessages use the plain wire layout
-            // `[0x32, size_u16, payload]` — matches what the LEGO firmware
-            // delivers to the MicroPython `module_tunnel` callback.
+            // Host→hub TunnelMessages: [0x32, size_u16, payload].
             if body.first() == Some(&atlantis::ID_TUNNEL_MESSAGE) && body.len() >= 3 {
                 let size = u16::from_le_bytes([body[1], body[2]]) as usize;
                 let end = (3 + size).min(body.len());
-                handle_tunnel_payload(&mut state, &body[3..end]);
+                let payload = body[3..end].to_vec();
+                handle_command(&mut state, &payload);
             }
         }
         Ok(())
@@ -73,43 +71,65 @@ impl SpikeTransport for MockTransport {
     }
 }
 
-fn handle_tunnel_payload(state: &mut MockState, payload: &[u8]) {
-    for line in payload.split(|&b: &u8| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        let cmd: serde_json::Value = match serde_json::from_slice(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        state.commands.push(cmd.clone());
-        if !state.auto_reply {
-            continue;
-        }
-        let id = cmd.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-        let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        let reply = if op == "read" {
-            state
-                .read_override
-                .clone()
-                .map(|v| serde_json::json!({"id": id, "value": v}))
-                .unwrap_or(serde_json::json!({"id": id, "value": 0}))
-        } else {
-            serde_json::json!({"id": id, "ok": true})
-        };
-        enqueue_tunnel_reply(state, &reply);
+fn handle_command(state: &mut MockState, payload: &[u8]) {
+    if payload.len() < 3 {
+        return;
     }
+    state.commands.push(payload.to_vec());
+    if !state.auto_reply {
+        return;
+    }
+    let op = payload[0];
+    let rid = u16::from_le_bytes([payload[1], payload[2]]);
+    let reply: Reply = match op {
+        protocol::OP_READ | protocol::OP_READ_HUB => state
+            .read_override
+            .clone()
+            .unwrap_or(Reply::Int(0)),
+        _ => Reply::Ok,
+    };
+    enqueue_reply(state, rid, reply);
 }
 
-/// Emit a hub→host TunnelMessage in the plain `[0x32, size_u16, payload]`
-/// layout the firmware actually uses.
-fn enqueue_tunnel_reply(state: &mut MockState, reply: &serde_json::Value) {
-    let mut line = serde_json::to_vec(reply).unwrap();
-    line.push(b'\n');
-    let mut msg = Vec::with_capacity(3 + line.len());
+fn enqueue_reply(state: &mut MockState, rid: u16, reply: Reply) {
+    let mut payload = Vec::with_capacity(32);
+    match reply {
+        Reply::Ok => {
+            payload.push(protocol::REPLY_OK);
+            payload.extend_from_slice(&rid.to_le_bytes());
+        }
+        Reply::Int(v) => {
+            payload.push(protocol::REPLY_INT);
+            payload.extend_from_slice(&rid.to_le_bytes());
+            payload.extend_from_slice(&v.to_le_bytes());
+        }
+        Reply::List(values) => {
+            payload.push(protocol::REPLY_LIST);
+            payload.extend_from_slice(&rid.to_le_bytes());
+            payload.push(values.len() as u8);
+            for v in values {
+                payload.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        Reply::Bool(b) => {
+            payload.push(protocol::REPLY_BOOL);
+            payload.extend_from_slice(&rid.to_le_bytes());
+            payload.push(if b { 1 } else { 0 });
+        }
+        Reply::Error(msg) => {
+            payload.push(protocol::REPLY_ERROR);
+            payload.extend_from_slice(&rid.to_le_bytes());
+            let bytes = msg.as_bytes();
+            let len = bytes.len().min(255);
+            payload.push(len as u8);
+            payload.extend_from_slice(&bytes[..len]);
+        }
+    }
+    // Wrap in plain TunnelMessage then COBS-frame.
+    let mut msg = Vec::with_capacity(3 + payload.len());
     msg.push(atlantis::ID_TUNNEL_MESSAGE);
-    msg.extend_from_slice(&(line.len() as u16).to_le_bytes());
-    msg.extend_from_slice(&line);
+    msg.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&payload);
     let framed = cobs::pack(&msg);
     state.outgoing.extend(framed);
 }
@@ -119,7 +139,7 @@ fn make_adapter() -> (SpikeAdapter, Arc<Mutex<MockState>>) {
 }
 
 fn make_adapter_with_override(
-    read_override: Option<serde_json::Value>,
+    read_override: Option<Reply>,
 ) -> (SpikeAdapter, Arc<Mutex<MockState>>) {
     let state = Arc::new(Mutex::new(MockState {
         writes: Vec::new(),
@@ -149,35 +169,35 @@ fn make_adapter_with_override(
     (adapter, state)
 }
 
-fn wait_for_commands(state: &Arc<Mutex<MockState>>, count: usize) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        if state.lock().unwrap().commands.len() >= count {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+// ── Helpers for inspecting binary commands ──────
+
+fn parse_rid(cmd: &[u8]) -> u16 {
+    u16::from_le_bytes([cmd[1], cmd[2]])
+}
+
+fn parse_op(cmd: &[u8]) -> u8 {
+    cmd[0]
 }
 
 #[test]
 fn test_start_port_sends_motor_run() {
     let (mut adapter, state) = make_adapter();
     adapter.start_port("a", PortDirection::Even, 50).unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "motor_run");
-    assert_eq!(cmd["port"], "a");
-    assert_eq!(cmd["velocity"], 500);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_MOTOR_RUN);
+    assert_eq!(cmd[3], 0); // port a
+    assert_eq!(i16::from_le_bytes([cmd[4], cmd[5]]), 500);
 }
 
 #[test]
 fn test_stop_port_sends_motor_stop() {
     let (mut adapter, state) = make_adapter();
     adapter.stop_port("b").unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "motor_stop");
-    assert_eq!(cmd["port"], "b");
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_MOTOR_STOP);
+    assert_eq!(cmd[3], 1); // port b
 }
 
 #[test]
@@ -185,10 +205,10 @@ fn test_direction_mapping() {
     let (mut adapter, state) = make_adapter();
     adapter.start_port("a", PortDirection::Even, 80).unwrap();
     adapter.start_port("b", PortDirection::Odd, 60).unwrap();
+    let cmds = state.lock().unwrap().commands.clone();
     adapter.disconnect();
-    let cmds = &state.lock().unwrap().commands;
-    assert_eq!(cmds[0]["velocity"], 800);
-    assert_eq!(cmds[1]["velocity"], -600);
+    assert_eq!(i16::from_le_bytes([cmds[0][4], cmds[0][5]]), 800);
+    assert_eq!(i16::from_le_bytes([cmds[1][4], cmds[1][5]]), -600);
 }
 
 #[test]
@@ -197,12 +217,12 @@ fn test_rotate_sends_run_for_degrees() {
     adapter
         .rotate_port_by_degrees("c", PortDirection::Even, 50, 360)
         .unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "motor_run_for_degrees");
-    assert_eq!(cmd["port"], "c");
-    assert_eq!(cmd["degrees"], 360);
-    assert_eq!(cmd["velocity"], 500);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_MOTOR_RUN_FOR_DEGREES);
+    assert_eq!(cmd[3], 2); // port c
+    assert_eq!(i32::from_le_bytes([cmd[4], cmd[5], cmd[6], cmd[7]]), 360);
+    assert_eq!(i16::from_le_bytes([cmd[8], cmd[9]]), 500);
 }
 
 #[test]
@@ -213,15 +233,16 @@ fn test_parallel_rotate_uses_parallel_op() {
         PortCommand { port: "b", direction: PortDirection::Odd, power: 50 },
     ];
     adapter.rotate_ports_by_degrees(&commands, 360).unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "parallel_run_for_degrees");
-    let entries = cmd["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["port"], "a");
-    assert_eq!(entries[0]["velocity"], 500);
-    assert_eq!(entries[1]["port"], "b");
-    assert_eq!(entries[1]["velocity"], -500);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PARALLEL_RUN_FOR_DEGREES);
+    assert_eq!(cmd[3], 2); // count
+    assert_eq!(cmd[4], 0); // port a
+    assert_eq!(i32::from_le_bytes([cmd[5], cmd[6], cmd[7], cmd[8]]), 360);
+    assert_eq!(i16::from_le_bytes([cmd[9], cmd[10]]), 500);
+    assert_eq!(cmd[11], 1); // port b
+    assert_eq!(i32::from_le_bytes([cmd[12], cmd[13], cmd[14], cmd[15]]), 360);
+    assert_eq!(i16::from_le_bytes([cmd[16], cmd[17]]), -500);
 }
 
 #[test]
@@ -232,52 +253,53 @@ fn test_parallel_onfor_uses_parallel_op() {
         PortCommand { port: "b", direction: PortDirection::Even, power: 75 },
     ];
     adapter.run_ports_for_time(&commands, 10).unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "parallel_run_for_time");
-    assert_eq!(cmd["ms"], 1000);
-    let entries = cmd["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["velocity"], 750);
-    assert_eq!(entries[1]["velocity"], 750);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PARALLEL_RUN_FOR_TIME);
+    assert_eq!(u32::from_le_bytes([cmd[3], cmd[4], cmd[5], cmd[6]]), 1000);
+    assert_eq!(cmd[7], 2); // count
+    assert_eq!(cmd[8], 0); // port a
+    assert_eq!(i16::from_le_bytes([cmd[9], cmd[10]]), 750);
+    assert_eq!(cmd[11], 1); // port b
+    assert_eq!(i16::from_le_bytes([cmd[12], cmd[13]]), 750);
 }
 
 #[test]
 fn test_reset_zero() {
     let (mut adapter, state) = make_adapter();
     adapter.reset_port_zero("d").unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "motor_reset");
-    assert_eq!(cmd["port"], "d");
-    assert_eq!(cmd["offset"], 0);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_MOTOR_RESET);
+    assert_eq!(cmd[3], 3); // port d
+    assert_eq!(i32::from_le_bytes([cmd[4], cmd[5], cmd[6], cmd[7]]), 0);
 }
 
 #[test]
 fn test_rotate_to_abs() {
     let (mut adapter, state) = make_adapter();
     adapter.rotate_to_abs("e", PortDirection::Even, 50, 90).unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["op"], "motor_run_to_abs");
-    assert_eq!(cmd["port"], "e");
-    assert_eq!(cmd["position"], 90);
-    assert_eq!(cmd["velocity"], 500);
-    assert_eq!(cmd["direction"], 0);
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_MOTOR_RUN_TO_ABS);
+    assert_eq!(cmd[3], 4); // port e
+    assert_eq!(i32::from_le_bytes([cmd[4], cmd[5], cmd[6], cmd[7]]), 90);
+    assert_eq!(i16::from_le_bytes([cmd[8], cmd[9]]), 500);
+    assert_eq!(cmd[10], 0); // CW
 }
 
 #[test]
 fn test_rotate_to_abs_counterclockwise() {
     let (mut adapter, state) = make_adapter();
     adapter.rotate_to_abs("f", PortDirection::Odd, 50, 90).unwrap();
-    adapter.disconnect();
     let cmd = state.lock().unwrap().commands[0].clone();
-    assert_eq!(cmd["direction"], 1);
+    adapter.disconnect();
+    assert_eq!(cmd[10], 1); // CCW
 }
 
 #[test]
 fn test_read_sensor_returns_value() {
-    let (mut adapter, _state) = make_adapter_with_override(Some(serde_json::json!(42)));
+    let (mut adapter, _state) = make_adapter_with_override(Some(Reply::Int(42)));
     let result = adapter.read_sensor("a", Some("rotation")).unwrap();
     adapter.disconnect();
     assert_eq!(result, Some(LogoValue::Number(42.0)));
@@ -286,7 +308,7 @@ fn test_read_sensor_returns_value() {
 #[test]
 fn test_read_sensor_list_value() {
     let (mut adapter, _state) =
-        make_adapter_with_override(Some(serde_json::json!([10, 20, 30])));
+        make_adapter_with_override(Some(Reply::List(vec![10, 20, 30])));
     let result = adapter.read_sensor("a", Some("rotation")).unwrap();
     adapter.disconnect();
     assert_eq!(
@@ -313,49 +335,45 @@ fn test_validate_ports() {
 fn test_writes_are_framed() {
     let (mut adapter, state) = make_adapter();
     adapter.start_port("a", PortDirection::Even, 50).unwrap();
-    wait_for_commands(&state, 1);
     adapter.disconnect();
     let writes = &state.lock().unwrap().writes;
-    // Every write must end with the Atlantis delimiter.
     for w in writes {
         assert_eq!(*w.last().unwrap(), cobs::END_FRAME);
     }
 }
 
 #[test]
-fn test_command_ids_are_unique() {
+fn test_command_rids_are_unique() {
     let (mut adapter, state) = make_adapter();
     adapter.start_port("a", PortDirection::Even, 10).unwrap();
     adapter.start_port("b", PortDirection::Even, 20).unwrap();
     adapter.start_port("c", PortDirection::Even, 30).unwrap();
-    let cmds_snapshot = state.lock().unwrap().commands.clone();
+    let cmds = state.lock().unwrap().commands.clone();
     adapter.disconnect();
-    let mut ids: Vec<u64> = cmds_snapshot
-        .iter()
-        .map(|c| c["id"].as_u64().unwrap())
-        .collect();
-    let total = ids.len();
-    ids.sort();
-    ids.dedup();
-    assert_eq!(ids.len(), total);
-    assert_eq!(ids.len(), 3);
+    let mut rids: Vec<u16> = cmds.iter().map(|c| parse_rid(c)).collect();
+    let total = rids.len();
+    rids.sort();
+    rids.dedup();
+    assert_eq!(rids.len(), total);
+    assert_eq!(rids.len(), 3);
 }
 
 #[test]
-fn test_json_to_logo_bool() {
+fn test_reply_to_logo_bool() {
     assert_eq!(
-        json_to_logo(&serde_json::json!(true)),
+        reply_to_logo(Reply::Bool(true)),
         LogoValue::Word("true".to_string())
     );
     assert_eq!(
-        json_to_logo(&serde_json::json!(false)),
+        reply_to_logo(Reply::Bool(false)),
         LogoValue::Word("false".to_string())
     );
 }
 
-// Silence unused-function warnings when only some helpers are exercised above.
-#[allow(dead_code)]
-fn _touch_helpers() {
-    let _ = wait_for_commands;
-    let _ = protocol::ping;
+#[test]
+fn test_ping_event_roundtrip() {
+    // Sanity-check that Event::Heartbeat parses cleanly — the slot uses this
+    // path for watchdog updates.
+    let bytes = vec![protocol::REPLY_HEARTBEAT];
+    assert_eq!(protocol::parse_event(&bytes).unwrap(), Event::Heartbeat);
 }

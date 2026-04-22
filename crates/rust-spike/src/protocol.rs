@@ -1,130 +1,340 @@
-//! JSON command builders for the BrickLogo SPIKE Prime agent protocol.
+//! Binary command/reply protocol carried inside Atlantis `TunnelMessage`
+//! payloads. One tunnel message = one command; one tunnel message = one
+//! reply. All multi-byte fields are little-endian.
 //!
-//! Each command is a single JSON object, one newline-delimited line per
-//! `TunnelMessage` payload. The agent replies with another JSON object keyed
-//! by the same `id`.
+//! ## Requests (host → agent)
+//!
+//! | op | name                     | payload                                                        |
+//! |----|--------------------------|----------------------------------------------------------------|
+//! | 01 | motor_run                | rid u16, port u8, velocity i16                                 |
+//! | 02 | motor_stop               | rid u16, port u8                                               |
+//! | 03 | motor_reset              | rid u16, port u8, offset i32                                   |
+//! | 04 | motor_run_for_time       | rid u16, port u8, ms u32, velocity i16                         |
+//! | 05 | motor_run_for_degrees    | rid u16, port u8, degrees i32, velocity i16                    |
+//! | 06 | motor_run_to_abs         | rid u16, port u8, position i32, velocity i16, direction u8     |
+//! | 07 | parallel_run_for_time    | rid u16, ms u32, count u8, (port u8, velocity i16) × count     |
+//! | 08 | parallel_run_for_degrees | rid u16, count u8, (port u8, degrees i32, velocity i16) × count|
+//! | 09 | parallel_run_to_abs      | rid u16, count u8, (port u8, pos i32, vel i16, dir u8) × count |
+//! | 0A | read                     | rid u16, port u8, mode u8                                      |
+//! | 0B | read_hub                 | rid u16, mode u8                                               |
+//! | 0C | ping                     | rid u16                                                        |
+//!
+//! ## Replies (agent → host)
+//!
+//! | kind | name      | payload                              |
+//! |------|-----------|--------------------------------------|
+//! | 00   | ok        | rid u16                              |
+//! | 01   | int       | rid u16, value i32                   |
+//! | 02   | list      | rid u16, count u8, i32 × count       |
+//! | 03   | bool      | rid u16, value u8                    |
+//! | 04   | error     | rid u16, len u8, utf8_bytes × len    |
+//! | 10   | ready     | (no payload)                         |
+//! | 11   | heartbeat | (no payload)                         |
 
-use serde_json::{json, Value};
+// ── Opcodes ─────────────────────────────────────
 
-/// Assign an id and return a byte payload (JSON + trailing newline) ready to
-/// hand to the slot. The slot wraps the bytes in a `TunnelMessage` and
-/// correlates the reply id back to the caller.
-pub fn encode_command(id: u64, body: Value) -> Vec<u8> {
-    let mut obj = body;
-    if let Value::Object(ref mut map) = obj {
-        map.insert("id".to_string(), Value::from(id));
+pub const OP_MOTOR_RUN: u8 = 0x01;
+pub const OP_MOTOR_STOP: u8 = 0x02;
+pub const OP_MOTOR_RESET: u8 = 0x03;
+pub const OP_MOTOR_RUN_FOR_TIME: u8 = 0x04;
+pub const OP_MOTOR_RUN_FOR_DEGREES: u8 = 0x05;
+pub const OP_MOTOR_RUN_TO_ABS: u8 = 0x06;
+pub const OP_PARALLEL_RUN_FOR_TIME: u8 = 0x07;
+pub const OP_PARALLEL_RUN_FOR_DEGREES: u8 = 0x08;
+pub const OP_PARALLEL_RUN_TO_ABS: u8 = 0x09;
+pub const OP_READ: u8 = 0x0A;
+pub const OP_READ_HUB: u8 = 0x0B;
+pub const OP_PING: u8 = 0x0C;
+
+// ── Reply kinds ─────────────────────────────────
+
+pub const REPLY_OK: u8 = 0x00;
+pub const REPLY_INT: u8 = 0x01;
+pub const REPLY_LIST: u8 = 0x02;
+pub const REPLY_BOOL: u8 = 0x03;
+pub const REPLY_ERROR: u8 = 0x04;
+pub const REPLY_READY: u8 = 0x10;
+pub const REPLY_HEARTBEAT: u8 = 0x11;
+
+// ── Sensor modes ────────────────────────────────
+
+pub const MODE_ROTATION: u8 = 0x00;
+pub const MODE_ABSOLUTE: u8 = 0x01;
+pub const MODE_SPEED: u8 = 0x02;
+pub const MODE_COLOR: u8 = 0x03;
+pub const MODE_LIGHT: u8 = 0x04;
+pub const MODE_DISTANCE: u8 = 0x05;
+pub const MODE_FORCE: u8 = 0x06;
+pub const MODE_TOUCHED: u8 = 0x07;
+pub const MODE_TILT: u8 = 0x08;
+pub const MODE_GYRO: u8 = 0x09;
+pub const MODE_ACCEL: u8 = 0x0A;
+
+// ── Encoding helpers ────────────────────────────
+
+pub fn port_index(letter: &str) -> Result<u8, String> {
+    match letter.to_lowercase().as_str() {
+        "a" => Ok(0),
+        "b" => Ok(1),
+        "c" => Ok(2),
+        "d" => Ok(3),
+        "e" => Ok(4),
+        "f" => Ok(5),
+        _ => Err(format!("Unknown port \"{}\"", letter)),
     }
-    let mut bytes = serde_json::to_vec(&obj).expect("json serialization");
-    bytes.push(b'\n');
-    bytes
 }
 
-// ── Motor commands ──────────────────────────────
-
-pub fn motor_run(port: &str, velocity: i32) -> Value {
-    json!({"op": "motor_run", "port": port, "velocity": velocity})
-}
-
-pub fn motor_stop(port: &str) -> Value {
-    json!({"op": "motor_stop", "port": port})
-}
-
-pub fn motor_reset(port: &str, offset: i32) -> Value {
-    json!({"op": "motor_reset", "port": port, "offset": offset})
-}
-
-pub fn motor_run_for_time(port: &str, ms: u32, velocity: i32) -> Value {
-    json!({"op": "motor_run_for_time", "port": port, "ms": ms, "velocity": velocity})
-}
-
-pub fn motor_run_for_degrees(port: &str, degrees: i32, velocity: i32) -> Value {
-    json!({"op": "motor_run_for_degrees", "port": port, "degrees": degrees, "velocity": velocity})
-}
-
-pub fn motor_run_to_abs(port: &str, position: i32, velocity: i32, direction: u8) -> Value {
-    json!({
-        "op": "motor_run_to_abs",
-        "port": port,
-        "position": position,
-        "velocity": velocity,
-        "direction": direction,
-    })
-}
-
-// ── Parallel motor commands ─────────────────────
-
-pub fn parallel_run_for_time(entries: &[(&str, i32)], ms: u32) -> Value {
-    let arr: Vec<Value> = entries
-        .iter()
-        .map(|(p, v)| json!({"port": p, "velocity": v}))
-        .collect();
-    json!({"op": "parallel_run_for_time", "ms": ms, "entries": arr})
-}
-
-pub fn parallel_run_for_degrees(entries: &[(&str, i32, i32)]) -> Value {
-    let arr: Vec<Value> = entries
-        .iter()
-        .map(|(p, d, v)| json!({"port": p, "degrees": d, "velocity": v}))
-        .collect();
-    json!({"op": "parallel_run_for_degrees", "entries": arr})
-}
-
-pub fn parallel_run_to_abs(entries: &[(&str, i32, i32, u8)]) -> Value {
-    let arr: Vec<Value> = entries
-        .iter()
-        .map(|(p, pos, v, dir)| {
-            json!({"port": p, "position": pos, "velocity": v, "direction": dir})
-        })
-        .collect();
-    json!({"op": "parallel_run_to_abs", "entries": arr})
-}
-
-// ── Sensor read commands ────────────────────────
-
-pub fn read_sensor(port: &str, mode: &str) -> Value {
-    json!({"op": "read", "port": port, "mode": mode})
-}
-
-pub fn read_hub(mode: &str) -> Value {
-    json!({"op": "read", "mode": mode})
-}
-
-// ── Misc ────────────────────────────────────────
-
-pub fn ping() -> Value {
-    json!({"op": "ping"})
-}
-
-/// Parse an agent response payload. Returns `Ok(value)` for success or
-/// `Err(msg)` for an error reply. Read commands return the `value` field;
-/// write commands return `Value::Null`.
-pub fn parse_reply(bytes: &[u8]) -> Result<Value, String> {
-    let v: Value = serde_json::from_slice(bytes)
-        .map_err(|e| format!("agent reply not JSON: {}", e))?;
-    if let Some(err) = v.get("error") {
-        return Err(err.as_str().unwrap_or("unknown error").to_string());
+pub fn sensor_mode(name: &str) -> Result<u8, String> {
+    match name {
+        "rotation" | "raw" => Ok(MODE_ROTATION),
+        "absolute" => Ok(MODE_ABSOLUTE),
+        "speed" => Ok(MODE_SPEED),
+        "color" => Ok(MODE_COLOR),
+        "light" => Ok(MODE_LIGHT),
+        "distance" => Ok(MODE_DISTANCE),
+        "force" => Ok(MODE_FORCE),
+        "touched" => Ok(MODE_TOUCHED),
+        "tilt" => Ok(MODE_TILT),
+        "gyro" => Ok(MODE_GYRO),
+        "accel" => Ok(MODE_ACCEL),
+        _ => Err(format!("Unsupported sensor mode \"{}\"", name)),
     }
-    if let Some(val) = v.get("value") {
-        return Ok(val.clone());
+}
+
+fn header(op: u8, rid: u16, cap: usize) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(cap);
+    buf.push(op);
+    buf.extend_from_slice(&rid.to_le_bytes());
+    buf
+}
+
+pub fn motor_run(rid: u16, port: &str, velocity: i16) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_RUN, rid, 6);
+    buf.push(p);
+    buf.extend_from_slice(&velocity.to_le_bytes());
+    Ok(buf)
+}
+
+pub fn motor_stop(rid: u16, port: &str) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_STOP, rid, 4);
+    buf.push(p);
+    Ok(buf)
+}
+
+pub fn motor_reset(rid: u16, port: &str, offset: i32) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_RESET, rid, 8);
+    buf.push(p);
+    buf.extend_from_slice(&offset.to_le_bytes());
+    Ok(buf)
+}
+
+pub fn motor_run_for_time(
+    rid: u16,
+    port: &str,
+    ms: u32,
+    velocity: i16,
+) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_RUN_FOR_TIME, rid, 10);
+    buf.push(p);
+    buf.extend_from_slice(&ms.to_le_bytes());
+    buf.extend_from_slice(&velocity.to_le_bytes());
+    Ok(buf)
+}
+
+pub fn motor_run_for_degrees(
+    rid: u16,
+    port: &str,
+    degrees: i32,
+    velocity: i16,
+) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_RUN_FOR_DEGREES, rid, 10);
+    buf.push(p);
+    buf.extend_from_slice(&degrees.to_le_bytes());
+    buf.extend_from_slice(&velocity.to_le_bytes());
+    Ok(buf)
+}
+
+pub fn motor_run_to_abs(
+    rid: u16,
+    port: &str,
+    position: i32,
+    velocity: i16,
+    direction: u8,
+) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_MOTOR_RUN_TO_ABS, rid, 11);
+    buf.push(p);
+    buf.extend_from_slice(&position.to_le_bytes());
+    buf.extend_from_slice(&velocity.to_le_bytes());
+    buf.push(direction);
+    Ok(buf)
+}
+
+pub fn parallel_run_for_time(
+    rid: u16,
+    ms: u32,
+    entries: &[(&str, i16)],
+) -> Result<Vec<u8>, String> {
+    if entries.len() > u8::MAX as usize {
+        return Err("too many parallel entries".into());
     }
-    Ok(Value::Null)
+    let mut buf = header(OP_PARALLEL_RUN_FOR_TIME, rid, 8 + entries.len() * 3);
+    buf.extend_from_slice(&ms.to_le_bytes());
+    buf.push(entries.len() as u8);
+    for (p, v) in entries {
+        buf.push(port_index(p)?);
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    Ok(buf)
 }
 
-/// Return the `id` field of a reply, if any. `None` on startup messages
-/// like `{"op": "ready"}`.
-pub fn reply_id(bytes: &[u8]) -> Option<u64> {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()?
-        .get("id")
-        .and_then(|v| v.as_u64())
+pub fn parallel_run_for_degrees(
+    rid: u16,
+    entries: &[(&str, i32, i16)],
+) -> Result<Vec<u8>, String> {
+    if entries.len() > u8::MAX as usize {
+        return Err("too many parallel entries".into());
+    }
+    let mut buf = header(OP_PARALLEL_RUN_FOR_DEGREES, rid, 4 + entries.len() * 7);
+    buf.push(entries.len() as u8);
+    for (p, deg, vel) in entries {
+        buf.push(port_index(p)?);
+        buf.extend_from_slice(&deg.to_le_bytes());
+        buf.extend_from_slice(&vel.to_le_bytes());
+    }
+    Ok(buf)
 }
 
-/// Return `true` if this is the agent's startup ready signal.
-pub fn is_ready(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        == Some("ready".to_string())
+pub fn parallel_run_to_abs(
+    rid: u16,
+    entries: &[(&str, i32, i16, u8)],
+) -> Result<Vec<u8>, String> {
+    if entries.len() > u8::MAX as usize {
+        return Err("too many parallel entries".into());
+    }
+    let mut buf = header(OP_PARALLEL_RUN_TO_ABS, rid, 4 + entries.len() * 8);
+    buf.push(entries.len() as u8);
+    for (p, pos, vel, dir) in entries {
+        buf.push(port_index(p)?);
+        buf.extend_from_slice(&pos.to_le_bytes());
+        buf.extend_from_slice(&vel.to_le_bytes());
+        buf.push(*dir);
+    }
+    Ok(buf)
+}
+
+pub fn read_sensor(rid: u16, port: &str, mode: &str) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let m = sensor_mode(mode)?;
+    let mut buf = header(OP_READ, rid, 5);
+    buf.push(p);
+    buf.push(m);
+    Ok(buf)
+}
+
+pub fn read_hub(rid: u16, mode: &str) -> Result<Vec<u8>, String> {
+    let m = sensor_mode(mode)?;
+    let mut buf = header(OP_READ_HUB, rid, 4);
+    buf.push(m);
+    Ok(buf)
+}
+
+pub fn ping(rid: u16) -> Vec<u8> {
+    header(OP_PING, rid, 3)
+}
+
+// ── Reply parsing ───────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reply {
+    Ok,
+    Int(i32),
+    List(Vec<i32>),
+    Bool(bool),
+    Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    /// Request reply, keyed by `rid`.
+    Reply { rid: u16, reply: Reply },
+    /// Agent startup signal. No rid.
+    Ready,
+    /// Agent heartbeat. No rid.
+    Heartbeat,
+}
+
+/// Parse one tunnel message payload as an `Event`. Returns `Err` on malformed
+/// data so the caller can log / drop the frame.
+pub fn parse_event(data: &[u8]) -> Result<Event, String> {
+    if data.is_empty() {
+        return Err("empty reply".into());
+    }
+    match data[0] {
+        REPLY_READY => Ok(Event::Ready),
+        REPLY_HEARTBEAT => Ok(Event::Heartbeat),
+        kind => {
+            if data.len() < 3 {
+                return Err(format!("reply too short for kind {:#x}", kind));
+            }
+            let rid = u16::from_le_bytes([data[1], data[2]]);
+            let reply = parse_reply_body(kind, &data[3..])?;
+            Ok(Event::Reply { rid, reply })
+        }
+    }
+}
+
+fn parse_reply_body(kind: u8, body: &[u8]) -> Result<Reply, String> {
+    match kind {
+        REPLY_OK => Ok(Reply::Ok),
+        REPLY_INT => {
+            if body.len() < 4 {
+                return Err("int reply too short".into());
+            }
+            let v = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+            Ok(Reply::Int(v))
+        }
+        REPLY_LIST => {
+            if body.is_empty() {
+                return Err("list reply missing count".into());
+            }
+            let count = body[0] as usize;
+            if body.len() < 1 + count * 4 {
+                return Err("list reply truncated".into());
+            }
+            let mut values = Vec::with_capacity(count);
+            for i in 0..count {
+                let off = 1 + i * 4;
+                values.push(i32::from_le_bytes([
+                    body[off], body[off + 1], body[off + 2], body[off + 3],
+                ]));
+            }
+            Ok(Reply::List(values))
+        }
+        REPLY_BOOL => {
+            if body.is_empty() {
+                return Err("bool reply too short".into());
+            }
+            Ok(Reply::Bool(body[0] != 0))
+        }
+        REPLY_ERROR => {
+            if body.is_empty() {
+                return Err("error reply missing len".into());
+            }
+            let len = body[0] as usize;
+            if body.len() < 1 + len {
+                return Err("error reply truncated".into());
+            }
+            let msg = String::from_utf8_lossy(&body[1..1 + len]).into_owned();
+            Ok(Reply::Error(msg))
+        }
+        _ => Err(format!("unknown reply kind {:#x}", kind)),
+    }
 }
 
 #[cfg(test)]

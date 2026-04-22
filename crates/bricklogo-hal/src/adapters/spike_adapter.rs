@@ -6,9 +6,9 @@
 //! on USB.
 //!
 //! BrickLogo uploads a small MicroPython "agent" program once and leaves it
-//! running. All motor and sensor commands after that are newline-delimited
-//! JSON carried in Atlantis `TunnelMessage` payloads. One code path serves
-//! both transports.
+//! running. All motor and sensor commands after that are binary opcodes
+//! carried in Atlantis `TunnelMessage` payloads. One code path serves both
+//! transports.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -18,15 +18,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use bricklogo_lang::value::LogoValue;
-use serde_json::Value;
 
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::scheduler::{self, DeviceSlot};
 use rust_spike::agent::{AGENT_SOURCE, agent_crc32};
 use rust_spike::atlantis::{self, Message, RunningCrc};
 use rust_spike::cobs;
-use rust_spike::constants::port_index;
-use rust_spike::protocol;
+use rust_spike::constants::port_index as port_index_validate;
+use rust_spike::protocol::{self, Event, Reply};
 
 use super::spike_ble_transport::SpikeBleTransport;
 
@@ -109,8 +108,8 @@ impl FrameReader {
 
 // ── Helpers ─────────────────────────────────────
 
-fn to_velocity(direction: PortDirection, power: u8) -> i32 {
-    let vel = power.min(MAX_POWER) as i32 * 10;
+fn to_velocity_i16(direction: PortDirection, power: u8) -> i16 {
+    let vel = (power.min(MAX_POWER) as i16) * 10;
     match direction {
         PortDirection::Even => vel,
         PortDirection::Odd => -vel,
@@ -264,10 +263,8 @@ fn start_agent_and_wait_ready(
         debug_spike(&format!("start: {:?}", msg));
         match msg {
             Message::Tunnel { payload } => {
-                for line in split_lines(&payload) {
-                    if protocol::is_ready(&line) {
-                        return Ok(());
-                    }
+                if matches!(protocol::parse_event(&payload), Ok(Event::Ready)) {
+                    return Ok(());
                 }
             }
             Message::ConsoleNotification { text } => {
@@ -301,21 +298,13 @@ fn debug_spike(msg: &str) {
     }
 }
 
-/// Split an accumulated TunnelMessage payload on `\n`, dropping empty lines.
-fn split_lines(data: &[u8]) -> Vec<Vec<u8>> {
-    data.split(|&b| b == b'\n')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_vec())
-        .collect()
-}
-
 
 // ── Slot commands / slot ────────────────────────
 
-type ReplyTx = mpsc::Sender<Result<Value, String>>;
+type ReplyTx = mpsc::Sender<Result<Reply, String>>;
 
 enum SpikeCommand {
-    Send { payload: Vec<u8>, id: u64, reply_tx: ReplyTx },
+    Send { payload: Vec<u8>, rid: u16, reply_tx: ReplyTx },
     /// Write a `ProgramFlowRequest(stop, slot=0)` Atlantis frame directly
     /// and then let the slot die. Used during `disconnect` so the hub's
     /// running agent is cleanly terminated even if the agent is
@@ -327,7 +316,7 @@ struct SpikeSlot {
     transport: Box<dyn SpikeTransport>,
     rx: mpsc::Receiver<SpikeCommand>,
     framer: FrameReader,
-    pending: HashMap<u64, ReplyTx>,
+    pending: HashMap<u16, ReplyTx>,
     alive: bool,
     /// Shared with the adapter so `connected()` reflects slot death.
     alive_flag: Arc<AtomicBool>,
@@ -380,12 +369,8 @@ impl DeviceSlot for SpikeSlot {
         // Drain outgoing command queue.
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
-                SpikeCommand::Send { payload, id, reply_tx } => {
-                    debug_spike(&format!(
-                        "tx id={} payload={:?}",
-                        id,
-                        String::from_utf8_lossy(&payload)
-                    ));
+                SpikeCommand::Send { payload, rid, reply_tx } => {
+                    debug_spike(&format!("tx rid={} payload={:?}", rid, payload));
                     let message = atlantis::tunnel_message(&payload);
                     let framed = cobs::pack(&message);
                     match self
@@ -394,7 +379,7 @@ impl DeviceSlot for SpikeSlot {
                         .and_then(|_| self.transport.flush())
                     {
                         Ok(()) => {
-                            self.pending.insert(id, reply_tx);
+                            self.pending.insert(rid, reply_tx);
                         }
                         Err(e) => {
                             let _ = reply_tx.send(Err(e));
@@ -422,25 +407,28 @@ impl DeviceSlot for SpikeSlot {
 
 impl SpikeSlot {
     fn route_tunnel_payload(&mut self, data: &[u8]) {
-        // The agent writes newline-delimited JSON; the hub may deliver one
-        // or several lines in a single TunnelMessage.
-        for line in data.split(|&b| b == b'\n') {
-            if line.is_empty() {
-                continue;
+        // Each tunnel message from the agent is one binary event.
+        let event = match protocol::parse_event(data) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        match event {
+            Event::Reply { rid, reply } => {
+                if let Some(tx) = self.pending.remove(&rid) {
+                    let result: Result<Reply, String> = match reply {
+                        Reply::Error(msg) => Err(msg),
+                        other => Ok(other),
+                    };
+                    let _ = tx.send(result);
+                }
             }
-            let Some(id) = protocol::reply_id(line) else {
-                continue; // startup "ready" / unsolicited
-            };
-            if let Some(tx) = self.pending.remove(&id) {
-                let result: Result<Value, String> = protocol::parse_reply(line);
-                let _ = tx.send(result);
-            }
+            Event::Ready | Event::Heartbeat => {}
         }
     }
 
     fn fail_pending(&mut self, reason: &str) {
         for (_, tx) in self.pending.drain() {
-            let result: Result<Value, String> = Err(reason.to_string());
+            let result: Result<Reply, String> = Err(reason.to_string());
             let _ = tx.send(result);
         }
     }
@@ -499,7 +487,7 @@ fn find_ble_transport() -> Result<Option<Box<dyn SpikeTransport>>, String> {
 pub struct SpikeAdapter {
     tx: Option<mpsc::Sender<SpikeCommand>>,
     slot_id: Option<usize>,
-    next_id: u64,
+    next_rid: u16,
     display_name: String,
     identifier: Option<String>,
     /// Set to `false` by the slot when the agent heartbeat is lost or the
@@ -513,31 +501,69 @@ impl SpikeAdapter {
         SpikeAdapter {
             tx: None,
             slot_id: None,
-            next_id: 1,
+            next_rid: 1,
             display_name: "LEGO SPIKE Prime".to_string(),
             identifier: identifier.map(|s| s.to_string()),
             alive: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn send_and_wait(&mut self, body: Value) -> Result<Value, String> {
+    /// Allocate the next request id and return `(rid, reply_rx)`. The caller
+    /// builds the opcode payload with `rid` baked in, then forwards it to
+    /// the slot via the tx channel.
+    fn begin_request(&mut self) -> Result<(u16, mpsc::Receiver<Result<Reply, String>>, mpsc::Sender<Result<Reply, String>>), String> {
         if !self.alive.load(Ordering::SeqCst) {
             return Err("Hub disconnected (agent heartbeat lost)".to_string());
         }
-        let tx = self.tx.as_ref().ok_or("Not connected")?;
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        let payload = protocol::encode_command(id, body);
+        if self.tx.is_none() {
+            return Err("Not connected".to_string());
+        }
+        let rid = self.next_rid;
+        // rid 0 is reserved for "uninitialised" callers; skip it on wrap.
+        self.next_rid = self.next_rid.wrapping_add(1);
+        if self.next_rid == 0 {
+            self.next_rid = 1;
+        }
         let (reply_tx, reply_rx) = mpsc::channel();
-        tx.send(SpikeCommand::Send { payload, id, reply_tx })
+        Ok((rid, reply_rx, reply_tx))
+    }
+
+    fn dispatch(
+        &self,
+        payload: Vec<u8>,
+        rid: u16,
+        reply_tx: mpsc::Sender<Result<Reply, String>>,
+        reply_rx: mpsc::Receiver<Result<Reply, String>>,
+    ) -> Result<Reply, String> {
+        let tx = self.tx.as_ref().ok_or("Not connected")?;
+        tx.send(SpikeCommand::Send { payload, rid, reply_tx })
             .map_err(|_| "SPIKE slot channel closed".to_string())?;
         reply_rx
             .recv_timeout(COMMAND_TIMEOUT)
             .map_err(|_| "SPIKE command timed out".to_string())?
     }
 
-    fn send_void(&mut self, body: Value) -> Result<(), String> {
-        self.send_and_wait(body).map(|_| ())
+    /// Issue a command that expects an `Ok` reply (void).
+    fn send_void<F>(&mut self, build: F) -> Result<(), String>
+    where
+        F: FnOnce(u16) -> Result<Vec<u8>, String>,
+    {
+        let (rid, reply_rx, reply_tx) = self.begin_request()?;
+        let payload = build(rid)?;
+        match self.dispatch(payload, rid, reply_tx, reply_rx)? {
+            Reply::Ok => Ok(()),
+            other => Err(format!("unexpected reply: {:?}", other)),
+        }
+    }
+
+    /// Issue a command that expects a value reply.
+    fn send_value<F>(&mut self, build: F) -> Result<Reply, String>
+    where
+        F: FnOnce(u16) -> Result<Vec<u8>, String>,
+    {
+        let (rid, reply_rx, reply_tx) = self.begin_request()?;
+        let payload = build(rid)?;
+        self.dispatch(payload, rid, reply_tx, reply_rx)
     }
 }
 
@@ -628,7 +654,7 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
-        if port_index(port).is_some() {
+        if port_index_validate(port).is_some() {
             if let Some(m) = mode {
                 let known = matches!(
                     m,
@@ -645,11 +671,14 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
-        self.send_void(protocol::motor_run(port, to_velocity(direction, power)))
+        let vel = to_velocity_i16(direction, power);
+        let port = port.to_string();
+        self.send_void(move |rid| protocol::motor_run(rid, &port, vel))
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
-        self.send_void(protocol::motor_stop(port))
+        let port = port.to_string();
+        self.send_void(move |rid| protocol::motor_stop(rid, &port))
     }
 
     fn run_port_for_time(
@@ -660,7 +689,9 @@ impl HardwareAdapter for SpikeAdapter {
         tenths: u32,
     ) -> Result<(), String> {
         let ms = tenths * 100;
-        self.send_void(protocol::motor_run_for_time(port, ms, to_velocity(direction, power)))
+        let vel = to_velocity_i16(direction, power);
+        let port = port.to_string();
+        self.send_void(move |rid| protocol::motor_run_for_time(rid, &port, ms, vel))
     }
 
     fn rotate_port_by_degrees(
@@ -670,8 +701,10 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         degrees: i32,
     ) -> Result<(), String> {
-        let vel = to_velocity(direction, power);
-        self.send_void(protocol::motor_run_for_degrees(port, degrees.abs(), vel))
+        let vel = to_velocity_i16(direction, power);
+        let port = port.to_string();
+        let deg = degrees.abs();
+        self.send_void(move |rid| protocol::motor_run_for_degrees(rid, &port, deg, vel))
     }
 
     fn rotate_port_to_position(
@@ -681,19 +714,24 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
-        let value = self.send_and_wait(protocol::read_sensor(port, "rotation"))?;
-        let current = value.as_f64().ok_or("rotation read returned non-number")? as i32;
+        let port_owned = port.to_string();
+        let current = match self.send_value(|rid| protocol::read_sensor(rid, &port_owned, "rotation"))? {
+            Reply::Int(v) => v,
+            other => return Err(format!("rotation read returned {:?}", other)),
+        };
         let delta = crate::adapter::rotateto_delta(current, position, direction);
         if delta == 0 {
             return Ok(());
         }
-        let base = (power.min(MAX_POWER) as i32) * 10;
+        let base = (power.min(MAX_POWER) as i16) * 10;
         let speed = if delta > 0 { base } else { -base };
-        self.send_void(protocol::motor_run_for_degrees(port, delta.abs(), speed))
+        let deg = delta.abs();
+        self.send_void(move |rid| protocol::motor_run_for_degrees(rid, &port_owned, deg, speed))
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
-        self.send_void(protocol::motor_reset(port, 0))
+        let port = port.to_string();
+        self.send_void(move |rid| protocol::motor_reset(rid, &port, 0))
     }
 
     fn rotate_to_abs(
@@ -703,8 +741,10 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
-        let vel = (power.min(MAX_POWER) as i32) * 10;
-        self.send_void(protocol::motor_run_to_abs(port, position, vel, direction_code(direction)))
+        let vel = (power.min(MAX_POWER) as i16) * 10;
+        let dir = direction_code(direction);
+        let port = port.to_string();
+        self.send_void(move |rid| protocol::motor_run_to_abs(rid, &port, position, vel, dir))
     }
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
@@ -713,19 +753,25 @@ impl HardwareAdapter for SpikeAdapter {
             "raw" => "rotation",
             other => other,
         };
-        let value = self.send_and_wait(protocol::read_sensor(port, canonical))?;
-        Ok(Some(json_to_logo(&value)))
+        let port = port.to_string();
+        let mode_owned = canonical.to_string();
+        let reply = self.send_value(move |rid| protocol::read_sensor(rid, &port, &mode_owned))?;
+        Ok(Some(reply_to_logo(reply)))
     }
 
     // ── Batch overrides ─────────────────────────
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
         let ms = tenths * 100;
-        let entries: Vec<(&str, i32)> = commands
+        let entries: Vec<(String, i16)> = commands
             .iter()
-            .map(|c| (c.port, to_velocity(c.direction, c.power)))
+            .map(|c| (c.port.to_string(), to_velocity_i16(c.direction, c.power)))
             .collect();
-        self.send_void(protocol::parallel_run_for_time(&entries, ms))
+        self.send_void(move |rid| {
+            let refs: Vec<(&str, i16)> =
+                entries.iter().map(|(p, v)| (p.as_str(), *v)).collect();
+            protocol::parallel_run_for_time(rid, ms, &refs)
+        })
     }
 
     fn rotate_ports_by_degrees(
@@ -733,11 +779,15 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         degrees: i32,
     ) -> Result<(), String> {
-        let entries: Vec<(&str, i32, i32)> = commands
+        let entries: Vec<(String, i32, i16)> = commands
             .iter()
-            .map(|c| (c.port, degrees.abs(), to_velocity(c.direction, c.power)))
+            .map(|c| (c.port.to_string(), degrees.abs(), to_velocity_i16(c.direction, c.power)))
             .collect();
-        self.send_void(protocol::parallel_run_for_degrees(&entries))
+        self.send_void(move |rid| {
+            let refs: Vec<(&str, i32, i16)> =
+                entries.iter().map(|(p, d, v)| (p.as_str(), *d, *v)).collect();
+            protocol::parallel_run_for_degrees(rid, &refs)
+        })
     }
 
     fn rotate_ports_to_abs(
@@ -745,14 +795,18 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
-        let entries: Vec<(&str, i32, i32, u8)> = commands
+        let entries: Vec<(String, i32, i16, u8)> = commands
             .iter()
             .map(|c| {
-                let vel = (c.power.min(MAX_POWER) as i32) * 10;
-                (c.port, position, vel, direction_code(c.direction))
+                let vel = (c.power.min(MAX_POWER) as i16) * 10;
+                (c.port.to_string(), position, vel, direction_code(c.direction))
             })
             .collect();
-        self.send_void(protocol::parallel_run_to_abs(&entries))
+        self.send_void(move |rid| {
+            let refs: Vec<(&str, i32, i16, u8)> =
+                entries.iter().map(|(p, pos, v, d)| (p.as_str(), *pos, *v, *d)).collect();
+            protocol::parallel_run_to_abs(rid, &refs)
+        })
     }
 
     fn rotate_ports_to_position(
@@ -763,22 +817,29 @@ impl HardwareAdapter for SpikeAdapter {
         // Reads are cheap (per-port round-trip), but the rotation itself
         // must run concurrently — so we fan out the reads, compute each
         // delta, then issue a single parallel_run_for_degrees.
-        let mut entries: Vec<(&str, i32, i32)> = Vec::new();
+        let mut entries: Vec<(String, i32, i16)> = Vec::new();
         for cmd in commands {
-            let value = self.send_and_wait(protocol::read_sensor(cmd.port, "rotation"))?;
-            let current = value.as_f64().ok_or("rotation read returned non-number")? as i32;
+            let port = cmd.port.to_string();
+            let current = match self.send_value(|rid| protocol::read_sensor(rid, &port, "rotation"))? {
+                Reply::Int(v) => v,
+                other => return Err(format!("rotation read returned {:?}", other)),
+            };
             let delta = crate::adapter::rotateto_delta(current, position, cmd.direction);
             if delta == 0 {
                 continue;
             }
-            let base = (cmd.power.min(MAX_POWER) as i32) * 10;
+            let base = (cmd.power.min(MAX_POWER) as i16) * 10;
             let speed = if delta > 0 { base } else { -base };
-            entries.push((cmd.port, delta.abs(), speed));
+            entries.push((port, delta.abs(), speed));
         }
         if entries.is_empty() {
             return Ok(());
         }
-        self.send_void(protocol::parallel_run_for_degrees(&entries))
+        self.send_void(move |rid| {
+            let refs: Vec<(&str, i32, i16)> =
+                entries.iter().map(|(p, d, v)| (p.as_str(), *d, *v)).collect();
+            protocol::parallel_run_for_degrees(rid, &refs)
+        })
     }
 }
 
@@ -793,19 +854,15 @@ impl Drop for SpikeAdapter {
     }
 }
 
-fn json_to_logo(value: &Value) -> LogoValue {
-    match value {
-        Value::Bool(b) => LogoValue::Word(if *b { "true" } else { "false" }.to_string()),
-        Value::Number(n) => n
-            .as_f64()
-            .map(LogoValue::Number)
-            .unwrap_or(LogoValue::Number(0.0)),
-        Value::String(s) => LogoValue::Word(s.clone()),
-        Value::Array(items) => {
-            LogoValue::List(items.iter().map(json_to_logo).collect())
-        }
-        Value::Null => LogoValue::Number(0.0),
-        Value::Object(_) => LogoValue::Word(value.to_string()),
+fn reply_to_logo(reply: Reply) -> LogoValue {
+    match reply {
+        Reply::Int(v) => LogoValue::Number(v as f64),
+        Reply::List(values) => LogoValue::List(
+            values.into_iter().map(|v| LogoValue::Number(v as f64)).collect(),
+        ),
+        Reply::Bool(b) => LogoValue::Word(if b { "true" } else { "false" }.to_string()),
+        Reply::Ok => LogoValue::Number(0.0),
+        Reply::Error(msg) => LogoValue::Word(msg),
     }
 }
 

@@ -1,127 +1,185 @@
 //! MicroPython agent uploaded to the hub. Runs permanently, accepts
-//! newline-delimited JSON commands via `hub.config["module_tunnel"]`, and
-//! responds with newline-delimited JSON.
-//!
-//! `module_tunnel` is an undocumented-but-stable SPIKE Prime 3.x firmware API
-//! that exposes the host-program bidirectional Atlantis TunnelMessage (id
-//! 0x32) channel to MicroPython. Confirmed by the LEGO web app's own
-//! experiment code (see `learning-and-dynamics/ml-with-bricks`).
+//! binary commands via `hub.config["module_tunnel"]`, and responds with
+//! binary replies. See `protocol.rs` for the wire format.
 
 /// Python source for the agent. Uploaded to `/flash/program0/program.py` and
 /// started via `ProgramFlowRequest(Start, 0)`.
-pub const AGENT_SOURCE: &str = r#"# BrickLogo SPIKE Prime agent.
+pub const AGENT_SOURCE: &str = r#"# BrickLogo SPIKE Prime agent (binary protocol).
 import hub, motor, runloop, color_sensor, distance_sensor, force_sensor
 from hub import port, motion_sensor
-import json
+import struct
 
 _tunnel = hub.config["module_tunnel"]
-_rx_buf = bytearray()
 _cmds = []
-_port_map = {"a": port.A, "b": port.B, "c": port.C, "d": port.D, "e": port.E, "f": port.F}
+_ports = [port.A, port.B, port.C, port.D, port.E, port.F]
+
+# ── Opcodes / reply kinds ───────────────────
+OP_MOTOR_RUN = 0x01
+OP_MOTOR_STOP = 0x02
+OP_MOTOR_RESET = 0x03
+OP_MOTOR_RUN_FOR_TIME = 0x04
+OP_MOTOR_RUN_FOR_DEGREES = 0x05
+OP_MOTOR_RUN_TO_ABS = 0x06
+OP_PARALLEL_RUN_FOR_TIME = 0x07
+OP_PARALLEL_RUN_FOR_DEGREES = 0x08
+OP_PARALLEL_RUN_TO_ABS = 0x09
+OP_READ = 0x0A
+OP_READ_HUB = 0x0B
+OP_PING = 0x0C
+
+R_OK = 0x00
+R_INT = 0x01
+R_LIST = 0x02
+R_BOOL = 0x03
+R_ERR = 0x04
+R_READY = 0x10
+R_HB = 0x11
+
+MODE_ROTATION = 0x00
+MODE_ABSOLUTE = 0x01
+MODE_SPEED = 0x02
+MODE_COLOR = 0x03
+MODE_LIGHT = 0x04
+MODE_DISTANCE = 0x05
+MODE_FORCE = 0x06
+MODE_TOUCHED = 0x07
+MODE_TILT = 0x08
+MODE_GYRO = 0x09
+MODE_ACCEL = 0x0A
 
 def _on_tunnel(data):
-    global _rx_buf
-    raw = bytes(data)
-    print("rx:", len(raw), raw[:48])
-    _rx_buf += raw
-    while True:
-        i = _rx_buf.find(b"\n")
-        if i < 0:
-            break
-        line = bytes(_rx_buf[:i])
-        _rx_buf = _rx_buf[i + 1:]
-        try:
-            _cmds.append(json.loads(line))
-        except ValueError as e:
-            print("parse err:", e, "line:", line[:48])
+    _cmds.append(bytes(data))
 
 _tunnel.callback(_on_tunnel)
 
-def _reply(obj):
-    _tunnel.send((json.dumps(obj) + "\n").encode())
+def _ok(rid):
+    _tunnel.send(struct.pack("<BH", R_OK, rid))
 
-def _p(s):
-    return _port_map[s.lower()]
+def _int(rid, v):
+    _tunnel.send(struct.pack("<BHi", R_INT, rid, v))
 
-async def _exec(cmd):
-    op = cmd.get("op")
-    cid = cmd.get("id")
+def _list(rid, values):
+    buf = struct.pack("<BHB", R_LIST, rid, len(values))
+    for v in values:
+        buf += struct.pack("<i", int(v))
+    _tunnel.send(buf)
+
+def _bool(rid, v):
+    _tunnel.send(struct.pack("<BHB", R_BOOL, rid, 1 if v else 0))
+
+def _err(rid, msg):
+    mb = str(msg).encode("utf-8")[:255]
+    _tunnel.send(struct.pack("<BHB", R_ERR, rid, len(mb)) + mb)
+
+def _read_value(p_idx, mode):
+    p = _ports[p_idx]
+    if mode == MODE_ROTATION: return ("int", motor.relative_position(p))
+    if mode == MODE_ABSOLUTE: return ("int", motor.absolute_position(p))
+    if mode == MODE_SPEED:    return ("int", motor.velocity(p))
+    if mode == MODE_COLOR:    return ("int", color_sensor.color(p))
+    if mode == MODE_LIGHT:    return ("int", color_sensor.reflection(p))
+    if mode == MODE_DISTANCE: return ("int", distance_sensor.distance(p))
+    if mode == MODE_FORCE:    return ("int", force_sensor.force(p))
+    if mode == MODE_TOUCHED:  return ("bool", force_sensor.pressed(p))
+    raise ValueError("bad mode")
+
+def _read_hub(mode):
+    if mode == MODE_TILT:  return list(motion_sensor.tilt_angles())
+    if mode == MODE_GYRO:  return list(motion_sensor.angular_velocity())
+    if mode == MODE_ACCEL: return list(motion_sensor.acceleration())
+    raise ValueError("bad hub mode")
+
+async def _exec(data):
+    op = data[0]
+    rid = struct.unpack_from("<H", data, 1)[0]
     try:
-        if op == "motor_run":
-            motor.run(_p(cmd["port"]), cmd["velocity"])
-            _reply({"id": cid, "ok": True})
-        elif op == "motor_stop":
-            motor.stop(_p(cmd["port"]))
-            _reply({"id": cid, "ok": True})
-        elif op == "motor_reset":
-            motor.reset_relative_position(_p(cmd["port"]), cmd.get("offset", 0))
-            _reply({"id": cid, "ok": True})
-        elif op == "motor_run_for_time":
-            await motor.run_for_time(_p(cmd["port"]), cmd["ms"], cmd["velocity"])
-            _reply({"id": cid, "ok": True})
-        elif op == "motor_run_for_degrees":
-            await motor.run_for_degrees(_p(cmd["port"]), cmd["degrees"], cmd["velocity"])
-            _reply({"id": cid, "ok": True})
-        elif op == "motor_run_to_abs":
-            await motor.run_to_absolute_position(
-                _p(cmd["port"]), cmd["position"], cmd["velocity"], direction=cmd["direction"])
-            _reply({"id": cid, "ok": True})
-        elif op == "parallel_run_for_time":
-            ms = cmd["ms"]
-            for e in cmd["entries"]:
-                motor.run(_p(e["port"]), e["velocity"])
+        if op == OP_MOTOR_RUN:
+            p, v = struct.unpack_from("<Bh", data, 3)
+            motor.run(_ports[p], v)
+            _ok(rid)
+        elif op == OP_MOTOR_STOP:
+            p = data[3]
+            motor.stop(_ports[p])
+            _ok(rid)
+        elif op == OP_MOTOR_RESET:
+            p, off = struct.unpack_from("<Bi", data, 3)
+            motor.reset_relative_position(_ports[p], off)
+            _ok(rid)
+        elif op == OP_MOTOR_RUN_FOR_TIME:
+            p, ms, v = struct.unpack_from("<BIh", data, 3)
+            await motor.run_for_time(_ports[p], ms, v)
+            _ok(rid)
+        elif op == OP_MOTOR_RUN_FOR_DEGREES:
+            p, deg, v = struct.unpack_from("<Bih", data, 3)
+            await motor.run_for_degrees(_ports[p], deg, v)
+            _ok(rid)
+        elif op == OP_MOTOR_RUN_TO_ABS:
+            p, pos, v, d = struct.unpack_from("<BihB", data, 3)
+            await motor.run_to_absolute_position(_ports[p], pos, v, direction=d)
+            _ok(rid)
+        elif op == OP_PARALLEL_RUN_FOR_TIME:
+            ms = struct.unpack_from("<I", data, 3)[0]
+            n = data[7]
+            entries = []
+            for i in range(n):
+                off = 8 + i * 3
+                p, v = struct.unpack_from("<Bh", data, off)
+                entries.append((p, v))
+            for p, v in entries:
+                motor.run(_ports[p], v)
             await runloop.sleep_ms(ms)
-            for e in cmd["entries"]:
-                motor.stop(_p(e["port"]))
-            _reply({"id": cid, "ok": True})
-        elif op == "parallel_run_for_degrees":
-            tasks = [motor.run_for_degrees(_p(e["port"]), e["degrees"], e["velocity"]) for e in cmd["entries"]]
+            for p, _ in entries:
+                motor.stop(_ports[p])
+            _ok(rid)
+        elif op == OP_PARALLEL_RUN_FOR_DEGREES:
+            n = data[3]
+            tasks = []
+            for i in range(n):
+                off = 4 + i * 7
+                p, deg, v = struct.unpack_from("<Bih", data, off)
+                tasks.append(motor.run_for_degrees(_ports[p], deg, v))
             for t in tasks:
                 await t
-            _reply({"id": cid, "ok": True})
-        elif op == "parallel_run_to_abs":
-            tasks = [motor.run_to_absolute_position(_p(e["port"]), e["position"], e["velocity"], direction=e["direction"]) for e in cmd["entries"]]
+            _ok(rid)
+        elif op == OP_PARALLEL_RUN_TO_ABS:
+            n = data[3]
+            tasks = []
+            for i in range(n):
+                off = 4 + i * 8
+                p, pos, v, d = struct.unpack_from("<BihB", data, off)
+                tasks.append(motor.run_to_absolute_position(_ports[p], pos, v, direction=d))
             for t in tasks:
                 await t
-            _reply({"id": cid, "ok": True})
-        elif op == "read":
-            mode = cmd["mode"]
-            p = cmd.get("port")
-            if mode == "rotation":   v = motor.relative_position(_p(p))
-            elif mode == "absolute": v = motor.absolute_position(_p(p))
-            elif mode == "speed":    v = motor.velocity(_p(p))
-            elif mode == "color":    v = color_sensor.color(_p(p))
-            elif mode == "light":    v = color_sensor.reflection(_p(p))
-            elif mode == "distance": v = distance_sensor.distance(_p(p))
-            elif mode == "force":    v = force_sensor.force(_p(p))
-            elif mode == "touched":  v = force_sensor.pressed(_p(p))
-            elif mode == "tilt":     v = list(motion_sensor.tilt_angles())
-            elif mode == "gyro":     v = list(motion_sensor.angular_velocity())
-            elif mode == "accel":    v = list(motion_sensor.acceleration())
-            else: raise ValueError("unknown mode: " + str(mode))
-            _reply({"id": cid, "value": v})
-        elif op == "ping":
-            _reply({"id": cid, "ok": True})
+            _ok(rid)
+        elif op == OP_READ:
+            p, mode = struct.unpack_from("<BB", data, 3)
+            kind, val = _read_value(p, mode)
+            if kind == "int": _int(rid, val)
+            else: _bool(rid, val)
+        elif op == OP_READ_HUB:
+            mode = data[3]
+            _list(rid, _read_hub(mode))
+        elif op == OP_PING:
+            _ok(rid)
         else:
-            _reply({"id": cid, "error": "unknown op: " + str(op)})
+            _err(rid, "unknown op")
     except Exception as e:
-        _reply({"id": cid, "error": str(e)})
+        _err(rid, e)
 
 async def _heartbeat():
     while True:
         try:
-            _reply({"op": "heartbeat"})
+            _tunnel.send(bytes([R_HB]))
         except Exception:
             pass
         await runloop.sleep_ms(2000)
 
 async def _main():
-    _reply({"op": "ready"})
+    _tunnel.send(bytes([R_READY]))
     while True:
         while _cmds:
-            cmd = _cmds.pop(0)
-            await _exec(cmd)
-        await runloop.sleep_ms(10)
+            await _exec(_cmds.pop(0))
+        await runloop.sleep_ms(5)
 
 runloop.run(_main(), _heartbeat())
 "#;
