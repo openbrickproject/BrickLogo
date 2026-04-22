@@ -110,6 +110,7 @@ version = "0.1.0"
 dependencies = [
  "bricklogo-lang",
  "btleplug",
+ "futures",
  "hidapi",
  "lazy_static",
  "libusb1-sys",
@@ -122,8 +123,10 @@ dependencies = [
  "rust-rcx",
  "rust-spike",
  "rust-wedo",
+ "serde_json",
  "serialport",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -287,6 +290,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -1141,6 +1153,11 @@ dependencies = [
 [[package]]
 name = "rust-spike"
 version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "rust-wedo"

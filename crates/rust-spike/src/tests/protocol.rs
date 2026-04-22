@@ -1,125 +1,133 @@
 use super::*;
 
 #[test]
-fn test_cmd_init_imports() {
-    let cmd = cmd_init_imports();
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("import motor"));
-    assert!(s.contains("from hub import port"));
-    assert_eq!(*cmd.last().unwrap(), CTRL_D);
+fn test_encode_command_adds_id_and_newline() {
+    let body = motor_run("a", 500);
+    let bytes = encode_command(42, body);
+    assert_eq!(*bytes.last().unwrap(), b'\n');
+    let v: Value = serde_json::from_slice(&bytes[..bytes.len() - 1]).unwrap();
+    assert_eq!(v["id"], 42);
+    assert_eq!(v["op"], "motor_run");
+    assert_eq!(v["port"], "a");
+    assert_eq!(v["velocity"], 500);
 }
 
 #[test]
-fn test_cmd_motor_run() {
-    let cmd = cmd_motor_run("a", 500);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("motor.run(port.A, 500)"));
-    assert_eq!(*cmd.last().unwrap(), CTRL_D);
+fn test_motor_stop() {
+    let v = motor_stop("b");
+    assert_eq!(v["op"], "motor_stop");
+    assert_eq!(v["port"], "b");
 }
 
 #[test]
-fn test_cmd_motor_stop() {
-    let cmd = cmd_motor_stop("b");
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("motor.stop(port.B)"));
+fn test_motor_reset() {
+    let v = motor_reset("c", 0);
+    assert_eq!(v["op"], "motor_reset");
+    assert_eq!(v["port"], "c");
+    assert_eq!(v["offset"], 0);
 }
 
 #[test]
-fn test_cmd_motor_run_for_degrees() {
-    let cmd = cmd_motor_run_for_degrees("c", 360, 750);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("runloop.run(motor.run_for_degrees(port.C, 360, 750))"));
+fn test_motor_run_for_time() {
+    let v = motor_run_for_time("a", 1000, 500);
+    assert_eq!(v["op"], "motor_run_for_time");
+    assert_eq!(v["ms"], 1000);
+    assert_eq!(v["velocity"], 500);
 }
 
 #[test]
-fn test_cmd_motor_run_for_time() {
-    let cmd = cmd_motor_run_for_time("d", 2000, -500);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("motor.run_for_time(port.D, 2000, -500)"));
-    assert!(s.contains("runloop.run("));
+fn test_motor_run_for_degrees() {
+    let v = motor_run_for_degrees("c", 360, 750);
+    assert_eq!(v["op"], "motor_run_for_degrees");
+    assert_eq!(v["degrees"], 360);
+    assert_eq!(v["velocity"], 750);
 }
 
 #[test]
-fn test_cmd_motor_run_to_absolute_position() {
-    let cmd = cmd_motor_run_to_absolute_position("e", 90, 500, 1);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("motor.run_to_absolute_position(port.E, 90, 500, direction=1)"));
+fn test_motor_run_to_abs() {
+    let v = motor_run_to_abs("e", 90, 500, 1);
+    assert_eq!(v["op"], "motor_run_to_abs");
+    assert_eq!(v["position"], 90);
+    assert_eq!(v["velocity"], 500);
+    assert_eq!(v["direction"], 1);
 }
 
 #[test]
-fn test_cmd_motor_reset_relative_position() {
-    let cmd = cmd_motor_reset_relative_position("f", 0);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("motor.reset_relative_position(port.F, 0)"));
-    // Not wrapped in runloop — non-blocking
-    assert!(!s.contains("runloop"));
+fn test_parallel_run_for_degrees() {
+    let v = parallel_run_for_degrees(&[("a", 360, 500), ("b", 360, -500)]);
+    assert_eq!(v["op"], "parallel_run_for_degrees");
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["port"], "a");
+    assert_eq!(entries[1]["velocity"], -500);
 }
 
 #[test]
-fn test_cmd_parallel_run_for_degrees() {
-    let cmd = cmd_parallel_run_for_degrees(&[("a", 360, 500), ("b", 360, -500)]);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("runloop.run("));
-    assert!(s.contains("motor.run_for_degrees(port.A, 360, 500)"));
-    assert!(s.contains("motor.run_for_degrees(port.B, 360, -500)"));
+fn test_parallel_run_for_time() {
+    let v = parallel_run_for_time(&[("a", 500), ("b", -500)], 2000);
+    assert_eq!(v["op"], "parallel_run_for_time");
+    assert_eq!(v["ms"], 2000);
+    assert_eq!(v["entries"].as_array().unwrap().len(), 2);
 }
 
 #[test]
-fn test_cmd_parallel_run_for_time() {
-    let cmd = cmd_parallel_run_for_time(&[("a", 500), ("b", -500)], 2000);
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("runloop.run("));
-    assert!(s.contains("motor.run_for_time(port.A, 2000, 500)"));
-    assert!(s.contains("motor.run_for_time(port.B, 2000, -500)"));
+fn test_parallel_run_to_abs() {
+    let v = parallel_run_to_abs(&[("a", 90, 500, 0), ("b", -45, 500, 1)]);
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["direction"], 0);
+    assert_eq!(entries[1]["direction"], 1);
 }
 
 #[test]
-fn test_cmd_read_relative_position() {
-    let cmd = cmd_read_relative_position("a");
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("print(motor.relative_position(port.A))"));
+fn test_read_sensor() {
+    let v = read_sensor("a", "rotation");
+    assert_eq!(v["op"], "read");
+    assert_eq!(v["port"], "a");
+    assert_eq!(v["mode"], "rotation");
 }
 
 #[test]
-fn test_cmd_read_color() {
-    let cmd = cmd_read_color("c");
-    let s = String::from_utf8_lossy(&cmd[..cmd.len() - 1]);
-    assert!(s.contains("import color_sensor"));
-    assert!(s.contains("print(color_sensor.color(port.C))"));
+fn test_read_hub() {
+    let v = read_hub("tilt");
+    assert_eq!(v["op"], "read");
+    assert_eq!(v["mode"], "tilt");
+    assert!(v.get("port").is_none());
 }
 
 #[test]
-fn test_parse_raw_repl_response_success() {
-    let data = b"OK42\x04\x04";
-    assert_eq!(parse_raw_repl_response(data), Ok("42".to_string()));
+fn test_ping() {
+    assert_eq!(ping()["op"], "ping");
 }
 
 #[test]
-fn test_parse_raw_repl_response_empty_output() {
-    let data = b"OK\x04\x04";
-    assert_eq!(parse_raw_repl_response(data), Ok("".to_string()));
+fn test_parse_reply_success_void() {
+    let bytes = br#"{"id":5,"ok":true}"#;
+    assert_eq!(parse_reply(bytes).unwrap(), Value::Null);
 }
 
 #[test]
-fn test_parse_raw_repl_response_error() {
-    let data = b"OK\x04Traceback: something went wrong\x04";
-    assert!(parse_raw_repl_response(data).is_err());
-    assert!(parse_raw_repl_response(data).unwrap_err().contains("Traceback"));
+fn test_parse_reply_success_value() {
+    let bytes = br#"{"id":5,"value":180}"#;
+    assert_eq!(parse_reply(bytes).unwrap(), serde_json::json!(180));
 }
 
 #[test]
-fn test_parse_raw_repl_response_multiline_output() {
-    let data = b"OK[1, 2, 3]\r\n\x04\x04";
-    assert_eq!(parse_raw_repl_response(data), Ok("[1, 2, 3]".to_string()));
+fn test_parse_reply_error() {
+    let bytes = br#"{"id":5,"error":"motor offline"}"#;
+    let err = parse_reply(bytes).unwrap_err();
+    assert!(err.contains("motor offline"));
 }
 
 #[test]
-fn test_port_ref_uppercase() {
-    let cmd = cmd_motor_run("a", 100);
-    let s = String::from_utf8_lossy(&cmd);
-    assert!(s.contains("port.A"));
+fn test_reply_id() {
+    assert_eq!(reply_id(br#"{"id":42,"ok":true}"#), Some(42));
+    assert_eq!(reply_id(br#"{"op":"ready"}"#), None);
+    assert_eq!(reply_id(b"not json"), None);
+}
 
-    let cmd = cmd_motor_run("F", 100);
-    let s = String::from_utf8_lossy(&cmd);
-    assert!(s.contains("port.F"));
+#[test]
+fn test_is_ready() {
+    assert!(is_ready(br#"{"op":"ready"}"#));
+    assert!(!is_ready(br#"{"id":1,"ok":true}"#));
+    assert!(!is_ready(b"not json"));
 }

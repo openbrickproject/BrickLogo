@@ -1,242 +1,130 @@
-/// Raw REPL protocol for SPIKE Prime (firmware v3.x / MicroPython).
-///
-/// The hub's raw REPL mode accepts Python code blocks:
-///   - Send `\x01` to enter raw REPL → hub responds `raw REPL; ...\r\n>`
-///   - Send Python code
-///   - Send `\x04` to execute → hub responds `OK<stdout>\x04<stderr>\x04`
-///
-/// Imports persist across executions in the global namespace, so we
-/// import `motor`, `motor_pair`, `runloop`, and `port` once at init.
+//! JSON command builders for the BrickLogo SPIKE Prime agent protocol.
+//!
+//! Each command is a single JSON object, one newline-delimited line per
+//! `TunnelMessage` payload. The agent replies with another JSON object keyed
+//! by the same `id`.
 
-/// Ctrl+C — interrupt running program.
-pub const CTRL_C: u8 = 0x03;
-/// Ctrl+A — enter raw REPL mode.
-pub const CTRL_A: u8 = 0x01;
-/// Ctrl+B — enter friendly REPL mode.
-pub const CTRL_B: u8 = 0x02;
-/// Ctrl+D — execute code block in raw REPL / soft-reset in friendly REPL.
-pub const CTRL_D: u8 = 0x04;
+use serde_json::{json, Value};
 
-/// Imports needed in the raw REPL session. Sent once after entering raw REPL.
-pub fn cmd_init_imports() -> Vec<u8> {
-    let code = "import motor, motor_pair, runloop\nfrom hub import port\n";
-    let mut buf = code.as_bytes().to_vec();
-    buf.push(CTRL_D);
-    buf
+/// Assign an id and return a byte payload (JSON + trailing newline) ready to
+/// hand to the slot. The slot wraps the bytes in a `TunnelMessage` and
+/// correlates the reply id back to the caller.
+pub fn encode_command(id: u64, body: Value) -> Vec<u8> {
+    let mut obj = body;
+    if let Value::Object(ref mut map) = obj {
+        map.insert("id".to_string(), Value::from(id));
+    }
+    let mut bytes = serde_json::to_vec(&obj).expect("json serialization");
+    bytes.push(b'\n');
+    bytes
 }
 
-// ── Motor command builders ──────────────────────
-// Each returns bytes ready to send: Python code + Ctrl+D.
+// ── Motor commands ──────────────────────────────
 
-fn port_ref(port_letter: &str) -> String {
-    format!("port.{}", port_letter.to_uppercase())
+pub fn motor_run(port: &str, velocity: i32) -> Value {
+    json!({"op": "motor_run", "port": port, "velocity": velocity})
 }
 
-/// Start motor running continuously. Non-blocking.
-/// velocity is in degrees/second (roughly: power * 10).
-pub fn cmd_motor_run(port: &str, velocity: i32) -> Vec<u8> {
-    let code = format!("motor.run({}, {})\n", port_ref(port), velocity);
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn motor_stop(port: &str) -> Value {
+    json!({"op": "motor_stop", "port": port})
 }
 
-/// Stop motor.
-pub fn cmd_motor_stop(port: &str) -> Vec<u8> {
-    let code = format!("motor.stop({})\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn motor_reset(port: &str, offset: i32) -> Value {
+    json!({"op": "motor_reset", "port": port, "offset": offset})
 }
 
-/// Run motor for time (blocking, returns awaitable).
-/// Wrapped in runloop.run() so it blocks the REPL until done.
-pub fn cmd_motor_run_for_time(port: &str, ms: u32, velocity: i32) -> Vec<u8> {
-    let code = format!(
-        "runloop.run(motor.run_for_time({}, {}, {}))\n",
-        port_ref(port), ms, velocity
-    );
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn motor_run_for_time(port: &str, ms: u32, velocity: i32) -> Value {
+    json!({"op": "motor_run_for_time", "port": port, "ms": ms, "velocity": velocity})
 }
 
-/// Run motor for degrees (blocking).
-pub fn cmd_motor_run_for_degrees(port: &str, degrees: i32, velocity: i32) -> Vec<u8> {
-    let code = format!(
-        "runloop.run(motor.run_for_degrees({}, {}, {}))\n",
-        port_ref(port), degrees, velocity
-    );
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn motor_run_for_degrees(port: &str, degrees: i32, velocity: i32) -> Value {
+    json!({"op": "motor_run_for_degrees", "port": port, "degrees": degrees, "velocity": velocity})
 }
 
-/// Run motor to absolute position (blocking).
-/// direction: 0=shortest, 1=clockwise, 2=counterclockwise
-pub fn cmd_motor_run_to_absolute_position(
-    port: &str,
-    position: i32,
-    velocity: i32,
-    direction: u8,
-) -> Vec<u8> {
-    let code = format!(
-        "runloop.run(motor.run_to_absolute_position({}, {}, {}, direction={}))\n",
-        port_ref(port), position, velocity, direction
-    );
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-/// Reset relative position to offset.
-pub fn cmd_motor_reset_relative_position(port: &str, offset: i32) -> Vec<u8> {
-    let code = format!(
-        "motor.reset_relative_position({}, {})\n",
-        port_ref(port), offset
-    );
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn motor_run_to_abs(port: &str, position: i32, velocity: i32, direction: u8) -> Value {
+    json!({
+        "op": "motor_run_to_abs",
+        "port": port,
+        "position": position,
+        "velocity": velocity,
+        "direction": direction,
+    })
 }
 
 // ── Parallel motor commands ─────────────────────
-// Use runloop.gather() to run multiple awaitables concurrently.
 
-/// Run multiple motors for degrees in parallel (blocking).
-/// Each entry: (port_letter, degrees, velocity).
-pub fn cmd_parallel_run_for_degrees(entries: &[(&str, i32, i32)]) -> Vec<u8> {
-    let tasks: Vec<String> = entries
+pub fn parallel_run_for_time(entries: &[(&str, i32)], ms: u32) -> Value {
+    let arr: Vec<Value> = entries
         .iter()
-        .map(|(p, deg, vel)| {
-            format!("motor.run_for_degrees({}, {}, {})", port_ref(p), deg, vel)
-        })
+        .map(|(p, v)| json!({"port": p, "velocity": v}))
         .collect();
-    let code = format!("runloop.run({})\n", tasks.join(", "));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+    json!({"op": "parallel_run_for_time", "ms": ms, "entries": arr})
 }
 
-/// Run multiple motors for time in parallel (blocking).
-pub fn cmd_parallel_run_for_time(entries: &[(&str, i32)], ms: u32) -> Vec<u8> {
-    let tasks: Vec<String> = entries
+pub fn parallel_run_for_degrees(entries: &[(&str, i32, i32)]) -> Value {
+    let arr: Vec<Value> = entries
         .iter()
-        .map(|(p, vel)| {
-            format!("motor.run_for_time({}, {}, {})", port_ref(p), ms, vel)
-        })
+        .map(|(p, d, v)| json!({"port": p, "degrees": d, "velocity": v}))
         .collect();
-    let code = format!("runloop.run({})\n", tasks.join(", "));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+    json!({"op": "parallel_run_for_degrees", "entries": arr})
 }
 
-/// Run multiple motors to absolute positions in parallel (blocking).
-/// Each entry: (port_letter, position, velocity, direction).
-pub fn cmd_parallel_run_to_absolute(entries: &[(&str, i32, i32, u8)]) -> Vec<u8> {
-    let tasks: Vec<String> = entries
+pub fn parallel_run_to_abs(entries: &[(&str, i32, i32, u8)]) -> Value {
+    let arr: Vec<Value> = entries
         .iter()
-        .map(|(p, pos, vel, dir)| {
-            format!(
-                "motor.run_to_absolute_position({}, {}, {}, direction={})",
-                port_ref(p), pos, vel, dir
-            )
+        .map(|(p, pos, v, dir)| {
+            json!({"port": p, "position": pos, "velocity": v, "direction": dir})
         })
         .collect();
-    let code = format!("runloop.run({})\n", tasks.join(", "));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+    json!({"op": "parallel_run_to_abs", "entries": arr})
 }
 
 // ── Sensor read commands ────────────────────────
-// Each prints a value; the adapter parses stdout.
 
-pub fn cmd_read_relative_position(port: &str) -> Vec<u8> {
-    let code = format!("print(motor.relative_position({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn read_sensor(port: &str, mode: &str) -> Value {
+    json!({"op": "read", "port": port, "mode": mode})
 }
 
-pub fn cmd_read_absolute_position(port: &str) -> Vec<u8> {
-    let code = format!("print(motor.absolute_position({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+pub fn read_hub(mode: &str) -> Value {
+    json!({"op": "read", "mode": mode})
 }
 
-pub fn cmd_read_velocity(port: &str) -> Vec<u8> {
-    let code = format!("print(motor.velocity({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
+// ── Misc ────────────────────────────────────────
+
+pub fn ping() -> Value {
+    json!({"op": "ping"})
 }
 
-pub fn cmd_read_color(port: &str) -> Vec<u8> {
-    let code = format!("import color_sensor\nprint(color_sensor.color({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-pub fn cmd_read_reflection(port: &str) -> Vec<u8> {
-    let code = format!("import color_sensor\nprint(color_sensor.reflection({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-pub fn cmd_read_distance(port: &str) -> Vec<u8> {
-    let code = format!("import distance_sensor\nprint(distance_sensor.distance({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-pub fn cmd_read_force(port: &str) -> Vec<u8> {
-    let code = format!("import force_sensor\nprint(force_sensor.force({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-pub fn cmd_read_force_touched(port: &str) -> Vec<u8> {
-    let code = format!("import force_sensor\nprint(force_sensor.pressed({}))\n", port_ref(port));
-    let mut buf = code.into_bytes();
-    buf.push(CTRL_D);
-    buf
-}
-
-// ── Response parsing ────────────────────────────
-
-/// Parse a raw REPL response: `OK<stdout>\x04<stderr>\x04`
-/// Returns Ok(stdout) or Err(stderr).
-pub fn parse_raw_repl_response(data: &[u8]) -> Result<String, String> {
-    // Strip leading "OK" if present
-    let data = if data.starts_with(b"OK") {
-        &data[2..]
-    } else {
-        data
-    };
-
-    // Split on \x04 — first part is stdout, second is stderr
-    let mut parts = data.splitn(3, |&b| b == CTRL_D);
-    let stdout = parts
-        .next()
-        .map(|b| String::from_utf8_lossy(b).trim().to_string())
-        .unwrap_or_default();
-    let stderr = parts
-        .next()
-        .map(|b| String::from_utf8_lossy(b).trim().to_string())
-        .unwrap_or_default();
-
-    if stderr.is_empty() {
-        Ok(stdout)
-    } else {
-        Err(stderr)
+/// Parse an agent response payload. Returns `Ok(value)` for success or
+/// `Err(msg)` for an error reply. Read commands return the `value` field;
+/// write commands return `Value::Null`.
+pub fn parse_reply(bytes: &[u8]) -> Result<Value, String> {
+    let v: Value = serde_json::from_slice(bytes)
+        .map_err(|e| format!("agent reply not JSON: {}", e))?;
+    if let Some(err) = v.get("error") {
+        return Err(err.as_str().unwrap_or("unknown error").to_string());
     }
+    if let Some(val) = v.get("value") {
+        return Ok(val.clone());
+    }
+    Ok(Value::Null)
+}
+
+/// Return the `id` field of a reply, if any. `None` on startup messages
+/// like `{"op": "ready"}`.
+pub fn reply_id(bytes: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<Value>(bytes)
+        .ok()?
+        .get("id")
+        .and_then(|v| v.as_u64())
+}
+
+/// Return `true` if this is the agent's startup ready signal.
+pub fn is_ready(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        == Some("ready".to_string())
 }
 
 #[cfg(test)]

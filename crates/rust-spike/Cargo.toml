@@ -2,7 +2,10 @@
 name = "rust-spike"
 version = "0.1.0"
 edition = "2024"
-description = "LEGO SPIKE Prime / Robot Inventor hub MicroPython REPL protocol library"
+description = "LEGO SPIKE Prime / Robot Inventor hub Atlantis protocol + MicroPython agent"
 license = "Apache-2.0"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crc32fast = "1.4"
