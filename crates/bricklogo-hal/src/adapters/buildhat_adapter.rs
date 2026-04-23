@@ -852,17 +852,6 @@ impl HardwareAdapter for BuildHATAdapter {
         }
     }
 
-    // ── Firmware upload ─────────────────────────
-
-    fn prepare_firmware_upload(&mut self) -> Result<Option<String>, String> {
-        self.disconnect();
-        Ok(Some(self.serial_path.clone()))
-    }
-
-    fn reconnect_after_firmware(&mut self) -> Result<(), String> {
-        std::thread::sleep(Duration::from_secs(2));
-        self.connect()
-    }
 }
 
 #[cfg(test)]

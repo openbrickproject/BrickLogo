@@ -127,6 +127,59 @@ fn test_parse_device_notification() {
 }
 
 #[test]
+fn test_start_firmware_upload_request_layout() {
+    let sha = [0u8; 20];
+    let msg = start_firmware_upload_request(&sha, 0xDEADBEEF);
+    assert_eq!(msg[0], ID_START_FIRMWARE_UPLOAD_REQUEST);
+    assert_eq!(&msg[1..21], &sha[..]);
+    assert_eq!(&msg[21..25], &0xDEADBEEFu32.to_le_bytes());
+    assert_eq!(msg.len(), 25);
+}
+
+#[test]
+fn test_begin_firmware_update_request_layout() {
+    let mut sha = [0u8; 20];
+    for i in 0..20 { sha[i] = i as u8; }
+    let msg = begin_firmware_update_request(&sha, 0x12345678);
+    assert_eq!(msg[0], ID_BEGIN_FIRMWARE_UPDATE_REQUEST);
+    assert_eq!(&msg[1..21], &sha[..]);
+    assert_eq!(&msg[21..25], &0x12345678u32.to_le_bytes());
+}
+
+#[test]
+fn test_parse_start_firmware_upload_response_resume() {
+    let bytes = vec![ID_START_FIRMWARE_UPLOAD_RESPONSE, 0x00, 0x00, 0x10, 0x00, 0x00];
+    match parse(&bytes).unwrap() {
+        Message::StartFirmwareUploadResponse { success, bytes_already_uploaded } => {
+            assert!(success);
+            assert_eq!(bytes_already_uploaded, 0x1000);
+        }
+        other => panic!("wrong variant: {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_start_firmware_upload_response_error() {
+    let bytes = vec![ID_START_FIRMWARE_UPLOAD_RESPONSE, 0x01, 0, 0, 0, 0];
+    match parse(&bytes).unwrap() {
+        Message::StartFirmwareUploadResponse { success, .. } => assert!(!success),
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn test_parse_begin_firmware_update_response() {
+    assert_eq!(
+        parse(&[ID_BEGIN_FIRMWARE_UPDATE_RESPONSE, 0x00]).unwrap(),
+        Message::BeginFirmwareUpdateResponse { success: true }
+    );
+    assert_eq!(
+        parse(&[ID_BEGIN_FIRMWARE_UPDATE_RESPONSE, 0x01]).unwrap(),
+        Message::BeginFirmwareUpdateResponse { success: false }
+    );
+}
+
+#[test]
 fn test_parse_tunnel_plain() {
     // Hub→host format observed on-wire: [0x32, size_u16_LE, payload]
     let mut bytes = vec![ID_TUNNEL_MESSAGE, 0x06, 0x00];
@@ -156,6 +209,15 @@ fn test_parse_unknown() {
         }
         _ => panic!("wrong variant"),
     }
+}
+
+#[test]
+fn test_crc32_padded_matches_python_binascii() {
+    // Reference values from Python's `binascii.crc32(data, 0)`.
+    // CRC of 4-byte-aligned inputs: no padding, should match `crc32fast::hash`.
+    assert_eq!(crc32_padded(b"1234", 0), crc32fast::hash(b"1234"));
+    // Non-empty seedless CRC must not be 0xFFFFFFFF (the bug we fixed).
+    assert_ne!(crc32_padded(b"hello world!    ", 0), 0xFFFFFFFF);
 }
 
 #[test]

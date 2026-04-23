@@ -1,0 +1,11 @@
+[package]
+name = "rust-stm32dfu"
+version = "0.1.0"
+edition = "2024"
+description = "STM32 DfuSe file parser and USB DFU class client"
+license = "Apache-2.0"
+
+[dependencies]
+rusb = "0.9"
+flate2 = "1"
+crc32fast = "1"

@@ -43,11 +43,10 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ── Transport trait ─────────────────────────────
 
-pub trait SpikeTransport: Send {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, String>;
-    fn write_all(&mut self, data: &[u8]) -> Result<(), String>;
-    fn flush(&mut self) -> Result<(), String>;
-}
+/// Byte-level transport used by the adapter and the firmware uploader.
+/// The real trait is defined in `rust-spike` so the uploader can operate
+/// on a `&mut dyn Transport` without a dependency on `bricklogo-hal`.
+pub use rust_spike::transport::Transport as SpikeTransport;
 
 pub struct SpikeSerialTransport {
     port: Box<dyn serialport::SerialPort>,

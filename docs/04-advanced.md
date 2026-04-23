@@ -233,21 +233,45 @@ This makes it possible to build custom dashboards, control panels, or visualisat
 
 ## Firmware upload
 
-Some devices need firmware uploaded before they can be used.
+Some devices need firmware uploaded before they can be used. Firmware upload runs from the command line, not inside the REPL:
+
+```
+bricklogo --firmware <device> [--image <path>]
+```
+
+BrickLogo exits when the upload finishes. Pass `--image` to override the bundled firmware image with a file of your own.
 
 ### RCX
 
-The RCX needs firmware loaded once after batteries are inserted. Use the `firmware` command at the prompt (not inside a program):
+The RCX needs firmware loaded once after batteries are inserted. Connect a USB or serial IR tower and run:
 
 ```
-? firmware "myrcx "firm0332.lgo
+bricklogo --firmware rcx
 ```
 
-The firmware file is included in the `firmware/rcx/` directory of the release.
+The bundled image is `firm0332.lgo`. USB towers are detected automatically. For a serial tower (PL2303, FTDI, or similar USB-to-serial adapter), list its device path under `"rcx"` in `bricklogo.config.json`; the same config entry is used for `connectto "rcx`.
+
+### SPIKE Prime / Robot Inventor
+
+SPIKE Prime (45678) and MINDSTORMS Robot Inventor (51515) share the same hub hardware and firmware. Upload Hub OS 3.4.0 with:
+
+```
+bricklogo --firmware spike
+```
+
+The hub must be in DFU mode. To activate it:
+
+1. Unplug the USB cable.
+2. Remove the battery, then reinsert it. Leave the hub powered off.
+3. Hold the Bluetooth button on the hub.
+4. Plug the USB cable back in while still holding the button.
+5. Release when the light ring starts pulsing rainbow.
+
+BrickLogo auto-selects the correct image for the hub's hardware revision (original STM32F4 or 2026+ STM32H5) by reading the bootloader's flash memory map.
 
 ### Build HAT
 
-The Build HAT needs firmware uploaded every time the Pi powers on. BrickLogo does this automatically during `connectto "buildhat`. You do not need to run `firmware` yourself unless you want to load custom firmware.
+The Build HAT needs firmware uploaded every time the Pi powers on. BrickLogo does this automatically during `connectto "buildhat`. There is no CLI command — the auto-upload at connect time is the only supported path.
 
 ## See also
 

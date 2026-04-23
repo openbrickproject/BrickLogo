@@ -11,10 +11,14 @@ use crc32fast::Hasher;
 
 pub const ID_INFO_REQUEST: u8 = 0x00;
 pub const ID_INFO_RESPONSE: u8 = 0x01;
+pub const ID_START_FIRMWARE_UPLOAD_REQUEST: u8 = 0x0A;
+pub const ID_START_FIRMWARE_UPLOAD_RESPONSE: u8 = 0x0B;
 pub const ID_START_FILE_UPLOAD_REQUEST: u8 = 0x0C;
 pub const ID_START_FILE_UPLOAD_RESPONSE: u8 = 0x0D;
 pub const ID_TRANSFER_CHUNK_REQUEST: u8 = 0x10;
 pub const ID_TRANSFER_CHUNK_RESPONSE: u8 = 0x11;
+pub const ID_BEGIN_FIRMWARE_UPDATE_REQUEST: u8 = 0x14;
+pub const ID_BEGIN_FIRMWARE_UPDATE_RESPONSE: u8 = 0x15;
 pub const ID_PROGRAM_FLOW_REQUEST: u8 = 0x1E;
 pub const ID_PROGRAM_FLOW_RESPONSE: u8 = 0x1F;
 pub const ID_PROGRAM_FLOW_NOTIFICATION: u8 = 0x20;
@@ -49,6 +53,8 @@ pub struct InfoResponse {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     InfoResponse(InfoResponse),
+    StartFirmwareUploadResponse { success: bool, bytes_already_uploaded: u32 },
+    BeginFirmwareUpdateResponse { success: bool },
     StartFileUploadResponse { success: bool },
     TransferChunkResponse { success: bool },
     ProgramFlowResponse { success: bool },
@@ -88,6 +94,27 @@ pub fn start_file_upload_request(filename: &str, slot: u8, crc32: u32) -> Vec<u8
     buf.extend_from_slice(name_bytes);
     buf.push(0);
     buf.push(slot);
+    buf.extend_from_slice(&crc32.to_le_bytes());
+    buf
+}
+
+/// Announce a firmware upload. Payload: 20-byte SHA-1 hash of the firmware
+/// bytes followed by u32 LE CRC32. The response reports how many bytes the
+/// hub has already received for this SHA (supports resume).
+pub fn start_firmware_upload_request(sha1: &[u8; 20], crc32: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(1 + 20 + 4);
+    buf.push(ID_START_FIRMWARE_UPLOAD_REQUEST);
+    buf.extend_from_slice(sha1);
+    buf.extend_from_slice(&crc32.to_le_bytes());
+    buf
+}
+
+/// Finalize a firmware upload. Same payload as `StartFirmwareUploadRequest`.
+/// Hub verifies the full image matches, then reboots into the new firmware.
+pub fn begin_firmware_update_request(sha1: &[u8; 20], crc32: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(1 + 20 + 4);
+    buf.push(ID_BEGIN_FIRMWARE_UPDATE_REQUEST);
+    buf.extend_from_slice(sha1);
     buf.extend_from_slice(&crc32.to_le_bytes());
     buf
 }
@@ -141,6 +168,18 @@ pub fn parse(data: &[u8]) -> Result<Message, String> {
     let id = data[0];
     match id {
         ID_INFO_RESPONSE => parse_info_response(data),
+        ID_START_FIRMWARE_UPLOAD_RESPONSE => {
+            let success = status_byte(data) == 0;
+            let bytes_already_uploaded = if data.len() >= 6 {
+                u32::from_le_bytes([data[2], data[3], data[4], data[5]])
+            } else {
+                0
+            };
+            Ok(Message::StartFirmwareUploadResponse { success, bytes_already_uploaded })
+        }
+        ID_BEGIN_FIRMWARE_UPDATE_RESPONSE => Ok(Message::BeginFirmwareUpdateResponse {
+            success: status_byte(data) == 0,
+        }),
         ID_START_FILE_UPLOAD_RESPONSE => Ok(Message::StartFileUploadResponse {
             success: status_byte(data) == 0,
         }),
@@ -224,9 +263,15 @@ fn parse_info_response(data: &[u8]) -> Result<Message, String> {
 // matters for file transfer — the hub's running CRC is computed against the
 // padded bytes.
 
-/// CRC32 with padding to a 4-byte boundary.
+/// CRC32 with padding to a 4-byte boundary. Matches Python's
+/// `binascii.crc32(data, seed)`: `seed == 0` means "start fresh", non-zero
+/// means "continue from this previously-finalized CRC".
 pub fn crc32_padded(data: &[u8], seed: u32) -> u32 {
-    let mut hasher = Hasher::new_with_initial(seed);
+    let mut hasher = if seed == 0 {
+        Hasher::new()
+    } else {
+        Hasher::new_with_initial(seed)
+    };
     hasher.update(data);
     let remainder = data.len() % 4;
     if remainder != 0 {

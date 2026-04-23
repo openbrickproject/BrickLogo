@@ -516,18 +516,6 @@ impl HardwareAdapter for RcxAdapter {
         self.stop_ports(&ports)
     }
 
-    // ── Firmware upload ─────────────────────────
-
-    fn prepare_firmware_upload(&mut self) -> Result<Option<String>, String> {
-        self.disconnect();
-        Ok(self.serial_path.clone())
-    }
-
-    fn reconnect_after_firmware(&mut self) -> Result<(), String> {
-        // RCX takes a few seconds to reboot after firmware unlock
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        self.connect()
-    }
 }
 
 #[cfg(test)]

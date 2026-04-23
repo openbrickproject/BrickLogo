@@ -14,6 +14,10 @@ rust-coral = { path = "../rust-coral" }
 rust-wedo = { path = "../rust-wedo" }
 rust-controllab = { path = "../rust-controllab" }
 bricklogo-net = { path = "../bricklogo-net" }
+rust-rcx = { path = "../rust-rcx" }
+rust-spike = { path = "../rust-spike" }
+rust-stm32dfu = { path = "../rust-stm32dfu" }
 crossterm = "0.28"
 ratatui = "0.29"
 ctrlc = "3"
+serialport = "4"

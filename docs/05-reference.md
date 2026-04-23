@@ -1571,7 +1571,6 @@ These commands are part of the BrickLogo terminal, not the Logo language. They c
 | `help` | Show the built-in command summary. Scroll with arrow keys, press `q` or Escape to exit. |
 | `clear` | Clear the output history. |
 | `bye` / `exit` | Quit BrickLogo. Disconnects all devices. |
-| `firmware "device "file` | Upload firmware to an RCX or Build HAT. |
 
 Press **Escape** during a running program to stop it.
 
@@ -1642,7 +1641,7 @@ BrickLogo runs as an interactive REPL by default. Passing a script path or `-` r
 
 Flags work in either mode — e.g. `bricklogo --host script.logo` runs a script while also hosting a network session.
 
-See [Advanced Usage](04-advanced.md) for details on script mode, networking, passwords, and browser clients.
+See [Advanced Usage](04-advanced.md) for details on script mode, networking, passwords, browser clients, and firmware upload.
 
 ---
 
