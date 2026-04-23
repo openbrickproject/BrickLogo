@@ -27,6 +27,56 @@ pub(crate) trait TerminalRestorer {
     fn show_cursor(&mut self) -> io::Result<()>;
 }
 
+/// One Esc keypress. Priority:
+///
+/// 1. Running a program → stop it and clear any pending Esc window.
+/// 2. Inside a multi-line definition → cancel it and clear the window.
+/// 3. Armed window is still open → clear the current input line.
+/// 4. Non-empty input and no armed window → arm the window and flash
+///    "Press Esc again to clear line".
+/// 5. Empty input and no armed window → no-op.
+pub(crate) fn handle_escape_press(
+    app: &mut App,
+    esc_at: &mut Option<Instant>,
+    now: Instant,
+) {
+    if app.busy {
+        app.request_stop();
+        *esc_at = None;
+        app.esc_message = false;
+    } else if app.multi_line.is_some() {
+        app.cancel_definition();
+        *esc_at = None;
+        app.esc_message = false;
+    } else if esc_at.is_some() {
+        app.input.clear();
+        app.cursor_position = 0;
+        *esc_at = None;
+        app.esc_message = false;
+    } else if !app.input.is_empty() {
+        *esc_at = Some(now);
+        app.esc_message = true;
+    }
+}
+
+/// Expire the double-Esc window if more than 1 second has passed since
+/// it was armed. Returns `true` if state changed (so the caller can
+/// decide to redraw).
+pub(crate) fn expire_esc_window(
+    app: &mut App,
+    esc_at: &mut Option<Instant>,
+    now: Instant,
+) -> bool {
+    if let Some(at) = *esc_at {
+        if now.duration_since(at) > Duration::from_secs(1) {
+            *esc_at = None;
+            app.esc_message = false;
+            return true;
+        }
+    }
+    false
+}
+
 impl TerminalLifecycle {
     pub(crate) fn mark_raw_mode_enabled(&mut self) {
         self.raw_mode_enabled = true;
@@ -93,6 +143,7 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut needs_draw = true;
     let mut ctrlc_at: Option<Instant> = None;
+    let mut esc_at: Option<Instant> = None;
 
     // SIGINT: flag a quit request. The main loop polls this so cleanup runs.
     let sigint = Arc::new(AtomicBool::new(false));
@@ -114,6 +165,11 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                 app.ctrlc_message = false;
                 needs_draw = true;
             }
+        }
+
+        // Expire the double-Esc window
+        if expire_esc_window(&mut app, &mut esc_at, Instant::now()) {
+            needs_draw = true;
         }
 
         if needs_draw {
@@ -155,13 +211,10 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // Escape
+                // Escape — see `handle_escape_press` for the full
+                // priority order.
                 if key.code == KeyCode::Esc {
-                    if app.busy {
-                        app.request_stop();
-                    } else if app.multi_line.is_some() {
-                        app.cancel_definition();
-                    }
+                    handle_escape_press(&mut app, &mut esc_at, Instant::now());
                     needs_draw = true;
                     continue;
                 }

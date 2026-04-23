@@ -110,6 +110,15 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if app.esc_message {
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            "Press Esc again to clear line",
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
     let mut spans: Vec<Span> = Vec::new();
 
     spans.extend(format_device_line(app));

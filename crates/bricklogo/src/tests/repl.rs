@@ -218,3 +218,134 @@ fn test_word_boundary_multiple_spaces() {
     assert_eq!(word_boundary_left("hello   world", 13), 8);
     assert_eq!(word_boundary_right("hello   world", 0), 8);
 }
+
+// ── Double-Esc: clear current line ──────────────
+
+use bricklogo_tui::app::App;
+use std::time::{Duration, Instant};
+
+fn make_app_with_input(s: &str) -> App {
+    let mut app = App::new(None, "0.0.0", None).unwrap();
+    app.input = s.to_string();
+    app.cursor_position = s.len();
+    app
+}
+
+#[test]
+fn test_escape_on_empty_input_is_noop() {
+    let mut app = make_app_with_input("");
+    let mut esc_at: Option<Instant> = None;
+    handle_escape_press(&mut app, &mut esc_at, Instant::now());
+    assert!(esc_at.is_none(), "Esc on empty input must not arm the window");
+    assert!(!app.esc_message, "no flash message on empty input");
+}
+
+#[test]
+fn test_first_escape_with_input_arms_window() {
+    let mut app = make_app_with_input("rotate 90");
+    let mut esc_at: Option<Instant> = None;
+    let now = Instant::now();
+    handle_escape_press(&mut app, &mut esc_at, now);
+    assert!(esc_at.is_some(), "first Esc should arm the window");
+    assert!(app.esc_message);
+    // Input is untouched on the first press.
+    assert_eq!(app.input, "rotate 90");
+    assert_eq!(app.cursor_position, 9);
+}
+
+#[test]
+fn test_second_escape_within_window_clears_input() {
+    let mut app = make_app_with_input("rotate 90");
+    let mut esc_at = Some(Instant::now());
+    app.esc_message = true;
+    handle_escape_press(&mut app, &mut esc_at, Instant::now());
+    assert!(app.input.is_empty(), "second Esc should clear the input");
+    assert_eq!(app.cursor_position, 0);
+    assert!(esc_at.is_none(), "window should close after clearing");
+    assert!(!app.esc_message);
+}
+
+#[test]
+fn test_escape_while_busy_requests_stop_and_clears_window() {
+    let mut app = make_app_with_input("forever");
+    app.busy = true;
+    // Pretend the user had armed Esc before going busy.
+    let mut esc_at = Some(Instant::now());
+    app.esc_message = true;
+    handle_escape_press(&mut app, &mut esc_at, Instant::now());
+    // Input must not be cleared — busy mode means stop-the-running-program.
+    assert_eq!(app.input, "forever");
+    // Armed window is reset so double-Esc doesn't accidentally clear after stop.
+    assert!(esc_at.is_none());
+    assert!(!app.esc_message);
+    // Stop flag propagates via App::request_stop — we can't observe that
+    // without reaching into private state, but the priority is correct if
+    // no other side effect fired (input unchanged).
+}
+
+#[test]
+fn test_escape_in_multiline_cancels_definition_and_clears_window() {
+    let mut app = make_app_with_input("");
+    // Start a definition so multi_line is Some.
+    app.input = "to greet".to_string();
+    app.submit_input();
+    assert!(app.multi_line.is_some());
+    app.input = "partial".to_string();
+    app.cursor_position = app.input.len();
+
+    let mut esc_at: Option<Instant> = None;
+    handle_escape_press(&mut app, &mut esc_at, Instant::now());
+
+    assert!(app.multi_line.is_none(), "Esc should cancel the definition");
+    // Input line itself is left as-is — single Esc in multi-line bails
+    // out of the definition, not the line buffer.
+    assert_eq!(app.input, "partial");
+    assert!(esc_at.is_none());
+    assert!(!app.esc_message);
+}
+
+#[test]
+fn test_expire_esc_window_clears_stale_arm() {
+    let mut app = make_app_with_input("x");
+    let mut esc_at = Some(Instant::now() - Duration::from_secs(2));
+    app.esc_message = true;
+    let changed = expire_esc_window(&mut app, &mut esc_at, Instant::now());
+    assert!(changed, "expired window should report state change");
+    assert!(esc_at.is_none());
+    assert!(!app.esc_message);
+}
+
+#[test]
+fn test_expire_esc_window_keeps_fresh_arm() {
+    let mut app = make_app_with_input("x");
+    let mut esc_at = Some(Instant::now());
+    app.esc_message = true;
+    let changed = expire_esc_window(&mut app, &mut esc_at, Instant::now());
+    assert!(!changed);
+    assert!(esc_at.is_some(), "recent arm must not be expired");
+    assert!(app.esc_message);
+}
+
+#[test]
+fn test_expire_esc_window_no_op_when_not_armed() {
+    let mut app = make_app_with_input("x");
+    let mut esc_at: Option<Instant> = None;
+    let changed = expire_esc_window(&mut app, &mut esc_at, Instant::now());
+    assert!(!changed);
+}
+
+#[test]
+fn test_esc_outside_window_acts_as_first_press_again() {
+    // Arm the window at t=0, simulate expiry at t=2s, then press Esc
+    // again with no arming — should re-arm, not clear.
+    let mut app = make_app_with_input("hello");
+    let mut esc_at = Some(Instant::now() - Duration::from_secs(2));
+    app.esc_message = true;
+    let now = Instant::now();
+    expire_esc_window(&mut app, &mut esc_at, now);
+    assert!(esc_at.is_none());
+
+    handle_escape_press(&mut app, &mut esc_at, now);
+    assert!(esc_at.is_some(), "Esc after expiry should re-arm, not clear");
+    assert_eq!(app.input, "hello");
+}

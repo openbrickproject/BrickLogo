@@ -95,6 +95,7 @@ pub struct App {
     pub net_status: Option<Arc<Mutex<String>>>,
     pub version: String,
     pub ctrlc_message: bool,
+    pub esc_message: bool,
 }
 
 impl App {
@@ -165,6 +166,7 @@ impl App {
             net_status: net_status_arc,
             version: version.to_string(),
             ctrlc_message: false,
+            esc_message: false,
         };
 
         if let Some(msg) = net_init_msg {
