@@ -271,7 +271,15 @@ BrickLogo auto-selects the correct image for the hub's hardware revision (origin
 
 ### Build HAT
 
-The Build HAT needs firmware uploaded every time the Pi powers on. BrickLogo does this automatically during `connectto "buildhat`. There is no CLI command — the auto-upload at connect time is the only supported path.
+The Build HAT needs firmware uploaded every time the Pi powers on. BrickLogo does this automatically during `connectto "buildhat`, so most users never need to run the CLI command manually.
+
+If you want to upload firmware explicitly — for example, to load a newer version before first use — run:
+
+```
+bricklogo --firmware buildhat
+```
+
+The Build HAT must be in its bootloader. Bootloader mode happens automatically for a few seconds after the Pi powers on, before anything else connects to it. If the Build HAT is already running firmware, BrickLogo will report the version and exit; power-cycle the Pi and run the command again before anything else opens `/dev/serial0`.
 
 ## See also
 

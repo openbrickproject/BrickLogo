@@ -16,6 +16,7 @@ pub fn run(args: FirmwareArgs) -> Result<(), Box<dyn std::error::Error>> {
     match args.device {
         FirmwareDevice::Rcx => run_rcx(args.image).map_err(Into::into),
         FirmwareDevice::Spike => run_spike(args.image).map_err(Into::into),
+        FirmwareDevice::BuildHat => run_buildhat(args.image).map_err(Into::into),
     }
 }
 
@@ -246,6 +247,94 @@ pub fn detect_spike() -> Result<SpikeMode, String> {
     }
 
     Ok(SpikeMode::None)
+}
+
+// ── Build HAT ───────────────────────────────────
+
+#[cfg(not(target_os = "linux"))]
+fn run_buildhat(_image: Option<PathBuf>) -> Result<(), String> {
+    println!("Build HAT firmware upload requires a Raspberry Pi running Linux.");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "linux")]
+fn run_buildhat(image: Option<PathBuf>) -> Result<(), String> {
+    use rust_buildhat::constants::{DEFAULT_BAUD_RATE, DEFAULT_SERIAL_PATH};
+    use rust_buildhat::firmware;
+    use rust_buildhat::protocol::HatState;
+
+    // Resolve the firmware .bin (and its signature sibling). The Pi
+    // firmware convention is `<name>-firmware-<hash>.bin` paired with
+    // `<name>-signature-<hash>.bin`; users passing `--image` must follow
+    // the same convention so we can locate the signature automatically.
+    let fw_path = image.unwrap_or_else(|| {
+        bundled_dir()
+            .join("buildhat")
+            .join("buildhat-firmware-1902784.bin")
+    });
+    let sig_path = match derive_buildhat_signature_path(&fw_path) {
+        Some(p) => p,
+        None => {
+            return Err(format!(
+                "cannot derive signature path from {} — filename must contain \"firmware\"",
+                fw_path.display()
+            ));
+        }
+    };
+    let fw_data = std::fs::read(&fw_path)
+        .map_err(|e| format!("cannot read {}: {}", fw_path.display(), e))?;
+    let sig_data = std::fs::read(&sig_path).map_err(|e| {
+        format!("cannot read signature {}: {}", sig_path.display(), e)
+    })?;
+
+    let mut port = serialport::new(DEFAULT_SERIAL_PATH, DEFAULT_BAUD_RATE)
+        .timeout(std::time::Duration::from_millis(200))
+        .open()
+        .map_err(|e| format!("failed to open {}: {}", DEFAULT_SERIAL_PATH, e))?;
+
+    let state = firmware::detect_state(&mut *port)?;
+    match state {
+        HatState::Firmware(version) => {
+            println!("Build HAT detected running firmware {}.", version);
+            println!();
+            println!("The Build HAT is already running firmware. To re-flash, power-cycle");
+            println!("the Raspberry Pi (or remove and re-seat the HAT) so the Build HAT");
+            println!("comes up in bootloader mode, then run `bricklogo --firmware buildhat`");
+            println!("again before anything else connects to it.");
+            std::process::exit(1);
+        }
+        HatState::Bootloader => {
+            println!("Build HAT detected in bootloader mode.");
+        }
+    }
+
+    println!("Uploading {}...", fw_path.display());
+    // Build HAT's firmware uploader takes a phase-only progress hook
+    // (no byte counts). Skip the progress bar for it so the CLI output
+    // still aligns with RCX / SPIKE: a single "Uploading …" line.
+    let progress: firmware::ProgressFn = Box::new(|_phase| {});
+    firmware::upload_firmware(&mut *port, &fw_data, &sig_data, &progress)?;
+
+    // Verify firmware booted.
+    let after = firmware::detect_state(&mut *port)?;
+    if let HatState::Bootloader = after {
+        return Err("Build HAT stayed in bootloader after upload".into());
+    }
+    println!("Done.");
+    Ok(())
+}
+
+/// Derive `<stem>-signature-<hash>.bin` from `<stem>-firmware-<hash>.bin`.
+/// The Pi firmware archives always pair these two filenames.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn derive_buildhat_signature_path(firmware_path: &Path) -> Option<PathBuf> {
+    let parent = firmware_path.parent()?;
+    let name = firmware_path.file_name()?.to_string_lossy();
+    let sig_name = name.replace("firmware", "signature");
+    if sig_name == name {
+        return None;
+    }
+    Some(parent.join(sig_name))
 }
 
 // ── Helpers ─────────────────────────────────────

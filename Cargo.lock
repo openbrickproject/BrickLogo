@@ -104,6 +104,7 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "ratatui",
+ "rust-buildhat",
  "rust-controllab",
  "rust-coral",
  "rust-poweredup",

@@ -13,6 +13,7 @@ pub struct NetArgs {
 pub enum FirmwareDevice {
     Rcx,
     Spike,
+    BuildHat,
 }
 
 pub struct FirmwareArgs {
@@ -59,8 +60,9 @@ pub fn parse_cli_args() -> Cli {
                 firmware_device = Some(match args[i + 1].as_str() {
                     "rcx" => FirmwareDevice::Rcx,
                     "spike" => FirmwareDevice::Spike,
+                    "buildhat" => FirmwareDevice::BuildHat,
                     other => {
-                        eprintln!("--firmware expects 'rcx' or 'spike', got {:?}", other);
+                        eprintln!("--firmware expects 'rcx', 'spike', or 'buildhat', got {:?}", other);
                         std::process::exit(1);
                     }
                 });

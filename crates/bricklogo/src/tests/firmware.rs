@@ -30,6 +30,23 @@ fn test_chip_filenames_exist_in_bundled() {
 }
 
 #[test]
+fn test_buildhat_signature_path_derivation() {
+    use std::path::PathBuf;
+    let p = PathBuf::from("/opt/bl/firmware/buildhat/buildhat-firmware-1902784.bin");
+    let sig = derive_buildhat_signature_path(&p).unwrap();
+    assert_eq!(
+        sig,
+        PathBuf::from("/opt/bl/firmware/buildhat/buildhat-signature-1902784.bin")
+    );
+}
+
+#[test]
+fn test_buildhat_signature_derivation_rejects_non_conforming_name() {
+    use std::path::PathBuf;
+    assert!(derive_buildhat_signature_path(&PathBuf::from("/tmp/custom.bin")).is_none());
+}
+
+#[test]
 fn test_bundled_dir_defaults_to_firmware() {
     // Regardless of execution location, bundled_dir should always return
     // something — either a real path next to the binary or the fallback.

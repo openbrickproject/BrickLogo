@@ -14,6 +14,7 @@ rust-coral = { path = "../rust-coral" }
 rust-wedo = { path = "../rust-wedo" }
 rust-controllab = { path = "../rust-controllab" }
 bricklogo-net = { path = "../bricklogo-net" }
+rust-buildhat = { path = "../rust-buildhat" }
 rust-rcx = { path = "../rust-rcx" }
 rust-spike = { path = "../rust-spike" }
 rust-stm32dfu = { path = "../rust-stm32dfu" }
