@@ -3,6 +3,7 @@ use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
 use bricklogo_hal::adapters::ev3_adapter::EV3Adapter;
+use bricklogo_hal::adapters::nxt_adapter::NxtAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::spike_adapter::SpikeAdapter;
@@ -29,6 +30,8 @@ pub struct BrickLogoConfig {
     pub rcx: Vec<String>,
     #[serde(default)]
     pub ev3: Vec<String>,
+    #[serde(default)]
+    pub nxt: Vec<String>,
     #[serde(default)]
     pub spike: Vec<String>,
 }
@@ -172,6 +175,15 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "nxt" => {
+                        let identifier = next_config_entry(&config.nxt, &mut indices, "nxt");
+                        let mut adapter = NxtAdapter::new(identifier.as_deref());
+                        system_fn_ref("Connecting to LEGO Mindstorms NXT...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     "spike" => {
                         let serial_path = next_config_entry(&config.spike, &mut indices, "spike");
                         let mut adapter = SpikeAdapter::new(serial_path.as_deref());
@@ -183,7 +195,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", \"ev3\", or \"spike\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\""
                                 .to_string(),
                         ));
                     }

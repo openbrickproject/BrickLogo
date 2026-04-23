@@ -130,6 +130,7 @@ dependencies = [
  "rust-controllab",
  "rust-coral",
  "rust-ev3",
+ "rust-nxt",
  "rust-poweredup",
  "rust-rcx",
  "rust-spike",
@@ -1159,6 +1160,14 @@ name = "rust-ev3"
 version = "0.1.0"
 dependencies = [
  "hidapi",
+ "serialport",
+]
+
+[[package]]
+name = "rust-nxt"
+version = "0.1.0"
+dependencies = [
+ "rusb",
  "serialport",
 ]
 

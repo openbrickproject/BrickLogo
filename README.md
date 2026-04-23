@@ -58,6 +58,7 @@ Connected to Boost Move Hub as "mybot"
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
 | LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
+| LEGO Mindstorms NXT | `connectto "nxt "name` | NXT 1.0 / 2.0 via USB or Bluetooth |
 | LEGO SPIKE Prime | `connectto "spike "name` | SPIKE Prime / Robot Inventor hub via USB or Bluetooth |
 | Raspberry Pi Build HAT | `connectto "buildhat "name` | Powered UP and SPIKE motors and sensors |
 
@@ -65,17 +66,18 @@ Multiple devices can be connected at the same time. Each is given a name and add
 
 ## Configuration
 
-BrickLogo looks for `bricklogo.config.json` in the current working directory. This is only needed for devices that connect over serial (Control Lab, RCX serial towers, EV3 Bluetooth). USB and BLE devices are detected automatically.
+BrickLogo looks for `bricklogo.config.json` in the current working directory. This is only needed for devices that connect over serial (Control Lab, RCX serial towers, EV3 Bluetooth, NXT Bluetooth). USB and BLE devices are detected automatically.
 
 ```json
 {
   "controllab": ["/dev/tty.usbserial-AC018HBC"],
   "rcx": ["/dev/ttyS0"],
-  "ev3": ["/dev/cu.EV3-SerialPort-14"]
+  "ev3": ["/dev/cu.EV3-SerialPort-14"],
+  "nxt": ["/dev/cu.NXT-DevB"]
 }
 ```
 
-Serial paths are used in order as devices are connected. WeDo 1.0, RCX USB towers, and EV3 USB connections are detected automatically and do not need a config entry.
+Serial paths are used in order as devices are connected. WeDo 1.0, RCX USB towers, EV3 USB, and NXT USB connections are detected automatically and do not need a config entry.
 
 ## Commands
 

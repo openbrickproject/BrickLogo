@@ -11,6 +11,7 @@ members = [
     "crates/rust-rcx",
     "crates/rust-buildhat",
     "crates/rust-ev3",
+    "crates/rust-nxt",
     "crates/rust-spike",
     "crates/rust-stm32dfu",
     "crates/bricklogo-net",

@@ -14,6 +14,7 @@ rust-poweredup = { path = "../rust-poweredup" }
 rust-rcx = { path = "../rust-rcx" }
 rust-buildhat = { path = "../rust-buildhat" }
 rust-ev3 = { path = "../rust-ev3" }
+rust-nxt = { path = "../rust-nxt" }
 rust-spike = { path = "../rust-spike" }
 lazy_static = "1"
 hidapi = "2.6"

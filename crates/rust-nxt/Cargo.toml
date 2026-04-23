@@ -1,0 +1,10 @@
+[package]
+name = "rust-nxt"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Mindstorms NXT LCP protocol library"
+license = "Apache-2.0"
+
+[dependencies]
+rusb = "0.9"
+serialport = "4"
