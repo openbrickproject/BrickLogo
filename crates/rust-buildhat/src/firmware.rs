@@ -1,5 +1,4 @@
-#[allow(unused_imports)]
-use std::io::Read;
+use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 use crate::constants::*;
 use crate::protocol::*;
@@ -7,8 +6,10 @@ use crate::protocol::*;
 /// Progress callback: (phase description).
 pub type ProgressFn = Box<dyn Fn(&str) + Send>;
 
-/// Detect the current state of the Build HAT.
-pub fn detect_state(port: &mut dyn serialport::SerialPort) -> Result<HatState, String> {
+/// Detect the current state of the Build HAT. `port` is any reader/writer —
+/// in production the `serialport::SerialPort` wrapping `/dev/serial0`;
+/// tests pass a scripted mock implementing `Read + Write`.
+pub fn detect_state<P: Read + Write + ?Sized>(port: &mut P) -> Result<HatState, String> {
     let cmd = cmd_version();
     for _ in 0..5 {
         port.write_all(cmd.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
@@ -36,9 +37,9 @@ pub fn detect_state(port: &mut dyn serialport::SerialPort) -> Result<HatState, S
     Err("No Build HAT detected".to_string())
 }
 
-/// Upload firmware to the Build HAT.
-pub fn upload_firmware(
-    port: &mut dyn serialport::SerialPort,
+/// Upload firmware to the Build HAT bootloader.
+pub fn upload_firmware<P: Read + Write + ?Sized>(
+    port: &mut P,
     firmware: &[u8],
     signature: &[u8],
     progress: &ProgressFn,
@@ -98,13 +99,13 @@ pub fn upload_firmware(
     Ok(())
 }
 
-fn write_and_flush(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<(), String> {
+fn write_and_flush<P: Read + Write + ?Sized>(port: &mut P, data: &[u8]) -> Result<(), String> {
     port.write_all(data).map_err(|e| format!("Write failed: {}", e))?;
     port.flush().map_err(|e| format!("Flush failed: {}", e))?;
     Ok(())
 }
 
-fn wait_for_prompt(port: &mut dyn serialport::SerialPort, prompt: &str) -> Result<(), String> {
+fn wait_for_prompt<P: Read + Write + ?Sized>(port: &mut P, prompt: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut buf = [0u8; 256];
     let mut response = String::new();
@@ -123,3 +124,7 @@ fn wait_for_prompt(port: &mut dyn serialport::SerialPort, prompt: &str) -> Resul
 
     Err(format!("Timed out waiting for '{}'", prompt))
 }
+
+#[cfg(test)]
+#[path = "tests/firmware.rs"]
+mod tests;
