@@ -224,6 +224,112 @@ fn test_buildhat_rotate_ports_to_abs_fires_both_ramps_before_waiting() {
 }
 
 #[test]
+fn test_buildhat_rotate_ports_by_degrees_fires_both_ramps_before_waiting() {
+    // Regression guard: `rotate_ports_by_degrees` must queue every ramp up
+    // front and then block on the completion flags, not loop over
+    // `rotate_port_by_degrees` (which would serialize the hub). If the
+    // override is removed and the default trait impl is used, only one
+    // ramp will be observed when the flipper thread samples.
+    let (mut adapter, writes, shared) = make_adapter_with_absolute_motors(0.0, 0.0);
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+
+    let writes_for_flipper = writes.clone();
+    let shared_for_flipper = shared.clone();
+    let ramps_at_flip = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let ramp_count = writes_for_flipper
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|w| w.contains("ramp"))
+                .count();
+            if ramp_count >= 2 || std::time::Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let ramp_count = writes_for_flipper
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|w| w.contains("ramp"))
+            .count();
+        let mut s = shared_for_flipper.lock().unwrap();
+        s.completions[0] = true;
+        s.completions[1] = true;
+        ramp_count
+    });
+
+    adapter.rotate_ports_by_degrees(&commands, 360).unwrap();
+    let ramps_observed = ramps_at_flip.join().unwrap();
+    adapter.disconnect();
+
+    assert_eq!(
+        ramps_observed, 2,
+        "both ramps should be queued before waiting on completions (observed {})",
+        ramps_observed
+    );
+}
+
+#[test]
+fn test_buildhat_rotate_ports_to_position_fires_both_ramps_before_waiting() {
+    // Regression guard, same as above but for the relative-position variant.
+    let (mut adapter, writes, shared) = make_adapter_with_absolute_motors(0.0, 0.0);
+    // Seed non-zero relative positions so both motors need a rotation delta.
+    {
+        let mut s = shared.lock().unwrap();
+        s.sensor_data.insert("0:0".into(), vec![0.0, 90.0, 0.0]);
+        s.sensor_data.insert("1:0".into(), vec![0.0, 90.0, 0.0]);
+    }
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+
+    let writes_for_flipper = writes.clone();
+    let shared_for_flipper = shared.clone();
+    let ramps_at_flip = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let ramp_count = writes_for_flipper
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|w| w.contains("ramp"))
+                .count();
+            if ramp_count >= 2 || std::time::Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let ramp_count = writes_for_flipper
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|w| w.contains("ramp"))
+            .count();
+        let mut s = shared_for_flipper.lock().unwrap();
+        s.completions[0] = true;
+        s.completions[1] = true;
+        ramp_count
+    });
+
+    adapter.rotate_ports_to_position(&commands, 0).unwrap();
+    let ramps_observed = ramps_at_flip.join().unwrap();
+    adapter.disconnect();
+
+    assert_eq!(
+        ramps_observed, 2,
+        "both ramps should be queued before waiting on completions (observed {})",
+        ramps_observed
+    );
+}
+
+#[test]
 fn test_buildhat_start_ports_sends_per_port_set() {
     // Direct test of start_ports: should emit one `set` per port.
     let (mut adapter, writes) = make_adapter_with_mock();

@@ -265,6 +265,52 @@ fn test_parallel_onfor_uses_parallel_op() {
 }
 
 #[test]
+fn test_parallel_rotate_to_abs_uses_parallel_op() {
+    // Regression guard against the batch override being removed in favour
+    // of the default per-port loop.
+    let (mut adapter, state) = make_adapter();
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Odd, power: 50 },
+    ];
+    adapter.rotate_ports_to_abs(&commands, 0).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PARALLEL_RUN_TO_ABS);
+    assert_eq!(cmd[3], 2, "count of entries in parallel op");
+}
+
+#[test]
+fn test_parallel_rotate_to_position_uses_parallel_op() {
+    // `rotate_ports_to_position` reads the current rotation for each port
+    // (so N read commands are emitted), then should dispatch ONE
+    // `parallel_run_for_degrees` with every non-zero delta.
+    let (mut adapter, state) = make_adapter_with_override(Some(Reply::Int(90)));
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+    adapter.rotate_ports_to_position(&commands, 0).unwrap();
+    let cmds = state.lock().unwrap().commands.clone();
+    adapter.disconnect();
+
+    // Commands emitted: read(a), read(b), parallel_run_for_degrees.
+    let parallel = cmds
+        .iter()
+        .find(|c| parse_op(c) == protocol::OP_PARALLEL_RUN_FOR_DEGREES)
+        .expect("expected one parallel_run_for_degrees command");
+    assert_eq!(parallel[3], 2, "two ports in the parallel op");
+    let per_port_count = cmds
+        .iter()
+        .filter(|c| parse_op(c) == protocol::OP_MOTOR_RUN_FOR_DEGREES)
+        .count();
+    assert_eq!(
+        per_port_count, 0,
+        "expected no per-port MOTOR_RUN_FOR_DEGREES (that would mean sequential fallback)"
+    );
+}
+
+#[test]
 fn test_reset_zero() {
     let (mut adapter, state) = make_adapter();
     adapter.reset_port_zero("d").unwrap();

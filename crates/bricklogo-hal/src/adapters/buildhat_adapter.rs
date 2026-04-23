@@ -738,6 +738,143 @@ impl HardwareAdapter for BuildHATAdapter {
         }
     }
 
+    fn rotate_ports_by_degrees(
+        &mut self,
+        commands: &[PortCommand],
+        degrees: i32,
+    ) -> Result<(), String> {
+        // Same within-hub parallelism as `rotate_ports_to_abs`: plan every
+        // port (build MotorRamp args), queue all ramps without waiting,
+        // then poll the completion flags.
+        let mut plans: Vec<(u8, f64, f64, f64)> = Vec::new();
+        for cmd in commands {
+            let idx = self.port_index(cmd.port)?;
+            let type_id = self.require_device(idx)?;
+            if !is_tacho_motor(type_id) {
+                return Err("This motor does not support rotation by degrees".to_string());
+            }
+            let speed = to_signed_speed(cmd.direction, cmd.power).abs().max(1);
+            let current = {
+                let shared = self.shared.lock().unwrap();
+                shared.sensor_data.get(&format!("{}:0", idx))
+                    .and_then(|v| v.get(1).copied())
+                    .unwrap_or(0.0)
+            };
+            let from_rot = current / 360.0;
+            let delta = if cmd.direction == PortDirection::Even { degrees } else { -degrees };
+            let to_rot = from_rot + (delta as f64 / 360.0);
+            let duration = (degrees.abs() as f64 / 360.0) / (speed as f64 / 100.0);
+            plans.push((idx, from_rot, to_rot, duration));
+        }
+
+        if plans.is_empty() {
+            return Ok(());
+        }
+
+        {
+            let mut shared = self.shared.lock().unwrap();
+            for &(idx, _, _, _) in &plans {
+                shared.completions[idx as usize] = false;
+            }
+        }
+        for &(idx, from, to, duration) in &plans {
+            self.send_cmd(BuildHATCommand::MotorRamp {
+                port: idx,
+                from,
+                to,
+                duration,
+            })?;
+        }
+
+        let max_duration = plans.iter().map(|p| p.3).fold(0.0f64, f64::max);
+        let timeout_secs = (max_duration as u64) + 5;
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        loop {
+            if Instant::now() > deadline {
+                return Err("Command timed out".to_string());
+            }
+            let all_done = {
+                let shared = self.shared.lock().unwrap();
+                plans.iter().all(|&(idx, _, _, _)| shared.completions[idx as usize])
+            };
+            if all_done {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    fn rotate_ports_to_position(
+        &mut self,
+        commands: &[PortCommand],
+        position: i32,
+    ) -> Result<(), String> {
+        // Same within-hub parallelism as `rotate_ports_to_abs`: plan every
+        // port first (read relative encoder, compute mod-360 delta, build
+        // MotorRamp args), queue all ramps without waiting, then poll the
+        // completion flags until every planned port is done.
+        let mut plans: Vec<(u8, f64, f64, f64)> = Vec::new();
+        for cmd in commands {
+            let idx = self.port_index(cmd.port)?;
+            let type_id = self.require_device(idx)?;
+            if !is_tacho_motor(type_id) {
+                return Err("This motor does not support rotation to position".to_string());
+            }
+            let current = {
+                let shared = self.shared.lock().unwrap();
+                shared.sensor_data.get(&format!("{}:0", idx))
+                    .and_then(|v| v.get(1).copied())
+                    .unwrap_or(0.0)
+            };
+            let delta = crate::adapter::rotateto_delta(current as i32, position, cmd.direction);
+            if delta == 0 {
+                continue;
+            }
+            let degrees = delta.unsigned_abs() as i32;
+            let speed = to_signed_speed(cmd.direction, cmd.power).abs().max(1);
+            let from_rot = current / 360.0;
+            let to_rot = from_rot + (delta as f64 / 360.0);
+            let duration = (degrees as f64 / 360.0) / (speed as f64 / 100.0);
+            plans.push((idx, from_rot, to_rot, duration));
+        }
+
+        if plans.is_empty() {
+            return Ok(());
+        }
+
+        {
+            let mut shared = self.shared.lock().unwrap();
+            for &(idx, _, _, _) in &plans {
+                shared.completions[idx as usize] = false;
+            }
+        }
+        for &(idx, from, to, duration) in &plans {
+            self.send_cmd(BuildHATCommand::MotorRamp {
+                port: idx,
+                from,
+                to,
+                duration,
+            })?;
+        }
+
+        let max_duration = plans.iter().map(|p| p.3).fold(0.0f64, f64::max);
+        let timeout_secs = (max_duration as u64) + 5;
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        loop {
+            if Instant::now() > deadline {
+                return Err("Command timed out".to_string());
+            }
+            let all_done = {
+                let shared = self.shared.lock().unwrap();
+                plans.iter().all(|&(idx, _, _, _)| shared.completions[idx as usize])
+            };
+            if all_done {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String> {
         let idx = self.port_index(port)?;
         let device_type = {
