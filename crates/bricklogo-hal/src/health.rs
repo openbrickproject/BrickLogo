@@ -28,22 +28,43 @@ pub fn start(
     thread::spawn(move || {
         loop {
             thread::sleep(POLL_INTERVAL);
-
-            // Identify dead devices outside the long-lived lock.
-            let dead: Vec<String> = {
-                let pm = match port_manager.lock() {
-                    Ok(g) => g,
-                    Err(_) => return, // port_manager poisoned; exit silently
-                };
-                pm.dead_device_names()
-            };
-
-            for name in dead {
-                system_fn(&format!("Device \"{}\" lost connection", name));
-                if let Ok(mut pm) = port_manager.lock() {
-                    pm.remove_device(&name);
-                }
+            if tick(&port_manager, &*system_fn).is_break() {
+                return;
             }
         }
     });
 }
+
+/// Single health-check pass: find dead devices, emit a system message for
+/// each, remove them from the manager. Returns `ControlFlow::Break` when
+/// the port-manager lock is poisoned — the daemon thread exits silently
+/// in that case because the caller can't recover.
+///
+/// Extracted so tests can exercise the reconciliation logic without a
+/// real background thread.
+pub(crate) fn tick(
+    port_manager: &Mutex<PortManager>,
+    system_fn: &(dyn Fn(&str) + Send + Sync),
+) -> std::ops::ControlFlow<()> {
+    let dead: Vec<String> = {
+        let pm = match port_manager.lock() {
+            Ok(g) => g,
+            Err(_) => return std::ops::ControlFlow::Break(()),
+        };
+        pm.dead_device_names()
+    };
+
+    for name in dead {
+        system_fn(&format!("Device \"{}\" lost connection", name));
+        if let Ok(mut pm) = port_manager.lock() {
+            pm.remove_device(&name);
+        } else {
+            return std::ops::ControlFlow::Break(());
+        }
+    }
+    std::ops::ControlFlow::Continue(())
+}
+
+#[cfg(test)]
+#[path = "tests/health.rs"]
+mod tests;

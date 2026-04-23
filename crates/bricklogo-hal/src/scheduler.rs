@@ -140,3 +140,7 @@ fn scheduler_loop() {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/scheduler.rs"]
+mod tests;

@@ -9,6 +9,7 @@ use bricklogo_tui::runtime::build_evaluator;
 
 use crate::cli::NetArgs;
 
+#[derive(Debug)]
 pub enum ScriptSource {
     File(PathBuf),
     Stdin,

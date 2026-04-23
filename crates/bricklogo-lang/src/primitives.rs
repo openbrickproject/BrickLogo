@@ -810,3 +810,7 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         },
     );
 }
+
+#[cfg(test)]
+#[path = "tests/primitives.rs"]
+mod tests;

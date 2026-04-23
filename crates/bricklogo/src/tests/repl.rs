@@ -70,6 +70,75 @@ fn test_terminal_lifecycle_show_cursor_runs_even_without_setup() {
     assert_eq!(restorer.calls, vec!["show_cursor"]);
 }
 
+#[test]
+fn test_terminal_lifecycle_restore_is_idempotent() {
+    // Calling restore twice should be harmless — the second call only
+    // emits show_cursor because the other flags were cleared by the first.
+    let mut lifecycle = TerminalLifecycle::default();
+    lifecycle.mark_raw_mode_enabled();
+    lifecycle.mark_alt_screen_entered();
+    let mut restorer = FakeRestorer::default();
+
+    lifecycle.restore(&mut restorer).unwrap();
+    let first_calls = restorer.calls.clone();
+    restorer.calls.clear();
+
+    lifecycle.restore(&mut restorer).unwrap();
+    assert_eq!(first_calls, vec!["disable_raw_mode", "leave_alt_screen", "show_cursor"]);
+    assert_eq!(restorer.calls, vec!["show_cursor"]);
+}
+
+#[test]
+fn test_terminal_lifecycle_restore_propagates_raw_mode_error() {
+    // If disable_raw_mode fails, restore should return the error without
+    // swallowing it. The state flag is still cleared optimistically — the
+    // contract is "we tried", not "we succeeded".
+    let mut lifecycle = TerminalLifecycle::default();
+    lifecycle.mark_raw_mode_enabled();
+    lifecycle.mark_alt_screen_entered();
+    let mut restorer = FakeRestorer {
+        fail_on: Some("disable_raw_mode"),
+        ..Default::default()
+    };
+
+    let err = lifecycle.restore(&mut restorer).unwrap_err();
+    assert!(format!("{}", err).contains("fail"));
+}
+
+#[test]
+fn test_terminal_lifecycle_restore_propagates_alt_screen_error() {
+    let mut lifecycle = TerminalLifecycle::default();
+    lifecycle.mark_raw_mode_enabled();
+    lifecycle.mark_alt_screen_entered();
+    let mut restorer = FakeRestorer {
+        fail_on: Some("leave_alt_screen"),
+        ..Default::default()
+    };
+
+    let err = lifecycle.restore(&mut restorer).unwrap_err();
+    assert!(format!("{}", err).contains("fail"));
+    // disable_raw_mode ran before the failure.
+    assert!(restorer.calls.contains(&"disable_raw_mode"));
+}
+
+#[test]
+fn test_terminal_lifecycle_default_is_clean_slate() {
+    let lifecycle = TerminalLifecycle::default();
+    assert!(!lifecycle.raw_mode_enabled);
+    assert!(!lifecycle.alt_screen_entered);
+}
+
+#[test]
+fn test_terminal_lifecycle_mark_methods_set_flags() {
+    let mut lifecycle = TerminalLifecycle::default();
+    lifecycle.mark_raw_mode_enabled();
+    assert!(lifecycle.raw_mode_enabled);
+    assert!(!lifecycle.alt_screen_entered);
+    lifecycle.mark_alt_screen_entered();
+    assert!(lifecycle.raw_mode_enabled);
+    assert!(lifecycle.alt_screen_entered);
+}
+
 // ── Word boundary tests ─────────────────────────
 
 #[test]

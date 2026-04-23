@@ -15,6 +15,10 @@ use tokio::runtime::Runtime;
 
 static BLE_CONTEXT: OnceLock<(Arc<Runtime>, Adapter)> = OnceLock::new();
 
+#[cfg(test)]
+#[path = "tests/ble.rs"]
+mod tests;
+
 /// Return a shared tokio Runtime and btleplug Adapter. Initializes on first
 /// call. Panics if the runtime can't be created or no BLE radio is available
 /// on this host — both represent environmental failures that the caller can't

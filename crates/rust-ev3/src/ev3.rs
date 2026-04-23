@@ -182,3 +182,7 @@ impl Ev3 {
         Ok((reply[0], reply[1]))
     }
 }
+
+#[cfg(test)]
+#[path = "tests/ev3.rs"]
+mod tests;
