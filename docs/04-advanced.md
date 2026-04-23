@@ -185,7 +185,7 @@ bricklogo --join 192.168.1.50 --password secret123
 
 If a password is set, clients that do not authenticate within 5 seconds are disconnected. Clients that send the wrong password are disconnected immediately.
 
-Note, the connection is inherently unsecure, with all data being sent in plaintext.
+The connection is not encrypted. Use it only on trusted networks.
 
 ### How it works
 
@@ -279,9 +279,10 @@ If you want to upload firmware explicitly — for example, to load a newer versi
 bricklogo --firmware buildhat
 ```
 
-The Build HAT must be in its bootloader. Bootloader mode happens automatically for a few seconds after the Pi powers on, before anything else connects to it. If the Build HAT is already running firmware, BrickLogo will report the version and exit; power-cycle the Pi and run the command again before anything else opens `/dev/serial0`.
+The Build HAT must be in its bootloader. Bootloader mode lasts for a few seconds after the Pi powers on, before anything else connects to it. If the Build HAT is already running firmware, BrickLogo reports the version and exits; power-cycle the Pi and run the command again before anything else opens `/dev/serial0`.
 
 ## See also
 
 - [Tutorial](03-tutorial.md) for a first session.
 - [Reference Guide](05-reference.md) for the complete list of commands.
+- [Hardware Reference](06-hardware.md) for per-device port layouts, sensor modes, and connection details.

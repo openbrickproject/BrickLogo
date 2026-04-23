@@ -86,7 +86,6 @@ Connection:
 - `connectto "type "name`
 - `use "name`
 - `disconnect`
-- `firmware "device "file` (RCX, Build HAT)
 
 Motor control:
 
@@ -122,6 +121,7 @@ See the [docs](docs/) folder:
 - [Tutorial](docs/03-tutorial.md)
 - [Advanced Usage](docs/04-advanced.md)
 - [Reference Guide](docs/05-reference.md)
+- [Hardware Reference](docs/06-hardware.md)
 
 ## Development
 
