@@ -152,8 +152,9 @@ enum NxtCommand {
 
 /// Pending step completion tracked in software: each port's current
 /// `tacho_count` is compared against a snapshot taken just before the
-/// fire. When `|current - start| >= target_abs_degrees`, the slot sends an
-/// explicit stop command for that port.
+/// fire. When `|current - start| >= brake_at_degrees`, the slot sends
+/// the stop command; the motor then coasts the remaining ~`lead`
+/// degrees to land near the true target.
 ///
 /// We use `tacho_count` (the firmware's never-resettable rolling counter)
 /// rather than `rotation_count` so that a `resetzero` issued mid-flight —
@@ -162,8 +163,32 @@ enum NxtCommand {
 struct PendingPort {
     port: u8,
     start_tacho: i32,
-    target_abs_degrees: u32,
+    brake_at_degrees: u32,
     done: bool,
+}
+
+/// Approximate deceleration distance for a 9842 servo after the brake is
+/// applied, as a function of commanded PWM power. Empirically the motor
+/// overshoots by roughly 0.4° per 1% of power on a typical load at the
+/// USB+firmware latency we incur. Capped at half the target so that very
+/// short rotations (≤ lead × 2) still actually fire the motor.
+fn compute_brake_at(power: i8, target_abs_degrees: u32) -> u32 {
+    let abs_power = power.unsigned_abs() as u32;
+    let lead = (abs_power * 2) / 5;
+    target_abs_degrees.saturating_sub(lead.min(target_abs_degrees / 2))
+}
+
+/// Distinguish a transport failure (brick unplugged, serial port went
+/// away, USB timeout) from an LCP-level error (firmware responded with a
+/// non-zero status byte). The former kills the connection; the latter is
+/// a per-command failure that doesn't.
+fn is_transport_error(msg: &str) -> bool {
+    msg.contains("USB write failed")
+        || msg.contains("USB read failed")
+        || msg.contains("serial write failed")
+        || msg.contains("serial read failed")
+        || msg.contains("serial read timeout")
+        || msg.contains("timed out waiting for reply")
 }
 
 struct PendingStep {
@@ -187,6 +212,35 @@ struct NxtSlot {
 }
 
 impl NxtSlot {
+    /// Called whenever a transport-level error occurs. Marks the slot
+    /// dead so the scheduler reaps it and `connected()` starts returning
+    /// false, and fails every in-flight pending step/time reply so the
+    /// user's blocked `rotate`/`onfor` call doesn't have to wait out the
+    /// 30-second command timeout. No-op if the slot was already dead.
+    fn fail_transport(&mut self, err: &str) {
+        if !self.alive.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let disconnect_msg = format!("NXT disconnected: {}", err);
+        for entry in self.pending_steps.drain(..) {
+            let _ = entry.reply_tx.send(Err(disconnect_msg.clone()));
+        }
+        for entry in self.pending_times.drain(..) {
+            let _ = entry.reply_tx.send(Err(disconnect_msg.clone()));
+        }
+    }
+
+    /// Convenience: check a fallible result for transport-level errors
+    /// and call `fail_transport` if so. Callers pass their own result to
+    /// `reply_tx` afterwards as usual.
+    fn note_error<T>(&mut self, result: &Result<T, String>) {
+        if let Err(e) = result {
+            if is_transport_error(e) {
+                self.fail_transport(e);
+            }
+        }
+    }
+
     /// Snapshot each port's `tacho_count`, then fire all SetOutputState
     /// commands back-to-back with NO_REPLY_FLAG. The snapshots go into the
     /// returned `PendingPort` list so the poll loop knows where each motor
@@ -196,12 +250,12 @@ impl NxtSlot {
         entries: &[(u8, i8, u32)],
     ) -> Result<Vec<PendingPort>, String> {
         let mut ports = Vec::with_capacity(entries.len());
-        for &(port, _power, degrees) in entries {
+        for &(port, power, degrees) in entries {
             let start = self.nxt.get_output_state(port)?.tacho_count;
             ports.push(PendingPort {
                 port,
                 start_tacho: start,
-                target_abs_degrees: degrees,
+                brake_at_degrees: compute_brake_at(power, degrees),
                 done: false,
             });
         }
@@ -209,6 +263,66 @@ impl NxtSlot {
             self.nxt.set_output_state(&step_spec(port, power, false))?;
         }
         Ok(ports)
+    }
+
+    /// One pass over `pending_steps`: poll each non-done port's tacho
+    /// count, brake any that have reached their target, complete any
+    /// entries whose ports are all done. If any port hits a transport
+    /// error, the whole slot is marked dead and `fail_transport` drains
+    /// every pending entry with a disconnect message.
+    fn poll_pending_steps_once(&mut self) {
+        if self.pending_steps.is_empty() {
+            return;
+        }
+        let drained: Vec<PendingStep> = self.pending_steps.drain(..).collect();
+        let mut still = Vec::with_capacity(drained.len());
+        let mut drained_iter = drained.into_iter();
+        while let Some(mut entry) = drained_iter.next() {
+            let mut err: Option<String> = None;
+            for pp in entry.ports.iter_mut() {
+                if pp.done {
+                    continue;
+                }
+                match self.nxt.get_output_state(pp.port) {
+                    Ok(s) => {
+                        let delta = (s.tacho_count - pp.start_tacho).unsigned_abs();
+                        if delta >= pp.brake_at_degrees {
+                            let _ = self.nxt.set_output_state(&OutputStateSpec {
+                                reply_required: false,
+                                ..stop_spec(pp.port)
+                            });
+                            pp.done = true;
+                        }
+                    }
+                    Err(e) => {
+                        err = Some(e);
+                        break;
+                    }
+                }
+            }
+            if let Some(e) = err {
+                if is_transport_error(&e) {
+                    // Reply to this entry with the raw error, then let
+                    // `fail_transport` drain the rest (including any that
+                    // weren't iterated yet and `pending_times`) with a
+                    // consistent disconnect message.
+                    let _ = entry.reply_tx.send(Err(e.clone()));
+                    // Put back whatever hasn't been polled yet so
+                    // fail_transport can see and drain it.
+                    self.pending_steps.extend(drained_iter);
+                    self.fail_transport(&e);
+                    return;
+                }
+                let _ = entry.reply_tx.send(Err(e));
+                continue;
+            }
+            if entry.ports.iter().all(|p| p.done) {
+                let _ = entry.reply_tx.send(Ok(()));
+            } else {
+                still.push(entry);
+            }
+        }
+        self.pending_steps = still;
     }
 
     fn fire_batch_time_start(&mut self, entries: &[(u8, i8)]) -> Result<(), String> {
@@ -235,14 +349,18 @@ impl DeviceSlot for NxtSlot {
             match cmd {
                 NxtCommand::MotorSetAndStart { port, power, reply_tx } => {
                     let r = self.nxt.set_output_state(&run_spec_for_start(port, power));
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
                 NxtCommand::MotorStop { port, reply_tx } => {
                     let r = self.nxt.set_output_state(&stop_spec(port));
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
                 NxtCommand::MotorStep { port, power, degrees, reply_tx } => {
-                    match self.start_batch_step(&[(port, power, degrees)]) {
+                    let r = self.start_batch_step(&[(port, power, degrees)]);
+                    self.note_error(&r);
+                    match r {
                         Ok(ports) => self
                             .pending_steps
                             .push(PendingStep { ports, reply_tx }),
@@ -250,7 +368,9 @@ impl DeviceSlot for NxtSlot {
                     }
                 }
                 NxtCommand::MotorTime { port, power, ms, reply_tx } => {
-                    match self.nxt.set_output_state(&time_run_spec(port, power, false)) {
+                    let r = self.nxt.set_output_state(&time_run_spec(port, power, false));
+                    self.note_error(&r);
+                    match r {
                         Ok(()) => self.pending_times.push(PendingTime {
                             ports: vec![port],
                             deadline: Instant::now() + Duration::from_millis(ms),
@@ -260,7 +380,9 @@ impl DeviceSlot for NxtSlot {
                     }
                 }
                 NxtCommand::MotorStepBatch { entries, reply_tx } => {
-                    match self.start_batch_step(&entries) {
+                    let r = self.start_batch_step(&entries);
+                    self.note_error(&r);
+                    match r {
                         Ok(ports) => self
                             .pending_steps
                             .push(PendingStep { ports, reply_tx }),
@@ -269,7 +391,9 @@ impl DeviceSlot for NxtSlot {
                 }
                 NxtCommand::MotorTimeBatch { entries, ms, reply_tx } => {
                     let ports: Vec<u8> = entries.iter().map(|(p, _)| *p).collect();
-                    match self.fire_batch_time_start(&entries) {
+                    let r = self.fire_batch_time_start(&entries);
+                    self.note_error(&r);
+                    match r {
                         Ok(()) => self.pending_times.push(PendingTime {
                             ports,
                             deadline: Instant::now() + Duration::from_millis(ms),
@@ -287,15 +411,18 @@ impl DeviceSlot for NxtSlot {
                     // tracking intact even if the user calls resetzero while
                     // a motor is moving.
                     let r = self.nxt.reset_motor_position(port, false);
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
                 NxtCommand::ReadMotorCount { port, reply_tx } => {
                     let r = self.nxt.get_output_state(port)
                         .map(|s| Some(LogoValue::Number(s.rotation_count as f64)));
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
                 NxtCommand::SetInputMode { port, sensor_type, sensor_mode, reply_tx } => {
                     let r = self.nxt.set_input_mode(port, sensor_type, sensor_mode);
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
                 NxtCommand::ReadSensor { port, kind, reply_tx } => {
@@ -306,53 +433,25 @@ impl DeviceSlot for NxtSlot {
                         };
                         Some(LogoValue::Number(value))
                     });
+                    self.note_error(&r);
                     let _ = reply_tx.send(r);
                 }
             }
         }
 
-        // Poll step completions. Each port's current `rotation_count` is
-        // compared against the snapshot taken just before the fire; once
-        // the delta reaches the target, the slot sends an explicit brake.
-        // The whole pending entry completes when every port is done.
-        if !self.pending_steps.is_empty() {
-            let mut still = Vec::with_capacity(self.pending_steps.len());
-            let drained: Vec<PendingStep> = self.pending_steps.drain(..).collect();
-            for mut entry in drained {
-                let mut err: Option<String> = None;
-                for pp in entry.ports.iter_mut() {
-                    if pp.done {
-                        continue;
-                    }
-                    match self.nxt.get_output_state(pp.port) {
-                        Ok(s) => {
-                            let delta =
-                                (s.tacho_count - pp.start_tacho).unsigned_abs();
-                            if delta >= pp.target_abs_degrees {
-                                let _ = self.nxt.set_output_state(&OutputStateSpec {
-                                    reply_required: false,
-                                    ..stop_spec(pp.port)
-                                });
-                                pp.done = true;
-                            }
-                        }
-                        Err(e) => {
-                            err = Some(e);
-                            break;
-                        }
-                    }
-                }
-                if let Some(e) = err {
-                    let _ = entry.reply_tx.send(Err(e));
-                    continue;
-                }
-                if entry.ports.iter().all(|p| p.done) {
-                    let _ = entry.reply_tx.send(Ok(()));
-                } else {
-                    still.push(entry);
-                }
+        // Poll step completions. A single pass at the scheduler's 60 Hz
+        // tick rate (~16 ms) would overshoot by up to ~13° at top motor
+        // speed; running a few passes back-to-back inside one tick cuts
+        // that to ~4°. Each `poll_pending_steps_once` call does one
+        // GetOutputState round-trip per active port (~3 ms USB), so three
+        // passes fit comfortably inside a tick's wall-clock budget. We
+        // stop early once everything completes so we don't burn cycles
+        // when the motor is still far from the target.
+        for _ in 0..3 {
+            self.poll_pending_steps_once();
+            if self.pending_steps.is_empty() {
+                break;
             }
-            self.pending_steps = still;
         }
 
         // Handle time-based runs: stop the ports when the deadline passes.
