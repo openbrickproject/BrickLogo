@@ -372,21 +372,20 @@ fn run_until_idle(app: &mut App) {
 
 #[test]
 fn test_complete_unique_primitive() {
-    // Input `rota` with commands `["rotate", "rotateto"]` has two
-    // matches sharing the prefix `rotate` — LCP extension fills that
-    // in. Use a single candidate for a truly unique full completion.
+    // Unique full fill at end of input gets a trailing space so the
+    // next token can follow directly.
     let commands = s(&["rotate"]);
     let (new_input, new_cursor) = complete_at_cursor("rota", 4, &commands, &[]).unwrap();
-    assert_eq!(new_input, "rotate");
-    assert_eq!(new_cursor, 6);
+    assert_eq!(new_input, "rotate ");
+    assert_eq!(new_cursor, 7);
 }
 
 #[test]
 fn test_complete_full_unique_match() {
     let commands = s(&["print"]);
     let (new_input, new_cursor) = complete_at_cursor("prin", 4, &commands, &[]).unwrap();
-    assert_eq!(new_input, "print");
-    assert_eq!(new_cursor, 5);
+    assert_eq!(new_input, "print ");
+    assert_eq!(new_cursor, 6);
 }
 
 #[test]
@@ -428,8 +427,8 @@ fn test_complete_quote_token_is_noop() {
 fn test_complete_colon_variable_unique() {
     let vars = s(&["count"]);
     let (new_input, new_cursor) = complete_at_cursor(":c", 2, &[], &vars).unwrap();
-    assert_eq!(new_input, ":count");
-    assert_eq!(new_cursor, 6);
+    assert_eq!(new_input, ":count ");
+    assert_eq!(new_cursor, 7);
 }
 
 #[test]
@@ -449,7 +448,7 @@ fn test_complete_bare_colon_noop() {
 fn test_complete_colon_case_insensitive_returns_canonical() {
     let vars = s(&["xcoord"]);
     let (new_input, _) = complete_at_cursor(":X", 2, &[], &vars).unwrap();
-    assert_eq!(new_input, ":xcoord");
+    assert_eq!(new_input, ":xcoord ");
 }
 
 #[test]
@@ -468,11 +467,12 @@ fn test_complete_empty_token_after_whitespace() {
 fn test_complete_token_in_middle_of_input() {
     let commands = s(&["rotate"]);
     // Cursor at end-of-input but mid-"statement": the token to complete
-    // is the trailing `rot`. Extends to `rotate`.
+    // is the trailing `rot`. Unique full fill at end of input → trailing
+    // space gets appended.
     let (new_input, new_cursor) =
         complete_at_cursor("print rot", 9, &commands, &[]).unwrap();
-    assert_eq!(new_input, "print rotate");
-    assert_eq!(new_cursor, 12);
+    assert_eq!(new_input, "print rotate ");
+    assert_eq!(new_cursor, 13);
 }
 
 #[test]
@@ -487,25 +487,51 @@ fn test_complete_cursor_mid_token_noop() {
 fn test_complete_bracket_boundary() {
     let commands = s(&["rotate"]);
     // `[` is a token boundary, so `rota` after it is its own token.
+    // Cursor lands at end of input → trailing space is added so the
+    // user can continue the list.
     let (new_input, _) = complete_at_cursor("[rota", 5, &commands, &[]).unwrap();
-    assert_eq!(new_input, "[rotate");
+    assert_eq!(new_input, "[rotate ");
 }
 
 #[test]
 fn test_complete_plain_case_insensitive_returns_canonical() {
     let commands = s(&["rotate"]);
     let (new_input, _) = complete_at_cursor("ROT", 3, &commands, &[]).unwrap();
-    assert_eq!(new_input, "rotate");
+    assert_eq!(new_input, "rotate ");
 }
 
 #[test]
 fn test_complete_splices_before_trailing_bracket() {
     // Cursor at end of `rot` with `]` immediately after — still
-    // treated as end-of-token.
+    // treated as end-of-token. No trailing space because the cursor
+    // doesn't land at end of input.
     let commands = s(&["rotate"]);
-    let (new_input, _) =
+    let (new_input, new_cursor) =
         complete_at_cursor("[rot]", 4, &commands, &[]).unwrap();
     assert_eq!(new_input, "[rotate]");
+    assert_eq!(new_cursor, 7);
+}
+
+#[test]
+fn test_complete_lcp_extension_does_not_add_space() {
+    // Multi-match → LCP extension but no trailing space, because the
+    // user hasn't actually picked a unique name yet.
+    let commands = s(&["rotate", "rotateto", "rotateby"]);
+    let (new_input, new_cursor) = complete_at_cursor("rot", 3, &commands, &[]).unwrap();
+    assert_eq!(new_input, "rotate");
+    assert_eq!(new_cursor, 6);
+}
+
+#[test]
+fn test_complete_unique_fill_before_trailing_space_no_double_space() {
+    // If the user already has a space after their cursor (typed
+    // something like `rot foo` then moved the cursor to end-of-`rot`),
+    // the completion extends but doesn't add another space.
+    let commands = s(&["rotate"]);
+    let (new_input, new_cursor) =
+        complete_at_cursor("rot foo", 3, &commands, &[]).unwrap();
+    assert_eq!(new_input, "rotate foo");
+    assert_eq!(new_cursor, 6);
 }
 
 // ── Tab press — App integration ─────────────────
@@ -513,11 +539,12 @@ fn test_complete_splices_before_trailing_bracket() {
 #[test]
 fn test_tab_press_completes_unique_primitive() {
     // `onfo` shares a prefix with `onfor` and nothing else in the
-    // registered primitive set, so Tab should fill it in fully.
+    // registered primitive set, so Tab should fill it in fully and
+    // append a trailing space.
     let mut app = make_app_with_input("onfo");
     handle_tab_press(&mut app);
-    assert_eq!(app.input, "onfor");
-    assert_eq!(app.cursor_position, 5);
+    assert_eq!(app.input, "onfor ");
+    assert_eq!(app.cursor_position, 6);
 }
 
 #[test]
@@ -549,7 +576,7 @@ fn test_tab_press_completes_procedure() {
     app.input = "gree".to_string();
     app.cursor_position = 4;
     handle_tab_press(&mut app);
-    assert_eq!(app.input, "greet");
+    assert_eq!(app.input, "greet ");
 }
 
 #[test]
@@ -562,7 +589,7 @@ fn test_tab_press_completes_variable() {
     app.input = ":coun".to_string();
     app.cursor_position = 5;
     handle_tab_press(&mut app);
-    assert_eq!(app.input, ":counter");
+    assert_eq!(app.input, ":counter ");
 }
 
 #[test]

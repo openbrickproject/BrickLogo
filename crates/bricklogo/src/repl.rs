@@ -149,14 +149,26 @@ pub(crate) fn complete_at_cursor(
         return None;
     }
 
-    let mut new_input = String::with_capacity(input.len() + lcp.len());
+    // A "unique full fill" is when exactly one candidate matched and
+    // we're extending to its canonical spelling. In that case, if the
+    // completion lands at the very end of the input buffer, append a
+    // space so the user can start typing the next token immediately.
+    // Mid-buffer completions (cursor followed by `]`, existing space,
+    // or further text) stay clean — don't invent separators that would
+    // disturb surrounding structure.
+    let full_fill = matches.len() == 1;
+    let mut new_input = String::with_capacity(input.len() + lcp.len() + 1);
     new_input.push_str(&input[..start]);
     if sigil_len > 0 {
         new_input.push_str(&token[..sigil_len]);
     }
     new_input.push_str(lcp);
     new_input.push_str(&input[cursor..]);
-    let new_cursor = start + sigil_len + lcp.len();
+    let mut new_cursor = start + sigil_len + lcp.len();
+    if full_fill && new_cursor == new_input.len() {
+        new_input.push(' ');
+        new_cursor += 1;
+    }
     Some((new_input, new_cursor))
 }
 
