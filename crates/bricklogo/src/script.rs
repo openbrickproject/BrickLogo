@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use bricklogo_hal::port_manager::PortManager;
@@ -24,6 +24,22 @@ impl Drop for DisconnectGuard {
         if let Ok(mut pm) = self.0.lock() {
             pm.remove_all();
         }
+    }
+}
+
+/// Process exit code for a script run.
+///
+/// - SIGINT observed → `130` (standard Unix convention for 128 + SIGINT's
+///   signal number), regardless of whether evaluation errored.
+/// - Evaluation errored without SIGINT → `1`.
+/// - Clean finish → `0`.
+pub(crate) fn exit_code_for(was_err: bool, sigint_fired: bool) -> i32 {
+    if sigint_fired {
+        130
+    } else if was_err {
+        1
+    } else {
+        0
     }
 }
 
@@ -114,10 +130,17 @@ pub fn run(source: ScriptSource, net_args: NetArgs) -> Result<(), Box<dyn std::e
         )?;
     }
 
-    // ── SIGINT: flip the evaluator's stop flag ────
+    // ── SIGINT: flip the evaluator's stop flag AND a sticky local
+    //           flag. The evaluator's flag is cleared by `check_stop`
+    //           the moment it fires; we need a separate never-cleared
+    //           flag so we can still tell SIGINT happened when the
+    //           script returns.
+    let sigint = Arc::new(AtomicBool::new(false));
     {
+        let sigint_inner = sigint.clone();
         let stop_flag = evaluator.stop_flag();
         let _ = ctrlc::set_handler(move || {
+            sigint_inner.store(true, Ordering::SeqCst);
             stop_flag.store(true, Ordering::SeqCst);
         });
     }
@@ -125,25 +148,15 @@ pub fn run(source: ScriptSource, net_args: NetArgs) -> Result<(), Box<dyn std::e
     // ── Run ───────────────────────────────────────
     // The guard runs `remove_all` on every exit path (including panic).
     let _guard = DisconnectGuard(port_manager.clone());
-    let interrupted_flag = evaluator.stop_flag();
 
-    let exit_code = match evaluator.evaluate(&cleaned) {
-        Ok(_) => {
-            if interrupted_flag.load(Ordering::SeqCst) {
-                130 // SIGINT convention
-            } else {
-                0
-            }
-        }
-        Err(e) => {
-            eprintln!("{}", e);
-            if interrupted_flag.load(Ordering::SeqCst) {
-                130
-            } else {
-                1
-            }
-        }
+    let result = evaluator.evaluate(&cleaned);
+    let was_err = if let Err(ref e) = result {
+        eprintln!("{}", e);
+        true
+    } else {
+        false
     };
+    let exit_code = exit_code_for(was_err, sigint.load(Ordering::SeqCst));
 
     // Drop the guard explicitly so disconnect happens before std::process::exit
     // bypasses the rest of stack unwinding.

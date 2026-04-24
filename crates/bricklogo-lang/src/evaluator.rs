@@ -116,6 +116,23 @@ impl Environment {
     }
 }
 
+/// Tracking entry for a single backgrounded `launch` task.
+///
+/// `stop` is shared with the spawned thread's child evaluator and with
+/// this tracking vec. The spawn is observable via `Arc::strong_count`:
+/// while the thread is alive it holds the Arc (through its child
+/// evaluator), giving `strong_count >= 2`; once it exits and drops the
+/// child, only the vec entry remains (`strong_count == 1`) — that's the
+/// signal for `prune_finished` to reap.
+///
+/// The entry is only ever inserted together with its `handle`, under
+/// the `launched_tasks` lock, so there is never a window where a
+/// started task is visible without a handle to join.
+struct LaunchedTask {
+    stop: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
 pub struct Evaluator {
     global_vars: Arc<RwLock<HashMap<String, LogoValue>>>,
     procedures: HashMap<String, UserProcedure>,
@@ -126,7 +143,7 @@ pub struct Evaluator {
     system_callback: Arc<dyn Fn(&str) + Send + Sync>,
     timer_start: std::time::Instant,
     session: SessionState,
-    launched_stops: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
+    launched_tasks: Arc<Mutex<Vec<LaunchedTask>>>,
     selected_outputs: Vec<String>,
     selected_inputs: Vec<String>,
     var_broadcast: Option<std::sync::mpsc::Sender<(String, LogoValue)>>,
@@ -144,7 +161,7 @@ impl Evaluator {
             system_callback: Arc::new(|_| {}),
             timer_start: std::time::Instant::now(),
             session: SessionState::new(),
-            launched_stops: Arc::new(Mutex::new(Vec::new())),
+            launched_tasks: Arc::new(Mutex::new(Vec::new())),
             selected_outputs: Vec::new(),
             selected_inputs: Vec::new(),
             var_broadcast: None,
@@ -188,10 +205,6 @@ impl Evaluator {
         self.stop_requested.store(true, Ordering::SeqCst);
     }
 
-    pub fn launched_stops_ref(&self) -> Arc<Mutex<Vec<Arc<AtomicBool>>>> {
-        self.launched_stops.clone()
-    }
-
     pub fn set_selected_outputs(&mut self, ports: Vec<String>) {
         self.selected_outputs = ports;
     }
@@ -208,12 +221,16 @@ impl Evaluator {
         &self.selected_inputs
     }
 
+    /// Signal every currently-launched background task to stop. Leaves
+    /// the tracking entries in place so `prune_finished` (called from
+    /// the next `eval_launch`) can `join` their handles cleanly — a
+    /// task that panics between the signal and the prune still gets
+    /// reported.
     pub fn stop_all_launched(&self) {
-        let mut stops = self.launched_stops.lock().unwrap();
-        for flag in stops.iter() {
-            flag.store(true, Ordering::SeqCst);
+        let tasks = self.launched_tasks.lock().unwrap();
+        for t in tasks.iter() {
+            t.stop.store(true, Ordering::SeqCst);
         }
-        stops.clear();
     }
 
     pub fn set_global(&self, name: &str, value: LogoValue) {
@@ -258,7 +275,7 @@ impl Evaluator {
             system_callback: self.system_callback.clone(),
             timer_start: self.timer_start,
             session: SessionState::new(),
-            launched_stops: self.launched_stops.clone(),
+            launched_tasks: self.launched_tasks.clone(),
             selected_outputs: self.selected_outputs.clone(),
             selected_inputs: self.selected_inputs.clone(),
             var_broadcast: self.var_broadcast.clone(),
@@ -416,7 +433,7 @@ impl Evaluator {
     fn check_stop(&self) -> LogoResult<()> {
         if self.stop_requested.load(Ordering::SeqCst) {
             self.stop_requested.store(false, Ordering::SeqCst);
-            Err(LogoError::Runtime("Stopped".to_string()))
+            Err(LogoError::Stop)
         } else {
             Ok(())
         }
@@ -666,18 +683,46 @@ impl Evaluator {
     fn eval_launch(&mut self, body: &[AstNode]) -> LogoResult<Option<LogoValue>> {
         let (mut child, stop_flag) = self.spawn_child();
         let body = body.to_vec();
+        let system_fn = self.system_callback.clone();
+        let closure_system_fn = system_fn.clone();
 
-        self.launched_stops.lock().unwrap().push(stop_flag);
-
-        std::thread::spawn(move || {
+        // Hold the `launched_tasks` lock across thread::spawn AND the
+        // push. That window is microseconds. It closes two races at once:
+        //
+        //   - `stop_all_launched` can't miss a just-launched task — it
+        //     blocks on this lock, then sees the new entry.
+        //   - A concurrent `eval_launch` on another thread can't run
+        //     `prune_finished` between spawn and push. Before the fix
+        //     that was possible: a fast-exiting thread would drop its
+        //     child, strong_count would fall to 1, and a racing prune
+        //     could reap the entry before the parent had attached a
+        //     handle, silently dropping any panic.
+        //
+        // The spawned thread can only re-enter this lock via a nested
+        // `launch` primitive inside its body. That requires parsing and
+        // evaluating at least one node, which takes orders of magnitude
+        // longer than our spawn+push window — no deadlock in practice.
+        let mut tasks = self.launched_tasks.lock().unwrap();
+        prune_finished(&mut tasks, &system_fn);
+        let handle = std::thread::spawn(move || {
             let mut env = Environment::new();
             for node in &body {
                 if child.check_stop().is_err() {
                     return;
                 }
-                let _ = child.eval_node(node, &mut env);
+                if let Err(e) = child.eval_node(node, &mut env) {
+                    // Silent exit on a stop signal — that's the normal
+                    // "user hit Esc" / `stopall` path. Everything else
+                    // is a bug the user wants to know about.
+                    if !matches!(e, LogoError::Stop) {
+                        closure_system_fn(&format!("Background task error: {}", e));
+                    }
+                    return;
+                }
             }
         });
+        tasks.push(LaunchedTask { stop: stop_flag, handle });
+        drop(tasks);
 
         Ok(None)
     }
@@ -843,6 +888,43 @@ impl Evaluator {
             }
         }
     }
+}
+
+/// Reap any `LaunchedTask` whose spawned thread has finished. Detection
+/// is via `Arc::strong_count`: while the thread is alive it holds the
+/// stop Arc (through its child evaluator), giving `strong_count >= 2`;
+/// once it exits and drops the child, the vec's own entry is the only
+/// remaining reference (`strong_count == 1`). For reaped entries we
+/// `join` the handle so a panicked thread gets reported through
+/// `system_fn` rather than disappearing silently.
+fn prune_finished(
+    tasks: &mut Vec<LaunchedTask>,
+    system_fn: &Arc<dyn Fn(&str) + Send + Sync>,
+) {
+    let mut i = 0;
+    while i < tasks.len() {
+        if Arc::strong_count(&tasks[i].stop) == 1 {
+            let task = tasks.swap_remove(i);
+            if let Err(panic) = task.handle.join() {
+                system_fn(&format!(
+                    "Background task panicked: {}",
+                    panic_message(&panic)
+                ));
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic".to_string()
 }
 
 #[cfg(test)]

@@ -22,3 +22,6 @@ crossterm = "0.28"
 ratatui = "0.29"
 ctrlc = "3"
 serialport = "4"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

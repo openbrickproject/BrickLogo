@@ -269,6 +269,11 @@ fn test_stop_in_procedure() {
 
 #[test]
 fn test_request_stop() {
+    // `forever [tick]` is halted by setting the stop flag from inside
+    // `tick` itself. check_stop() fires, raises LogoError::Stop, and the
+    // top-level `evaluate` intentionally catches that variant and
+    // returns `Ok(None)` — pressing Esc shouldn't look like an error to
+    // the caller.
     let (mut eval, _) = create_evaluator();
     let stop = eval.stop_flag();
     eval.register_primitive(
@@ -282,7 +287,9 @@ fn test_request_stop() {
             }),
         },
     );
-    assert!(eval.evaluate("forever [tick]").is_err());
+    let result = eval.evaluate("forever [tick]");
+    assert!(result.is_ok(), "stop should unwind to Ok(None), got {:?}", result);
+    assert_eq!(result.unwrap(), None);
 }
 
 #[test]
@@ -823,4 +830,290 @@ fn test_localmake_multiple_variables() {
     assert_eq!(output.lock().unwrap().as_slice(), &["3"]);
     assert!(eval.evaluate(":a").is_err());
     assert!(eval.evaluate(":b").is_err());
+}
+
+// ── Background task lifecycle ───────────────────
+
+/// Build an evaluator with capturing output + system callbacks. System
+/// messages route to the second returned `Arc<Mutex<Vec<String>>>` so
+/// tests can observe background-task errors / panics.
+fn create_evaluator_with_system_capture(
+) -> (Evaluator, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>) {
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let system = Arc::new(Mutex::new(Vec::new()));
+    let output_clone = output.clone();
+    let system_clone = system.clone();
+    let mut eval = Evaluator::new(Arc::new(move |text: &str| {
+        output_clone.lock().unwrap().push(text.to_string());
+    }));
+    eval.set_system_fn(Arc::new(move |text: &str| {
+        system_clone.lock().unwrap().push(text.to_string());
+    }));
+    crate::primitives::register_core_primitives(&mut eval);
+    (eval, output, system)
+}
+
+/// Poll `cond` with a short sleep until it returns true, up to `timeout`.
+fn wait_for<F: Fn() -> bool>(cond: F, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cond()
+}
+
+#[test]
+fn test_check_stop_returns_stop_variant() {
+    // Directly exercise `check_stop` — the whole point of the refactor
+    // was to stop returning `LogoError::Runtime("Stopped")` and return
+    // `LogoError::Stop` instead. Going through `evaluate` would hide
+    // the variant because top-level `evaluate` maps Stop to `Ok(None)`
+    // on purpose.
+    use crate::error::LogoError;
+    let (eval, _) = create_evaluator();
+
+    // No stop requested yet → Ok(()).
+    assert!(eval.check_stop().is_ok());
+
+    // Trip the flag; next check_stop must return Stop and clear the
+    // flag.
+    eval.request_stop();
+    let err = eval.check_stop().unwrap_err();
+    assert!(
+        matches!(err, LogoError::Stop),
+        "check_stop returned wrong variant: {:?}",
+        err
+    );
+
+    // The flag was consumed — a subsequent call succeeds again.
+    assert!(eval.check_stop().is_ok());
+}
+
+#[test]
+fn test_launch_surfaces_runtime_error() {
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    eval.evaluate("launch [first []]").unwrap();
+    let captured_something = wait_for(
+        || !system.lock().unwrap().is_empty(),
+        std::time::Duration::from_secs(2),
+    );
+    assert!(captured_something, "background error was never surfaced");
+    let msgs = system.lock().unwrap().clone();
+    let joined = msgs.join(" | ");
+    assert!(
+        joined.contains("Background task error"),
+        "expected 'Background task error' in {:?}",
+        msgs
+    );
+}
+
+#[test]
+fn test_launch_does_not_surface_stop() {
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    eval.evaluate("launch [forever [wait 1]]").unwrap();
+    // Let the task start and loop at least once.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    eval.stop_all_launched();
+    // Give the task time to notice the stop flag and drop its child.
+    let reaped = wait_for(
+        || {
+            let tasks = eval.launched_tasks.lock().unwrap();
+            tasks.iter().all(|t| Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(reaped, "launched task never exited after stop");
+    // A stop must never be reported as an error.
+    let msgs = system.lock().unwrap().clone();
+    assert!(
+        !msgs.iter().any(|m| m.contains("Background task error")),
+        "stop was misreported as an error: {:?}",
+        msgs
+    );
+}
+
+#[test]
+fn test_launched_tasks_vec_is_bounded() {
+    let (mut eval, _out, _system) = create_evaluator_with_system_capture();
+    // Launch a bunch of extremely short tasks.
+    for _ in 0..10 {
+        eval.evaluate("launch [print 1]").unwrap();
+    }
+    // Wait for every spawned thread to exit (drop its child evaluator).
+    let settled = wait_for(
+        || {
+            let tasks = eval.launched_tasks.lock().unwrap();
+            tasks.iter().all(|t| Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(settled, "not all launched tasks finished in time");
+    // The next launch triggers a prune. After it returns, the only
+    // entry that should remain is the newly-pushed one.
+    eval.evaluate("launch [print 2]").unwrap();
+    let len = eval.launched_tasks.lock().unwrap().len();
+    assert!(
+        len <= 2,
+        "launched_tasks did not prune: {} entries remain",
+        len
+    );
+}
+
+#[test]
+fn test_launched_task_panic_is_reported() {
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    // Register a test-only primitive that panics inside the spawned
+    // thread. `launch [boom]` should trap the panic via JoinHandle and
+    // route it through system_callback.
+    eval.register_primitive(
+        "boom",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, _| panic!("boom!")),
+        },
+    );
+    eval.evaluate("launch [boom]").unwrap();
+    // The thread panics immediately; wait for it to finish, then trigger
+    // a prune (via another launch) so the join + report fires.
+    let finished = wait_for(
+        || {
+            let tasks = eval.launched_tasks.lock().unwrap();
+            tasks.iter().all(|t| Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(finished);
+    eval.evaluate("launch [print 1]").unwrap();
+    let got_panic_msg = wait_for(
+        || {
+            system
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.contains("Background task panicked"))
+        },
+        std::time::Duration::from_secs(2),
+    );
+    let msgs = system.lock().unwrap().clone();
+    assert!(
+        got_panic_msg,
+        "expected panic report in system messages, got {:?}",
+        msgs
+    );
+    assert!(msgs.iter().any(|m| m.contains("boom!")));
+}
+
+#[test]
+fn test_panic_not_lost_under_concurrent_launches() {
+    // Regression guard for the race where a fast-panicking task could
+    // drop its child and fall to strong_count==1 before the parent
+    // attached its handle. A second thread running prune_finished in
+    // that window would reap the entry with no handle, silently losing
+    // the panic. The current design holds the launched_tasks lock
+    // across spawn+push so prune can't run between them. This test
+    // hammers the happy path with many fast panicking launches from
+    // multiple threads in parallel.
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    eval.register_primitive(
+        "boom",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, _| panic!("boom!")),
+        },
+    );
+
+    // Wrap the evaluator so we can share it across spawner threads.
+    let eval = Arc::new(Mutex::new(eval));
+
+    let mut spawners = Vec::new();
+    for _ in 0..4 {
+        let eval = eval.clone();
+        spawners.push(std::thread::spawn(move || {
+            for _ in 0..10 {
+                let mut e = eval.lock().unwrap();
+                e.evaluate("launch [boom]").unwrap();
+            }
+        }));
+    }
+    for h in spawners {
+        h.join().unwrap();
+    }
+
+    // Wait for every spawned boom-thread to exit.
+    let settled = wait_for(
+        || {
+            let e = eval.lock().unwrap();
+            let tasks = e.launched_tasks.lock().unwrap();
+            tasks.iter().all(|t| Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(5),
+    );
+    assert!(settled, "launched tasks didn't all finish");
+
+    // Trigger one more launch to run prune_finished on the accumulated
+    // panicked entries.
+    eval.lock().unwrap().evaluate("launch [print 1]").unwrap();
+
+    // Every boom launch should have produced one panic report.
+    let got = wait_for(
+        || {
+            system
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m.contains("Background task panicked"))
+                .count()
+                >= 40
+        },
+        std::time::Duration::from_secs(5),
+    );
+    let msgs = system.lock().unwrap().clone();
+    let panic_count = msgs
+        .iter()
+        .filter(|m| m.contains("Background task panicked"))
+        .count();
+    assert!(
+        got,
+        "expected 40 panic reports from 4×10 boom launches, got {} ({:?})",
+        panic_count, msgs
+    );
+}
+
+#[test]
+fn test_stop_all_launched_does_not_clear_vec() {
+    let (mut eval, _out, _system) = create_evaluator_with_system_capture();
+    eval.evaluate("launch [forever [wait 1]]").unwrap();
+    // Give the task a moment to start.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        eval.launched_tasks.lock().unwrap().len(),
+        1,
+        "expected exactly one task tracked after first launch"
+    );
+    eval.stop_all_launched();
+    // Immediately after the signal, the entry is still tracked — prune
+    // happens on the next launch so the JoinHandle can be reaped cleanly.
+    assert_eq!(
+        eval.launched_tasks.lock().unwrap().len(),
+        1,
+        "stop_all_launched should not clear the vec eagerly"
+    );
+    // Wait for the task to actually exit.
+    let reaped = wait_for(
+        || {
+            let tasks = eval.launched_tasks.lock().unwrap();
+            tasks.iter().all(|t| Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(reaped);
+    // Next launch prunes the stopped one and adds a new one.
+    eval.evaluate("launch [print 1]").unwrap();
+    let len = eval.launched_tasks.lock().unwrap().len();
+    assert!(len <= 2, "expected at most 2 entries after prune, got {}", len);
 }
