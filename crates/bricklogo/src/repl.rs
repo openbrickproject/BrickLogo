@@ -77,6 +77,147 @@ pub(crate) fn expire_esc_window(
     false
 }
 
+/// Tab-completion over the token immediately to the left of `cursor`.
+///
+/// Dispatches on the first char of the token:
+/// - Leading `"` → skip (argument/string context; deferred).
+/// - Leading `:` → match against `vars` (global variable names) with the
+///   sigil preserved on output.
+/// - anything else → match against `commands` (primitives + procedures).
+///
+/// Returns `Some((new_input, new_cursor))` when the typed token gets
+/// extended — either to the canonical spelling of a unique match, or to
+/// the longest common prefix shared by all matches. Returns `None` when
+/// there's nothing to do: the cursor is not at end-of-token, the token
+/// is empty, no candidate matches, or the typed prefix is already as
+/// long as the shared prefix.
+pub(crate) fn complete_at_cursor(
+    input: &str,
+    cursor: usize,
+    commands: &[String],
+    vars: &[String],
+) -> Option<(String, usize)> {
+    if cursor > input.len() {
+        return None;
+    }
+    // Cursor must be at end-of-token. Anything other than whitespace /
+    // a bracket to the right of the cursor means we're mid-token and
+    // leave the input alone.
+    if let Some(next) = input[cursor..].chars().next() {
+        if !is_token_boundary(next) {
+            return None;
+        }
+    }
+
+    let bytes = input.as_bytes();
+    let mut start = cursor;
+    while start > 0 {
+        let prev = bytes[start - 1] as char;
+        if is_token_boundary(prev) {
+            break;
+        }
+        start -= 1;
+    }
+    if start == cursor {
+        return None;
+    }
+
+    let token = &input[start..cursor];
+    let (identifier, sigil_len, candidates) = match token.chars().next() {
+        Some('"') => return None,
+        Some(':') => (&token[1..], 1usize, vars),
+        _ => (token, 0usize, commands),
+    };
+    if identifier.is_empty() {
+        return None;
+    }
+
+    let identifier_lower = identifier.to_lowercase();
+    let matches: Vec<&str> = candidates
+        .iter()
+        .filter(|c| c.to_lowercase().starts_with(&identifier_lower))
+        .map(|s| s.as_str())
+        .collect();
+    if matches.is_empty() {
+        return None;
+    }
+
+    let lcp = longest_common_prefix(&matches);
+    if lcp.len() <= identifier.len() {
+        // Either already at the shared prefix or the matched candidates
+        // only agree on what the user already typed.
+        return None;
+    }
+
+    let mut new_input = String::with_capacity(input.len() + lcp.len());
+    new_input.push_str(&input[..start]);
+    if sigil_len > 0 {
+        new_input.push_str(&token[..sigil_len]);
+    }
+    new_input.push_str(lcp);
+    new_input.push_str(&input[cursor..]);
+    let new_cursor = start + sigil_len + lcp.len();
+    Some((new_input, new_cursor))
+}
+
+fn is_token_boundary(c: char) -> bool {
+    c.is_whitespace() || c == '[' || c == ']'
+}
+
+fn longest_common_prefix<'a>(strings: &[&'a str]) -> &'a str {
+    let first = match strings.first() {
+        Some(s) => *s,
+        None => return "",
+    };
+    let mut end = first.len();
+    for s in &strings[1..] {
+        let shared = first
+            .bytes()
+            .zip(s.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if shared < end {
+            end = shared;
+        }
+        if end == 0 {
+            break;
+        }
+    }
+    &first[..end]
+}
+
+/// App-level Tab handler. Collects current completion candidates from
+/// `app.evaluator` and delegates to `complete_at_cursor`. No-op while a
+/// program is running so background evaluation isn't disturbed.
+pub(crate) fn handle_tab_press(app: &mut App) {
+    if app.busy {
+        return;
+    }
+    let (commands, vars) = collect_completion_candidates(app);
+    if let Some((new_input, new_cursor)) =
+        complete_at_cursor(&app.input, app.cursor_position, &commands, &vars)
+    {
+        app.input = new_input;
+        app.cursor_position = new_cursor;
+    }
+}
+
+/// Gather names for Tab completion from the evaluator. Commands include
+/// every registered primitive, primitive alias, and user-defined
+/// procedure. Vars include every currently-bound global variable.
+fn collect_completion_candidates(app: &App) -> (Vec<String>, Vec<String>) {
+    let Some(eval) = app.evaluator() else {
+        return (Vec::new(), Vec::new());
+    };
+    let commands: Vec<String> = eval.build_arity_map().keys().cloned().collect();
+    let vars: Vec<String> = eval
+        .global_vars_ref()
+        .read()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    (commands, vars)
+}
+
 impl TerminalLifecycle {
     pub(crate) fn mark_raw_mode_enabled(&mut self) {
         self.raw_mode_enabled = true;
@@ -230,6 +371,11 @@ pub fn run(net_args: NetArgs) -> Result<(), Box<dyn std::error::Error>> {
                                 break;
                             }
                         }
+                    }
+                    // Tab — complete the current token against primitives,
+                    // user procedures, or `:`-prefixed global variables.
+                    KeyCode::Tab => {
+                        handle_tab_press(&mut app);
                     }
                     // Ctrl+A — home
                     KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {

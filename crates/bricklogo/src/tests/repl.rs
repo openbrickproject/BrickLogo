@@ -349,3 +349,234 @@ fn test_esc_outside_window_acts_as_first_press_again() {
     assert!(esc_at.is_some(), "Esc after expiry should re-arm, not clear");
     assert_eq!(app.input, "hello");
 }
+
+// ── Tab completion — pure function ──────────────
+
+fn s(v: &[&str]) -> Vec<String> {
+    v.iter().map(|x| x.to_string()).collect()
+}
+
+/// `submit_input` dispatches evaluation to a background thread; wait for
+/// it to finish so observable state (procedures, globals) has settled
+/// before we query it from the tests.
+fn run_until_idle(app: &mut App) {
+    for _ in 0..50 {
+        app.tick();
+        if !app.busy {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    app.tick();
+}
+
+#[test]
+fn test_complete_unique_primitive() {
+    // Input `rota` with commands `["rotate", "rotateto"]` has two
+    // matches sharing the prefix `rotate` — LCP extension fills that
+    // in. Use a single candidate for a truly unique full completion.
+    let commands = s(&["rotate"]);
+    let (new_input, new_cursor) = complete_at_cursor("rota", 4, &commands, &[]).unwrap();
+    assert_eq!(new_input, "rotate");
+    assert_eq!(new_cursor, 6);
+}
+
+#[test]
+fn test_complete_full_unique_match() {
+    let commands = s(&["print"]);
+    let (new_input, new_cursor) = complete_at_cursor("prin", 4, &commands, &[]).unwrap();
+    assert_eq!(new_input, "print");
+    assert_eq!(new_cursor, 5);
+}
+
+#[test]
+fn test_complete_lcp_extension() {
+    let commands = s(&["rotate", "rotateto", "rotatetoabs", "rotateby"]);
+    let (new_input, _) = complete_at_cursor("rot", 3, &commands, &[]).unwrap();
+    assert_eq!(new_input, "rotate");
+}
+
+#[test]
+fn test_complete_zero_matches() {
+    let commands = s(&["rotate"]);
+    assert!(complete_at_cursor("xyz", 3, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_already_at_lcp() {
+    // `rotate` is the shared prefix of all three — no further
+    // extension possible without committing to one variant.
+    let commands = s(&["rotate", "rotateto", "rotateby"]);
+    assert!(complete_at_cursor("rotate", 6, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_procedure_folds_into_commands() {
+    // Two candidates whose shared prefix `g` is shorter than the
+    // typed `gr` — nothing to extend.
+    let commands = s(&["greet", "group"]);
+    assert!(complete_at_cursor("gr", 2, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_quote_token_is_noop() {
+    let commands = s(&["science", "spike"]);
+    assert!(complete_at_cursor("connectto \"s", 12, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_colon_variable_unique() {
+    let vars = s(&["count"]);
+    let (new_input, new_cursor) = complete_at_cursor(":c", 2, &[], &vars).unwrap();
+    assert_eq!(new_input, ":count");
+    assert_eq!(new_cursor, 6);
+}
+
+#[test]
+fn test_complete_colon_variable_lcp() {
+    let vars = s(&["count", "counter"]);
+    let (new_input, _) = complete_at_cursor(":c", 2, &[], &vars).unwrap();
+    assert_eq!(new_input, ":count");
+}
+
+#[test]
+fn test_complete_bare_colon_noop() {
+    let vars = s(&["count"]);
+    assert!(complete_at_cursor(":", 1, &[], &vars).is_none());
+}
+
+#[test]
+fn test_complete_colon_case_insensitive_returns_canonical() {
+    let vars = s(&["xcoord"]);
+    let (new_input, _) = complete_at_cursor(":X", 2, &[], &vars).unwrap();
+    assert_eq!(new_input, ":xcoord");
+}
+
+#[test]
+fn test_complete_empty_token_at_start() {
+    let commands = s(&["rotate"]);
+    assert!(complete_at_cursor("", 0, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_empty_token_after_whitespace() {
+    let commands = s(&["rotate"]);
+    assert!(complete_at_cursor("rotate ", 7, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_token_in_middle_of_input() {
+    let commands = s(&["rotate"]);
+    // Cursor at end-of-input but mid-"statement": the token to complete
+    // is the trailing `rot`. Extends to `rotate`.
+    let (new_input, new_cursor) =
+        complete_at_cursor("print rot", 9, &commands, &[]).unwrap();
+    assert_eq!(new_input, "print rotate");
+    assert_eq!(new_cursor, 12);
+}
+
+#[test]
+fn test_complete_cursor_mid_token_noop() {
+    // Cursor in the middle of `rota`, before `ta`. Next char isn't a
+    // token boundary → no-op.
+    let commands = s(&["rotate"]);
+    assert!(complete_at_cursor("rota", 2, &commands, &[]).is_none());
+}
+
+#[test]
+fn test_complete_bracket_boundary() {
+    let commands = s(&["rotate"]);
+    // `[` is a token boundary, so `rota` after it is its own token.
+    let (new_input, _) = complete_at_cursor("[rota", 5, &commands, &[]).unwrap();
+    assert_eq!(new_input, "[rotate");
+}
+
+#[test]
+fn test_complete_plain_case_insensitive_returns_canonical() {
+    let commands = s(&["rotate"]);
+    let (new_input, _) = complete_at_cursor("ROT", 3, &commands, &[]).unwrap();
+    assert_eq!(new_input, "rotate");
+}
+
+#[test]
+fn test_complete_splices_before_trailing_bracket() {
+    // Cursor at end of `rot` with `]` immediately after — still
+    // treated as end-of-token.
+    let commands = s(&["rotate"]);
+    let (new_input, _) =
+        complete_at_cursor("[rot]", 4, &commands, &[]).unwrap();
+    assert_eq!(new_input, "[rotate]");
+}
+
+// ── Tab press — App integration ─────────────────
+
+#[test]
+fn test_tab_press_completes_unique_primitive() {
+    // `onfo` shares a prefix with `onfor` and nothing else in the
+    // registered primitive set, so Tab should fill it in fully.
+    let mut app = make_app_with_input("onfo");
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, "onfor");
+    assert_eq!(app.cursor_position, 5);
+}
+
+#[test]
+fn test_tab_press_when_busy_is_noop() {
+    let mut app = make_app_with_input("rot");
+    app.busy = true;
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, "rot");
+    assert_eq!(app.cursor_position, 3);
+}
+
+#[test]
+fn test_tab_press_completes_procedure() {
+    let mut app = make_app_with_input("");
+    // Multi-line definitions need three submits: `to greet` opens
+    // definition mode, the body is collected, `end` closes it.
+    app.input = "to greet".to_string();
+    app.submit_input();
+    app.input = "print \"hi".to_string();
+    app.submit_input();
+    app.input = "end".to_string();
+    app.submit_input();
+    run_until_idle(&mut app);
+    assert!(
+        app.evaluator().unwrap().get_user_procedure("greet").is_some(),
+        "procedure `greet` was not registered"
+    );
+
+    app.input = "gree".to_string();
+    app.cursor_position = 4;
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, "greet");
+}
+
+#[test]
+fn test_tab_press_completes_variable() {
+    let mut app = make_app_with_input("");
+    app.input = "make \"counter 5".to_string();
+    app.submit_input();
+    run_until_idle(&mut app);
+
+    app.input = ":coun".to_string();
+    app.cursor_position = 5;
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, ":counter");
+}
+
+#[test]
+fn test_tab_press_no_match_is_silent() {
+    let mut app = make_app_with_input("zzznomatch");
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, "zzznomatch");
+    assert_eq!(app.cursor_position, 10);
+}
+
+#[test]
+fn test_tab_press_empty_input_is_noop() {
+    let mut app = make_app_with_input("");
+    handle_tab_press(&mut app);
+    assert_eq!(app.input, "");
+    assert_eq!(app.cursor_position, 0);
+}

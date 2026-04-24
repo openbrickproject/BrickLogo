@@ -373,6 +373,13 @@ impl App {
         self.stop_flag.store(true, Ordering::SeqCst);
     }
 
+    /// Read-only access to the embedded evaluator, for callers that need
+    /// to inspect registered primitives, user procedures, or global
+    /// variables (e.g. Tab completion).
+    pub fn evaluator(&self) -> Option<&bricklogo_lang::evaluator::Evaluator> {
+        self.evaluator.as_ref()
+    }
+
     pub fn cancel_definition(&mut self) {
         if self.multi_line.is_some() {
             self.multi_line = None;
