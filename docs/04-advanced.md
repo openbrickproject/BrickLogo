@@ -2,29 +2,45 @@
 
 ## Concurrent tasks
 
-`launch` runs a block of commands in the background. The prompt returns immediately and the launched task runs alongside whatever you do next.
+`launch` runs a block of commands in a background task. The prompt returns immediately and the task runs alongside whatever you do next. `launch` reports the new task's id; capture it with `make` if you need to refer to the task later.
 
 ```
 ? launch [forever [print sensor "distance wait 5]]
+1
 ? talkto "a
 ? on
 ```
 
 The sensor prints every half second while you control the motor from the prompt.
 
-Launched tasks share global variables with the main program and with each other. You can use `make` in one task and read the variable with `:name` in another.
+Tasks share global variables with the main program and with each other. `make` in one task is visible as `:name` in any other.
 
 ```
 ? launch [forever [make "d sensor "distance wait 5]]
+2
 ? waituntil [:d < 10]
 ? off
 ```
 
 The first task updates `:d` continuously. The main program waits until the distance is below 10, then stops the motor.
 
-Each task has its own port selection. A `talkto` or `listento` in one task does not affect another.
+Each task holds its own `talkto` and `listento` selection. A change in one task does not affect another.
 
-Use `stopall` to stop all background tasks. Escape stops the current command but does not affect launched tasks that are already running in the background.
+Inspect and control running tasks with `task`, `tasks`, `kill`, `killall`, and `waitfor`:
+
+```
+? make "watcher launch [forever [print sensor "distance wait 5]]
+3
+? print tasks
+[3]
+? kill :watcher
+? print tasks
+[]
+```
+
+`task` reports the id the caller is running in (`0` on the main thread). `tasks` reports the ids of all running tasks in launch order. `kill :id` stops one task and errors if the id is not running. `killall` stops every task. `waitfor :id` pauses until the named task finishes.
+
+Escape stops the current foreground command but does not affect background tasks already running. Use `killall` to stop them.
 
 ## Multiple devices
 

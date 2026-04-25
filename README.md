@@ -106,7 +106,7 @@ Language:
 - `make`, `:variable`, `print`, `show`
 - `repeat`, `forever`, `if`, `ifelse`, `waituntil`
 - `to ... end`, `output`, `stop`, `erase`
-- `launch`
+- `launch`, `task`, `tasks`, `kill`, `killall`, `waitfor`
 - `wait`, `timer`, `resett`
 - `namepage`, `save`, `load`, `setdisk`
 

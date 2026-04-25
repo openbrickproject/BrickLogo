@@ -916,7 +916,7 @@ fn test_launch_does_not_surface_stop() {
     eval.evaluate("launch [forever [wait 1]]").unwrap();
     // Let the task start and loop at least once.
     std::thread::sleep(std::time::Duration::from_millis(50));
-    eval.stop_all_launched();
+    eval.kill_all_launched();
     // Give the task time to notice the stop flag and drop its child.
     let reaped = wait_for(
         || {
@@ -1084,8 +1084,445 @@ fn test_panic_not_lost_under_concurrent_launches() {
     );
 }
 
+// ── Task observability: IDs, task, tasks, kill, waitfor ──
+
 #[test]
-fn test_stop_all_launched_does_not_clear_vec() {
+fn test_launch_returns_monotonic_id() {
+    let (mut eval, _) = create_evaluator();
+    let a = eval.evaluate("launch [wait 1000]").unwrap();
+    let b = eval.evaluate("launch [wait 1000]").unwrap();
+    let c = eval.evaluate("launch [wait 1000]").unwrap();
+    let as_num = |v: Option<LogoValue>| -> f64 {
+        match v {
+            Some(LogoValue::Number(n)) => n,
+            other => panic!("expected Number, got {:?}", other),
+        }
+    };
+    let (ai, bi, ci) = (as_num(a), as_num(b), as_num(c));
+    assert!(ai < bi && bi < ci, "expected ai < bi < ci, got {} {} {}", ai, bi, ci);
+    eval.kill_all_launched();
+}
+
+#[test]
+fn test_launch_first_id_is_one() {
+    let (mut eval, _) = create_evaluator();
+    let first = eval.evaluate("launch [wait 1000]").unwrap();
+    assert_eq!(first, Some(LogoValue::Number(1.0)));
+    eval.kill_all_launched();
+}
+
+#[test]
+fn test_task_on_main_thread_is_zero() {
+    let (mut eval, _) = create_evaluator();
+    let id = eval.evaluate("task").unwrap();
+    assert_eq!(id, Some(LogoValue::Number(0.0)));
+}
+
+#[test]
+fn test_task_inside_launch_matches_launch_return() {
+    let (mut eval, output) = create_evaluator();
+    // `make "j launch [print task]` — launched task prints its own ID.
+    eval.evaluate("make \"j launch [print task]").unwrap();
+    // Give the task a moment to run.
+    for _ in 0..50 {
+        if !output.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let printed = output.lock().unwrap().clone();
+    assert!(!printed.is_empty(), "launched task never printed");
+    let task_id_printed: f64 = printed[0].trim().parse().unwrap();
+    let j = eval.evaluate(":j").unwrap();
+    assert_eq!(j, Some(LogoValue::Number(task_id_printed)));
+}
+
+#[test]
+fn test_task_inside_procedure_called_from_launch() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to who print task end").unwrap();
+    eval.evaluate("make \"j launch [who]").unwrap();
+    for _ in 0..50 {
+        if !output.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let printed = output.lock().unwrap().clone();
+    assert!(!printed.is_empty(), "procedure inside launch didn't print");
+    let task_id_printed: f64 = printed[0].trim().parse().unwrap();
+    let j = eval.evaluate(":j").unwrap();
+    assert_eq!(j, Some(LogoValue::Number(task_id_printed)));
+}
+
+#[test]
+fn test_tasks_empty_when_idle() {
+    let (mut eval, _) = create_evaluator();
+    let v = eval.evaluate("tasks").unwrap();
+    assert_eq!(v, Some(LogoValue::List(Vec::new())));
+}
+
+#[test]
+fn test_tasks_insertion_order_preserved() {
+    let (mut eval, _) = create_evaluator();
+    let a = eval.evaluate("launch [forever [wait 1]]").unwrap();
+    let b = eval.evaluate("launch [forever [wait 1]]").unwrap();
+    let c = eval.evaluate("launch [forever [wait 1]]").unwrap();
+    let get_id = |v: Option<LogoValue>| match v {
+        Some(LogoValue::Number(n)) => n,
+        _ => panic!(),
+    };
+    let (ai, bi, ci) = (get_id(a), get_id(b), get_id(c));
+
+    // Wait a tick for the spawns to settle, then read tasks.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let list = eval.evaluate("tasks").unwrap();
+    match list {
+        Some(LogoValue::List(v)) => {
+            let ids: Vec<f64> = v
+                .into_iter()
+                .map(|x| match x {
+                    LogoValue::Number(n) => n,
+                    _ => panic!(),
+                })
+                .collect();
+            assert_eq!(ids, vec![ai, bi, ci]);
+        }
+        _ => panic!(),
+    }
+
+    // Stop the middle one specifically, wait for it to exit, then
+    // confirm the remaining tasks are still in launch order (a, c).
+    eval.evaluate(&format!("kill {}", bi)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        let list = eval.evaluate("tasks").unwrap();
+        if let Some(LogoValue::List(v)) = &list {
+            if v.len() == 2 {
+                let ids: Vec<f64> = v
+                    .iter()
+                    .map(|x| match x {
+                        LogoValue::Number(n) => *n,
+                        _ => panic!(),
+                    })
+                    .collect();
+                assert_eq!(ids, vec![ai, ci], "order should be preserved after prune");
+                eval.kill_all_launched();
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("middle task didn't finish in time");
+}
+
+#[test]
+fn test_tasks_includes_own_id_from_launched_body() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("launch [show tasks]").unwrap();
+    for _ in 0..50 {
+        if !output.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let printed = output.lock().unwrap().clone();
+    assert!(!printed.is_empty(), "launched task didn't print");
+    // `show [1]` renders as `[1]` — the list should contain the task's
+    // own ID.
+    assert!(
+        printed[0].contains("[1]"),
+        "expected launched task to see itself in `tasks`: got {:?}",
+        printed[0]
+    );
+}
+
+#[test]
+fn test_tasks_excludes_pruned_entries() {
+    let (mut eval, _) = create_evaluator();
+    eval.evaluate("launch [wait 1]").unwrap();
+    // `wait 1` is 100 ms (tenths of a second). Wait well past that so
+    // the thread has definitely exited before we query `tasks`.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    // Call tasks — prune runs inside — list should be empty.
+    let v = eval.evaluate("tasks").unwrap();
+    assert_eq!(v, Some(LogoValue::List(Vec::new())));
+}
+
+#[test]
+fn test_kill_stops_specific_task() {
+    let (mut eval, _) = create_evaluator();
+    let id = match eval.evaluate("launch [forever [wait 1]]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        _ => panic!(),
+    };
+    // Confirm it's alive.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    eval.evaluate(&format!("kill {}", id)).unwrap();
+    // Wait for it to exit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if std::time::Instant::now() > deadline {
+            panic!("task didn't stop");
+        }
+        if let Some(LogoValue::List(v)) = eval.evaluate("tasks").unwrap() {
+            if v.is_empty() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn test_kill_leaves_others_running() {
+    let (mut eval, _) = create_evaluator();
+    let a = match eval.evaluate("launch [forever [wait 1]]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        _ => panic!(),
+    };
+    let b = match eval.evaluate("launch [forever [wait 1]]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        _ => panic!(),
+    };
+    eval.evaluate(&format!("kill {}", a)).unwrap();
+
+    // Wait for a to exit. b should still be running.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if std::time::Instant::now() > deadline {
+            panic!("a didn't stop");
+        }
+        if let Some(LogoValue::List(v)) = eval.evaluate("tasks").unwrap() {
+            if v.len() == 1 {
+                match &v[0] {
+                    LogoValue::Number(n) => assert_eq!(*n as u64, b),
+                    _ => panic!(),
+                }
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    eval.kill_all_launched();
+}
+
+#[test]
+fn test_kill_unknown_id_errors() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("kill 999").unwrap_err();
+    assert!(
+        format!("{}", err).contains("No task with id 999"),
+        "expected not-found error, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_kill_main_thread_errors() {
+    // The main thread's task ID (0) is never tracked in launched_tasks,
+    // so killing it surfaces the same not-found error as any other
+    // unknown id.
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("kill 0").unwrap_err();
+    assert!(format!("{}", err).contains("No task with id 0"));
+}
+
+#[test]
+fn test_kill_after_task_finished_no_intervening_prune() {
+    // A task that has exited but hasn't been pruned yet (no `launch`,
+    // `tasks`, or `waitfor` call between exit and kill) is still
+    // physically present in `launched_tasks`. Without pruning at the
+    // start of `kill_task`, lookup would find the dead entry and
+    // return Ok against an already-finished task — disagreeing with
+    // both the docs and the user's mental model. This guards that path.
+    let (mut eval, _) = create_evaluator();
+    let id = match eval.evaluate("launch [print 1]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        other => panic!("expected Number from launch, got {:?}", other),
+    };
+    // Wait for the spawned thread to exit (drops its child evaluator
+    // → strong_count on stop falls to 1). Inspect the vec directly so
+    // we don't accidentally trigger a prune by going through a primitive.
+    let settled = wait_for(
+        || {
+            let tasks = eval.launched_tasks.lock().unwrap();
+            tasks
+                .iter()
+                .any(|t| t.id == id && Arc::strong_count(&t.stop) == 1)
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(settled, "spawned task didn't exit in time");
+    // No prune-triggering call has run since the exit. `kill` must
+    // still error.
+    let err = eval.evaluate(&format!("kill {}", id)).unwrap_err();
+    assert!(
+        format!("{}", err).contains(&format!("No task with id {}", id)),
+        "expected not-found error, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_kill_rejects_negative_id() {
+    let (mut eval, _) = create_evaluator();
+    // `-1` is parsed as binary subtraction in Logo, so use the unary
+    // `minus` form to get a real negative literal.
+    let err = eval.evaluate("kill (minus 1)").unwrap_err();
+    assert!(
+        format!("{}", err).contains("non-negative integer"),
+        "got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_kill_rejects_fractional_id() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("kill 1.9").unwrap_err();
+    assert!(
+        format!("{}", err).contains("non-negative integer"),
+        "got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_waitfor_rejects_negative_id() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("waitfor (minus 5)").unwrap_err();
+    assert!(format!("{}", err).contains("non-negative integer"));
+}
+
+#[test]
+fn test_waitfor_rejects_fractional_id() {
+    let (mut eval, _) = create_evaluator();
+    let err = eval.evaluate("waitfor 2.5").unwrap_err();
+    assert!(format!("{}", err).contains("non-negative integer"));
+}
+
+#[test]
+fn test_kill_accepts_whole_number_float() {
+    // `1.0` is conceptually an integer, just expressed as a float —
+    // accept it. Mostly to confirm the validator's `n.fract() != 0.0`
+    // check doesn't reject these.
+    let (mut eval, _) = create_evaluator();
+    // No task with id 1 exists, so we expect the not-found error,
+    // *not* the validation error.
+    let err = eval.evaluate("kill 1.0").unwrap_err();
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("No task with id 1"),
+        "expected not-found, got validation rejection: {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_waitfor_live_task_blocks_until_exit() {
+    let (mut eval, _) = create_evaluator();
+    // Task finishes after ~60 ms (wait in tenths of a second).
+    let id = match eval.evaluate("launch [wait 1]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        _ => panic!(),
+    };
+    let start = std::time::Instant::now();
+    eval.evaluate(&format!("waitfor {}", id)).unwrap();
+    let elapsed = start.elapsed();
+    // `wait 1` is 100 ms of real time. waitfor must not return earlier.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(80),
+        "waitfor returned too fast: {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn test_waitfor_self_is_error() {
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    // `launch [waitfor task]` — the launched body tries to wait on its
+    // own ID and should surface an error through the system callback.
+    eval.evaluate("launch [waitfor task]").unwrap();
+    let got = wait_for(
+        || {
+            system
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.contains("Cannot wait for the current task"))
+        },
+        std::time::Duration::from_secs(2),
+    );
+    assert!(got, "self-wait wasn't reported: {:?}", system.lock().unwrap());
+}
+
+#[test]
+fn test_waitfor_unknown_id_returns_immediately() {
+    let (mut eval, _) = create_evaluator();
+    let start = std::time::Instant::now();
+    eval.evaluate("waitfor 999").unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_millis(50));
+}
+
+#[test]
+fn test_waitfor_surfaces_panic_from_target() {
+    let (mut eval, _out, system) = create_evaluator_with_system_capture();
+    eval.register_primitive(
+        "boom",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, _| panic!("boom!")),
+        },
+    );
+    let id = match eval.evaluate("launch [boom]").unwrap() {
+        Some(LogoValue::Number(n)) => n as u64,
+        _ => panic!(),
+    };
+    eval.evaluate(&format!("waitfor {}", id)).unwrap();
+    // Panic must be reported *already*, not on the next launch.
+    let msgs = system.lock().unwrap().clone();
+    assert!(
+        msgs.iter().any(|m| m.contains("Background task panicked")),
+        "waitfor didn't surface panic: {:?}",
+        msgs
+    );
+}
+
+#[test]
+fn test_waitfor_allows_multiple_waiters_on_same_task() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"target launch [wait 3]").unwrap();
+    eval.evaluate("make \"w1 launch [waitfor :target print \"a]").unwrap();
+    eval.evaluate("make \"w2 launch [waitfor :target print \"b]").unwrap();
+
+    eval.evaluate("waitfor :w1").unwrap();
+    eval.evaluate("waitfor :w2").unwrap();
+
+    let mut printed = output.lock().unwrap().clone();
+    printed.sort();
+    assert_eq!(printed, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn test_waitfor_allows_concurrent_waiters_on_different_tasks() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("make \"a launch [wait 2]").unwrap();
+    eval.evaluate("make \"b launch [wait 3]").unwrap();
+    eval.evaluate("make \"wa launch [waitfor :a print \"a]").unwrap();
+    eval.evaluate("make \"wb launch [waitfor :b print \"b]").unwrap();
+
+    eval.evaluate("waitfor :wa").unwrap();
+    eval.evaluate("waitfor :wb").unwrap();
+
+    let mut printed = output.lock().unwrap().clone();
+    printed.sort();
+    assert_eq!(printed, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn test_kill_all_launched_does_not_clear_vec() {
     let (mut eval, _out, _system) = create_evaluator_with_system_capture();
     eval.evaluate("launch [forever [wait 1]]").unwrap();
     // Give the task a moment to start.
@@ -1095,13 +1532,13 @@ fn test_stop_all_launched_does_not_clear_vec() {
         1,
         "expected exactly one task tracked after first launch"
     );
-    eval.stop_all_launched();
+    eval.kill_all_launched();
     // Immediately after the signal, the entry is still tracked — prune
     // happens on the next launch so the JoinHandle can be reaped cleanly.
     assert_eq!(
         eval.launched_tasks.lock().unwrap().len(),
         1,
-        "stop_all_launched should not clear the vec eagerly"
+        "kill_all_launched should not clear the vec eagerly"
     );
     // Wait for the task to actually exit.
     let reaped = wait_for(

@@ -1,8 +1,23 @@
 use std::sync::Arc;
 
 use crate::error::LogoError;
+use crate::error::LogoResult;
 use crate::evaluator::{Evaluator, PrimitiveSpec};
 use crate::value::LogoValue;
+
+/// Validate a task-id argument: must be a finite, non-negative integer.
+/// Rejects fractional values (`1.9`), negatives (which silently saturate
+/// to `0` under a bare `as u64` cast), and values larger than `u64::MAX`.
+fn task_id_arg(arg: &LogoValue) -> LogoResult<u64> {
+    let n = arg.as_number()?;
+    if !n.is_finite() || n < 0.0 || n.fract() != 0.0 || n > u64::MAX as f64 {
+        return Err(LogoError::Runtime(format!(
+            "Task id must be a non-negative integer, got {}",
+            n
+        )));
+    }
+    Ok(n as u64)
+}
 
 pub fn register_core_primitives(eval: &mut Evaluator) {
     // ── Math ────────────────────────────────
@@ -799,12 +814,70 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
     );
 
     eval.register_primitive(
-        "stopall",
+        "killall",
         PrimitiveSpec {
             min_args: 0,
             max_args: 0,
             func: Arc::new(|_, _, eval| {
-                eval.stop_all_launched();
+                eval.kill_all_launched();
+                Ok(None)
+            }),
+        },
+    );
+
+    // ── Task observability ──────────────────────
+    //
+    // `launch [body]` returns the new task's ID. These primitives let
+    // users query, stop, and wait for specific tasks by that ID.
+
+    eval.register_primitive(
+        "task",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, eval| {
+                Ok(Some(LogoValue::Number(eval.current_task_id() as f64)))
+            }),
+        },
+    );
+
+    eval.register_primitive(
+        "tasks",
+        PrimitiveSpec {
+            min_args: 0,
+            max_args: 0,
+            func: Arc::new(|_, _, eval| {
+                let ids: Vec<LogoValue> = eval
+                    .running_task_ids()
+                    .into_iter()
+                    .map(|id| LogoValue::Number(id as f64))
+                    .collect();
+                Ok(Some(LogoValue::List(ids)))
+            }),
+        },
+    );
+
+    eval.register_primitive(
+        "kill",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(|args, _, eval| {
+                let id = task_id_arg(&args[0])?;
+                eval.kill_task(id)?;
+                Ok(None)
+            }),
+        },
+    );
+
+    eval.register_primitive(
+        "waitfor",
+        PrimitiveSpec {
+            min_args: 1,
+            max_args: 1,
+            func: Arc::new(|args, _, eval| {
+                let id = task_id_arg(&args[0])?;
+                eval.wait_for_task(id)?;
                 Ok(None)
             }),
         },

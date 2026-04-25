@@ -471,8 +471,10 @@ impl App {
             "    output <value>  /  stop              Return from procedure".to_string(),
             "    erase \"name                          Remove a procedure".to_string(),
             "    carefully [...] [...]                Error handling".to_string(),
-            "    launch [...]                         Run commands in background".to_string(),
-            "    stopall                              Stop all background processes".to_string(),
+            "    launch [...]                         Run commands in background (returns task id)".to_string(),
+            "    task / tasks                         Current task id / list of running task ids".to_string(),
+            "    kill <id>  /  killall                Stop one task by id  /  stop all tasks".to_string(),
+            "    waitfor <id>                         Block until the given task finishes".to_string(),
             String::new(),
         ];
 

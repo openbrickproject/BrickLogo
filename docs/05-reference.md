@@ -753,26 +753,93 @@ Pauses execution until the condition becomes `"true`. The condition is re-evalua
 launch [commands]
 ```
 
-Runs the commands in a background thread. Execution continues immediately — `launch` does not wait for the commands to finish. Useful for running independent motor sequences or sensor monitors in parallel.
+Runs the commands in a background task and reports the new task's id. The prompt returns immediately. Background tasks share global variables with the main program but each holds its own `talkto` and `listento` selection.
 
 ```
 ? launch [forever [onfor 10 wait 5]]
-? print "launched
-launched
+1
+? make "robot launch [forever [print sensor "distance wait 5]]
+? print :robot
+2
 ```
 
-Background threads share variables with the main program. Press Escape to stop the foreground program; use `stopall` to stop all background threads.
+See `task`, `tasks`, `kill`, `killall`, `waitfor`, and `carefully`.
 
-### `stopall`
-
-```
-stopall
-```
-
-Stops all background threads started with `launch`.
+### `task`
 
 ```
-? stopall
+task
+```
+
+Reports the id of the task the caller is running in. Reports `0` on the main thread.
+
+```
+? task
+0
+? launch [print task]
+3
+3
+```
+
+### `tasks`
+
+```
+tasks
+```
+
+Reports a list of the ids of all tasks currently running, in the order they were launched. Reports `[]` when no tasks are running.
+
+```
+? tasks
+[]
+? launch [forever [wait 10]]
+4
+? launch [forever [wait 10]]
+5
+? print tasks
+[4 5]
+```
+
+### `kill`
+
+```
+kill task-id
+```
+
+Stops the task with the given id. Errors if no task with that id is currently running — including ids of tasks that finished, panicked, or were killed previously.
+
+```
+? make "robot launch [forever [wait 10]]
+? kill :robot
+? kill :robot
+No task with id 6
+```
+
+See `killall`.
+
+### `killall`
+
+```
+killall
+```
+
+Stops every background task started with `launch`. Has no effect on the main program.
+
+```
+? killall
+```
+
+### `waitfor`
+
+```
+waitfor task-id
+```
+
+Pauses the caller until the named task finishes. Returns immediately if no task with that id is running. The wait responds to Escape, which stops the wait without affecting the target task. May not be called from the task it is waiting on — that case errors.
+
+```
+? make "job launch [wait 30]
+? waitfor :job
 ```
 
 ### `carefully`

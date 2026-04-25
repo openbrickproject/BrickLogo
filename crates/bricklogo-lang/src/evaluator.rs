@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::ast::{AstNode, UserProcedure};
 use crate::error::{LogoError, LogoResult};
@@ -128,7 +128,12 @@ impl Environment {
 /// The entry is only ever inserted together with its `handle`, under
 /// the `launched_tasks` lock, so there is never a window where a
 /// started task is visible without a handle to join.
+///
+/// `id` is the monotonic task ID returned from `launch`, consumed by
+/// `task`, `tasks`, `kill`, and `waitfor`. Main thread evaluators
+/// use id `0` as a sentinel and never appear in `launched_tasks`.
 struct LaunchedTask {
+    id: u64,
     stop: Arc<AtomicBool>,
     handle: std::thread::JoinHandle<()>,
 }
@@ -144,6 +149,14 @@ pub struct Evaluator {
     timer_start: std::time::Instant,
     session: SessionState,
     launched_tasks: Arc<Mutex<Vec<LaunchedTask>>>,
+    /// Shared monotonic counter across the whole evaluator tree — each
+    /// child clones this Arc so nested launches from a launched task
+    /// get IDs from the same sequence.
+    next_task_id: Arc<AtomicU64>,
+    /// The task ID this evaluator is running under. `0` on the main
+    /// evaluator; set by `eval_launch` on the child before it's moved
+    /// into the spawned thread.
+    current_task_id: u64,
     selected_outputs: Vec<String>,
     selected_inputs: Vec<String>,
     var_broadcast: Option<std::sync::mpsc::Sender<(String, LogoValue)>>,
@@ -162,6 +175,8 @@ impl Evaluator {
             timer_start: std::time::Instant::now(),
             session: SessionState::new(),
             launched_tasks: Arc::new(Mutex::new(Vec::new())),
+            next_task_id: Arc::new(AtomicU64::new(1)),
+            current_task_id: 0,
             selected_outputs: Vec::new(),
             selected_inputs: Vec::new(),
             var_broadcast: None,
@@ -205,6 +220,71 @@ impl Evaluator {
         self.stop_requested.store(true, Ordering::SeqCst);
     }
 
+    /// The task ID this evaluator is running under. `0` on the main
+    /// evaluator; nonzero for any launched task's child evaluator.
+    pub fn current_task_id(&self) -> u64 {
+        self.current_task_id
+    }
+
+    /// IDs of currently-running launched tasks, in the order they were
+    /// launched. Runs a prune first so finished-but-not-yet-reaped
+    /// tasks don't linger in the result.
+    pub fn running_task_ids(&self) -> Vec<u64> {
+        let mut tasks = self.launched_tasks.lock().unwrap();
+        prune_finished(&mut tasks, &self.system_callback);
+        tasks.iter().map(|t| t.id).collect()
+    }
+
+    /// Signal the specified task to stop. Errors if `id` does not
+    /// match a currently-running task. Prunes finished tasks before
+    /// looking up so a task that exited but wasn't reaped yet is
+    /// correctly reported as not running. Covers typos, already-
+    /// finished tasks, and tasks that died via panic or a previous
+    /// kill — all surface as the same "No task with id N" error so
+    /// the caller knows the kill did not hit a live target.
+    pub fn kill_task(&self, id: u64) -> LogoResult<()> {
+        let mut tasks = self.launched_tasks.lock().unwrap();
+        prune_finished(&mut tasks, &self.system_callback);
+        if let Some(t) = tasks.iter().find(|t| t.id == id) {
+            t.stop.store(true, Ordering::SeqCst);
+            Ok(())
+        } else {
+            Err(LogoError::Runtime(format!("No task with id {}", id)))
+        }
+    }
+
+    /// Block until the specified task finishes. Polls at 60 Hz and
+    /// checks the caller's own stop flag each iteration so Esc
+    /// interrupts the wait rather than the target task.
+    ///
+    /// - `id == self.current_task_id` → self-wait; returns a runtime
+    ///   error immediately (would deadlock otherwise).
+    /// - `id` not tracked → already finished (or never existed); returns
+    ///   `Ok(())` immediately.
+    /// - Otherwise: polls until the task disappears from
+    ///   `launched_tasks`, pruning finished entries each iteration so
+    ///   panics are surfaced right away. This remains correct with any
+    ///   number of concurrent waiters on the same task.
+    pub fn wait_for_task(&self, id: u64) -> LogoResult<()> {
+        if id == self.current_task_id {
+            return Err(LogoError::Runtime(
+                "Cannot wait for the current task".to_string(),
+            ));
+        }
+        loop {
+            self.check_stop()?;
+            let done = {
+                let mut tasks = self.launched_tasks.lock().unwrap();
+                prune_finished(&mut tasks, &self.system_callback);
+                !tasks.iter().any(|t| t.id == id)
+            };
+            if done {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    }
+
     pub fn set_selected_outputs(&mut self, ports: Vec<String>) {
         self.selected_outputs = ports;
     }
@@ -221,12 +301,12 @@ impl Evaluator {
         &self.selected_inputs
     }
 
-    /// Signal every currently-launched background task to stop. Leaves
-    /// the tracking entries in place so `prune_finished` (called from
-    /// the next `eval_launch`) can `join` their handles cleanly — a
-    /// task that panics between the signal and the prune still gets
-    /// reported.
-    pub fn stop_all_launched(&self) {
+    /// Signal every currently-launched background task to stop (the
+    /// `killall` primitive). Leaves the tracking entries in place so
+    /// `prune_finished` (called from the next `eval_launch`) can
+    /// `join` their handles cleanly — a task that panics between the
+    /// signal and the prune still gets reported.
+    pub fn kill_all_launched(&self) {
         let tasks = self.launched_tasks.lock().unwrap();
         for t in tasks.iter() {
             t.stop.store(true, Ordering::SeqCst);
@@ -276,6 +356,8 @@ impl Evaluator {
             timer_start: self.timer_start,
             session: SessionState::new(),
             launched_tasks: self.launched_tasks.clone(),
+            next_task_id: self.next_task_id.clone(),
+            current_task_id: 0,
             selected_outputs: self.selected_outputs.clone(),
             selected_inputs: self.selected_inputs.clone(),
             var_broadcast: self.var_broadcast.clone(),
@@ -686,10 +768,17 @@ impl Evaluator {
         let system_fn = self.system_callback.clone();
         let closure_system_fn = system_fn.clone();
 
+        // Allocate a monotonic task ID for this launch. The child
+        // evaluator receives it so the `task` primitive can report it
+        // from inside the launched body. IDs start at 1; `0` is the
+        // main-thread sentinel.
+        let id = self.next_task_id.fetch_add(1, Ordering::SeqCst);
+        child.current_task_id = id;
+
         // Hold the `launched_tasks` lock across thread::spawn AND the
         // push. That window is microseconds. It closes two races at once:
         //
-        //   - `stop_all_launched` can't miss a just-launched task — it
+        //   - `kill_all_launched` can't miss a just-launched task — it
         //     blocks on this lock, then sees the new entry.
         //   - A concurrent `eval_launch` on another thread can't run
         //     `prune_finished` between spawn and push. Before the fix
@@ -712,7 +801,7 @@ impl Evaluator {
                 }
                 if let Err(e) = child.eval_node(node, &mut env) {
                     // Silent exit on a stop signal — that's the normal
-                    // "user hit Esc" / `stopall` path. Everything else
+                    // "user hit Esc" / `killall` path. Everything else
                     // is a bug the user wants to know about.
                     if !matches!(e, LogoError::Stop) {
                         closure_system_fn(&format!("Background task error: {}", e));
@@ -721,10 +810,10 @@ impl Evaluator {
                 }
             }
         });
-        tasks.push(LaunchedTask { stop: stop_flag, handle });
+        tasks.push(LaunchedTask { id, stop: stop_flag, handle });
         drop(tasks);
 
-        Ok(None)
+        Ok(Some(LogoValue::Number(id as f64)))
     }
 
     fn eval_if(
@@ -897,14 +986,17 @@ impl Evaluator {
 /// remaining reference (`strong_count == 1`). For reaped entries we
 /// `join` the handle so a panicked thread gets reported through
 /// `system_fn` rather than disappearing silently.
+/// Order-preserving: we drain the vec into a temporary, keep live
+/// entries in the same relative order, and join+report on every reaped
+/// entry. Preserving insertion order matters for the `tasks` primitive,
+/// which shows users the order in which their launches happened.
 fn prune_finished(
     tasks: &mut Vec<LaunchedTask>,
     system_fn: &Arc<dyn Fn(&str) + Send + Sync>,
 ) {
-    let mut i = 0;
-    while i < tasks.len() {
-        if Arc::strong_count(&tasks[i].stop) == 1 {
-            let task = tasks.swap_remove(i);
+    let mut kept: Vec<LaunchedTask> = Vec::with_capacity(tasks.len());
+    for task in tasks.drain(..) {
+        if Arc::strong_count(&task.stop) == 1 {
             if let Err(panic) = task.handle.join() {
                 system_fn(&format!(
                     "Background task panicked: {}",
@@ -912,9 +1004,10 @@ fn prune_finished(
                 ));
             }
         } else {
-            i += 1;
+            kept.push(task);
         }
     }
+    *tasks = kept;
 }
 
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
