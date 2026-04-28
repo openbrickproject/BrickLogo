@@ -329,6 +329,121 @@ fn test_buildhat_rotate_ports_to_position_fires_both_ramps_before_waiting() {
     );
 }
 
+/// Build an adapter whose port 0 holds the given device type.
+fn make_adapter_with_device(type_id: u16) -> (BuildHATAdapter, Arc<Mutex<Vec<String>>>) {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let transport: Box<dyn BuildHATTransport> = Box::new(MockTransport {
+        writes: writes.clone(),
+    });
+    let (tx, rx) = mpsc::channel();
+    let shared = Arc::new(Mutex::new(BuildHATShared::new()));
+    {
+        let mut s = shared.lock().unwrap();
+        s.ports[0] = PortInfo { type_id, connected: true };
+    }
+    let slot = BuildHATSlot {
+        port: transport,
+        rx,
+        shared: shared.clone(),
+        read_buffer: String::new(),
+        alive: true,
+        pending_inits: Vec::new(),
+    };
+    let slot_id = scheduler::register_slot(Box::new(slot));
+    let mut adapter = BuildHATAdapter::new();
+    adapter.tx = Some(tx);
+    adapter.slot_id = Some(slot_id);
+    adapter.shared = shared;
+    (adapter, writes)
+}
+
+#[test]
+fn test_buildhat_validate_output_port_accepts_motor() {
+    let (adapter, _) = make_adapter_with_device(DEVICE_PASSIVE_MOTOR);
+    assert!(adapter.validate_output_port("a").is_ok());
+}
+
+#[test]
+fn test_buildhat_validate_output_port_accepts_led() {
+    let (adapter, _) = make_adapter_with_device(DEVICE_LIGHT);
+    assert!(adapter.validate_output_port("a").is_ok());
+}
+
+#[test]
+fn test_buildhat_validate_output_port_rejects_sensor() {
+    let (adapter, _) = make_adapter_with_device(DEVICE_COLOR_SENSOR);
+    let err = adapter.validate_output_port("a").unwrap_err();
+    assert!(
+        err.contains("not a motor or light"),
+        "unexpected error wording: {}",
+        err
+    );
+}
+
+#[test]
+fn test_buildhat_validate_output_port_no_device_errors() {
+    // Empty port (no device attached) — fresh shared state has ports
+    // defaulted to disconnected.
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let transport: Box<dyn BuildHATTransport> = Box::new(MockTransport {
+        writes: writes.clone(),
+    });
+    let (tx, rx) = mpsc::channel();
+    let shared = Arc::new(Mutex::new(BuildHATShared::new()));
+    let slot = BuildHATSlot {
+        port: transport,
+        rx,
+        shared: shared.clone(),
+        read_buffer: String::new(),
+        alive: true,
+        pending_inits: Vec::new(),
+    };
+    let slot_id = scheduler::register_slot(Box::new(slot));
+    let mut adapter = BuildHATAdapter::new();
+    adapter.tx = Some(tx);
+    adapter.slot_id = Some(slot_id);
+    adapter.shared = shared;
+
+    let err = adapter.validate_output_port("a").unwrap_err();
+    adapter.disconnect();
+    assert!(
+        err.contains("No device on port"),
+        "unexpected error wording: {}",
+        err
+    );
+}
+
+#[test]
+fn test_buildhat_led_on_drives_pwm() {
+    // `talkto "a on` on an LED should send `set <fraction>` PWM.
+    let (mut adapter, writes) = make_adapter_with_device(DEVICE_LIGHT);
+    adapter.start_port("a", PortDirection::Even, 50).unwrap();
+    adapter.disconnect();
+
+    let writes = writes.lock().unwrap();
+    assert_eq!(
+        count_matching(&writes, "set "),
+        1,
+        "expected one `set` write, got: {:?}",
+        writes
+    );
+}
+
+#[test]
+fn test_buildhat_led_off_coasts() {
+    let (mut adapter, writes) = make_adapter_with_device(DEVICE_LIGHT);
+    adapter.stop_port("a").unwrap();
+    adapter.disconnect();
+
+    let writes = writes.lock().unwrap();
+    assert_eq!(
+        count_matching(&writes, "coast"),
+        1,
+        "expected one `coast` write, got: {:?}",
+        writes
+    );
+}
+
 #[test]
 fn test_buildhat_start_ports_sends_per_port_set() {
     // Direct test of start_ports: should emit one `set` per port.

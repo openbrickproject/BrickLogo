@@ -532,8 +532,8 @@ impl HardwareAdapter for BuildHATAdapter {
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         let idx = self.port_index(port)?;
         let type_id = self.require_device(idx)?;
-        if !is_motor(type_id) {
-            return Err(format!("Device on port \"{}\" is not a motor", port));
+        if !is_motor(type_id) && !is_led(type_id) {
+            return Err(format!("Port \"{}\" is not a motor or light", port));
         }
         Ok(())
     }

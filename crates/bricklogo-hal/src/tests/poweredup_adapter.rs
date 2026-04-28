@@ -93,6 +93,57 @@ fn attach_angular_motors(hub: &Arc<Mutex<Hub>>) {
 }
 
 #[test]
+fn test_pup_validate_output_port_accepts_motor() {
+    let (adapter, handles) = make_adapter_with_mock(HubType::TechnicMediumHub);
+    handles
+        .hub
+        .lock()
+        .unwrap()
+        .attach_device(0, DeviceType::TechnicMediumAngularMotor);
+    assert!(adapter.validate_output_port("a").is_ok());
+}
+
+#[test]
+fn test_pup_validate_output_port_accepts_light() {
+    // Powered UP analogue of the Build HAT LED case — a Light on a power
+    // output port must validate.
+    let (adapter, handles) = make_adapter_with_mock(HubType::TechnicMediumHub);
+    handles
+        .hub
+        .lock()
+        .unwrap()
+        .attach_device(0, DeviceType::Light);
+    assert!(adapter.validate_output_port("a").is_ok());
+}
+
+#[test]
+fn test_pup_validate_output_port_rejects_sensor() {
+    let (adapter, handles) = make_adapter_with_mock(HubType::TechnicMediumHub);
+    handles
+        .hub
+        .lock()
+        .unwrap()
+        .attach_device(0, DeviceType::TechnicColorSensor);
+    let err = adapter.validate_output_port("a").unwrap_err();
+    assert!(
+        err.contains("not a motor or light"),
+        "unexpected error wording: {}",
+        err
+    );
+}
+
+#[test]
+fn test_pup_validate_output_port_no_device_errors() {
+    let (adapter, _) = make_adapter_with_mock(HubType::TechnicMediumHub);
+    let err = adapter.validate_output_port("a").unwrap_err();
+    assert!(
+        err.contains("No device on port"),
+        "unexpected error wording: {}",
+        err
+    );
+}
+
+#[test]
 fn test_pup_run_ports_for_time_uses_request_all_for_tacho() {
     // Tacho motors use cmd_start_speed_for_time + request_all, which fires
     // all per-port commands in one call. Verifies multi-port batching

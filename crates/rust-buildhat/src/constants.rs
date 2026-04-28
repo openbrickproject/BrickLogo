@@ -48,6 +48,11 @@ pub fn is_motor(type_id: u16) -> bool {
     )
 }
 
+/// Returns true if this device type is an LED light.
+pub fn is_led(type_id: u16) -> bool {
+    type_id == DEVICE_LIGHT
+}
+
 /// Returns true if this device type is a sensor.
 pub fn is_sensor(type_id: u16) -> bool {
     matches!(

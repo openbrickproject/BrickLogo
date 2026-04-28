@@ -8,6 +8,13 @@ fn test_is_motor() {
 }
 
 #[test]
+fn test_is_led() {
+    assert!(is_led(DEVICE_LIGHT));
+    assert!(!is_led(DEVICE_PASSIVE_MOTOR));
+    assert!(!is_led(DEVICE_COLOR_SENSOR));
+}
+
+#[test]
 fn test_is_sensor() {
     assert!(is_sensor(DEVICE_COLOR_SENSOR));
     assert!(is_sensor(DEVICE_FORCE_SENSOR));
