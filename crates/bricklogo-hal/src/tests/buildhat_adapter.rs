@@ -430,6 +430,58 @@ fn test_buildhat_led_on_drives_pwm() {
 }
 
 #[test]
+fn test_buildhat_led_setpower_uses_on_set() {
+    // Regression for https://github.com/.../issues/...:
+    // `setpower` while an LED is already on must change brightness.
+    // The Build HAT firmware quirk is that re-issued `pwm ; set X` doesn't
+    // update brightness on subsequent calls — but `on ; set X` does.
+    // python-build-hat uses `on ; set` for LEDs for this reason.
+    let (mut adapter, writes) = make_adapter_with_device(DEVICE_LIGHT);
+    adapter.start_port("a", PortDirection::Even, 50).unwrap();
+    adapter.start_port("a", PortDirection::Even, 80).unwrap();
+    adapter.disconnect();
+
+    let writes = writes.lock().unwrap();
+    // Each call must be `port 0 ; on ; set <fraction>` — not `; pwm ; set`.
+    let on_set_count = writes
+        .iter()
+        .filter(|w| w.contains("; on ;") && w.contains("set "))
+        .count();
+    let pwm_set_count = writes
+        .iter()
+        .filter(|w| w.contains("; pwm ;") && w.contains("set "))
+        .count();
+    assert_eq!(
+        on_set_count, 2,
+        "LED start_port should emit `on ; set`, got: {:?}",
+        writes
+    );
+    assert_eq!(
+        pwm_set_count, 0,
+        "LED must not use `pwm ; set` (doesn't update brightness on re-issue), got: {:?}",
+        writes
+    );
+
+    // Verify the second call carries the new fraction (0.8 not 0.5).
+    let last = writes.iter().rev().find(|w| w.contains("set ")).unwrap();
+    assert!(last.contains("0.8"), "expected 0.8 in {}", last);
+}
+
+#[test]
+fn test_buildhat_motor_still_uses_pwm_set() {
+    // Sanity: motors keep using the signed `pwm ; set` path so direction works.
+    let (mut adapter, writes) = make_adapter_with_device(DEVICE_PASSIVE_MOTOR);
+    adapter.start_port("a", PortDirection::Odd, 50).unwrap();
+    adapter.disconnect();
+    let writes = writes.lock().unwrap();
+    assert!(
+        writes.iter().any(|w| w.contains("; pwm ;") && w.contains("set ")),
+        "passive motor should still use signed pwm ; set: {:?}",
+        writes
+    );
+}
+
+#[test]
 fn test_buildhat_led_off_coasts() {
     let (mut adapter, writes) = make_adapter_with_device(DEVICE_LIGHT);
     adapter.stop_port("a").unwrap();

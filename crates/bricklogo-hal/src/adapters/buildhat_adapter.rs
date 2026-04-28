@@ -46,6 +46,7 @@ type ReplyTx = Option<mpsc::Sender<Result<(), String>>>;
 enum BuildHATCommand {
     Raw(String),
     MotorSet { port: u8, speed: i32, reply_tx: ReplyTx },
+    LightSet { port: u8, brightness: u8, reply_tx: ReplyTx },
     MotorSpeed { port: u8, speed: i32, reply_tx: ReplyTx },
     MotorCoast { port: u8, reply_tx: ReplyTx },
     MotorOff { port: u8, reply_tx: ReplyTx },
@@ -228,6 +229,13 @@ impl DeviceSlot for BuildHATSlot {
                 BuildHATCommand::Raw(s) => self.write_cmd(&s),
                 BuildHATCommand::MotorSet { port, speed, reply_tx } => {
                     let r = self.write_cmd_checked(&cmd_motor_set(port, speed));
+                    Self::reply(reply_tx, r);
+                }
+                BuildHATCommand::LightSet { port, brightness, reply_tx } => {
+                    let r = self.write_cmd_checked(&cmd_light_set(
+                        port,
+                        brightness as f64 / 100.0,
+                    ));
                     Self::reply(reply_tx, r);
                 }
                 BuildHATCommand::MotorSpeed { port, speed, reply_tx } => {
@@ -546,9 +554,22 @@ impl HardwareAdapter for BuildHATAdapter {
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
         let idx = self.port_index(port)?;
-        self.require_device(idx)?;
-        let speed = to_signed_speed(direction, power);
-        self.send_cmd_wait(|reply_tx| BuildHATCommand::MotorSet { port: idx, speed, reply_tx })
+        let type_id = self.require_device(idx)?;
+        if is_led(type_id) {
+            // LEDs use `on ; set <fraction>` rather than `pwm ; set` —
+            // matches python-build-hat. Re-issued `pwm ; set` does not
+            // update LED brightness on subsequent calls (firmware quirk
+            // around the M1/M2 PWM split for the 88005 light), but
+            // `on ; set` does. Direction is irrelevant for an LED.
+            self.send_cmd_wait(|reply_tx| BuildHATCommand::LightSet {
+                port: idx,
+                brightness: power.min(MAX_POWER),
+                reply_tx,
+            })
+        } else {
+            let speed = to_signed_speed(direction, power);
+            self.send_cmd_wait(|reply_tx| BuildHATCommand::MotorSet { port: idx, speed, reply_tx })
+        }
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {

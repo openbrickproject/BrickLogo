@@ -47,6 +47,15 @@ pub fn cmd_motor_coast(port: u8) -> String {
     format!("port {} ; coast\r", port)
 }
 
+/// Set LED brightness via the Build HAT firmware's `on` mode. Range 0.0..1.0.
+/// The `on` mode latches per-set updates correctly across calls — the `pwm`
+/// mode used for motors does not, so re-issuing `pwm ; set X` with a new
+/// value while an LED is already lit doesn't change brightness.
+pub fn cmd_light_set(port: u8, fraction: f64) -> String {
+    let value = fraction.clamp(0.0, 1.0);
+    format!("port {} ; on ; set {}\r", port, value)
+}
+
 /// Hard stop motor (active brake via PWM 0).
 pub fn cmd_motor_off(port: u8) -> String {
     format!("port {} ; pwm ; set 0\r", port)
