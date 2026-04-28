@@ -601,16 +601,19 @@ impl SpikeAdapter {
         }
     }
 
-    /// Gate for rotate / reset / absolute-position operations. SPIKE 3's
-    /// `motor` module only accepts absolute-position motors (SPIKE-family
-    /// angular). Tacho-only devices (medium linear, Boost large, Technic
-    /// XL), passive motors, and lights ENODEV — error early with a clear
-    /// message. Mirrors PUP's `require_absolute_motor` wording.
+    /// Gate for all rotate / reset / position operations. Empirically, on
+    /// SPIKE 3 firmware (Hub OS 3.4.0), `motor.run_for_degrees`,
+    /// `motor.run_to_absolute_position`, `motor.reset_relative_position`
+    /// and `motor.run` all ENODEV on motors without an absolute encoder
+    /// (passive, lights, tacho-only types like the medium linear actuator).
+    /// `motor.run_for_time` is the only motor-module function that works
+    /// on tacho-only types, but we already cover timed-run via the default
+    /// PWM+sleep path on the host so we don't need it.
     ///
-    /// Note: PUP's LWP3 firmware accepts rotate-by-degrees on any tacho
-    /// (including Boost large / Technic XL); SPIKE 3 firmware is stricter.
-    /// That's a genuine platform difference, not a bug — surface it
-    /// clearly so users can pick the right hub for their motor.
+    /// Difference from PUP: PUP's LWP3 firmware accepts rotate-by-degrees
+    /// on any tacho motor (Boost large 46, Technic XL 47, medium linear
+    /// 38). SPIKE 3 firmware is stricter — only absolute motors. Surface
+    /// it cleanly so users know to switch hubs for non-SPIKE motors.
     fn require_absolute_motor(&self, port: &str) -> Result<(), String> {
         let idx = port_index_validate(port)
             .ok_or_else(|| format!("Unknown port \"{}\"", port))?;

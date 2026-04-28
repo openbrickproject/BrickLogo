@@ -567,7 +567,6 @@ fn test_start_port_on_linear_actuator_uses_port_pwm() {
 
 #[test]
 fn test_rotate_by_degrees_rejects_passive_motor() {
-    // Rotate-by-degrees only works for absolute motors on SPIKE 3.
     let (mut adapter, _) = make_adapter_with_types([
         rust_spike::constants::DEVICE_PASSIVE_MOTOR,
         0, 0, 0, 0, 0,
@@ -584,8 +583,10 @@ fn test_rotate_by_degrees_rejects_passive_motor() {
 }
 
 #[test]
-fn test_rotate_by_degrees_rejects_linear_actuator() {
-    // Tacho-only (no absolute) — same rejection as passive motor on SPIKE 3.
+fn test_rotate_by_degrees_rejects_tacho_only_motor() {
+    // Tacho-only types (38/46/47) have relative encoders but no absolute.
+    // SPIKE 3 firmware's `motor.run_for_degrees` ENODEVs on these —
+    // confirmed empirically on Hub OS 3.4.0 with a 88008 medium linear.
     let (mut adapter, _) = make_adapter_with_types([
         rust_spike::constants::DEVICE_MEDIUM_LINEAR_MOTOR,
         0, 0, 0, 0, 0,
@@ -618,6 +619,19 @@ fn test_rotate_by_degrees_rejects_light() {
 fn test_reset_zero_rejects_passive_motor() {
     let (mut adapter, _) = make_adapter_with_types([
         rust_spike::constants::DEVICE_PASSIVE_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter.reset_port_zero("a").unwrap_err();
+    adapter.disconnect();
+    assert!(err.contains("absolute-position encoder"));
+}
+
+#[test]
+fn test_reset_zero_rejects_tacho_only_motor() {
+    // motor.reset_relative_position requires absolute encoder on SPIKE 3
+    // (resets the absolute reference). Tacho-only motors are rejected.
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_MEDIUM_LINEAR_MOTOR,
         0, 0, 0, 0, 0,
     ]);
     let err = adapter.reset_port_zero("a").unwrap_err();
