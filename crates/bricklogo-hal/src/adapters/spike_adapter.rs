@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -24,12 +24,20 @@ use crate::scheduler::{self, DeviceSlot};
 use rust_spike::agent::{AGENT_SOURCE, agent_crc32};
 use rust_spike::atlantis::{self, Message, RunningCrc};
 use rust_spike::cobs;
-use rust_spike::constants::port_index as port_index_validate;
+use rust_spike::constants::{
+    PORT_COUNT, is_absolute_motor, is_led, is_motor,
+    port_index as port_index_validate, port_letter,
+};
 use rust_spike::protocol::{self, Event, Reply};
+
+/// Sentinel meaning "device type unknown" — used both before the connect-time
+/// snapshot resolves and as a fallback when the agent can't introspect a port.
+/// `validate_output_port` treats this as permissive (defer to firmware) so
+/// firmware quirks don't lock users out of working hardware.
+const PORT_TYPE_UNKNOWN: u16 = 0xFFFF;
 
 use super::spike_ble_transport::SpikeBleTransport;
 
-const OUTPUT_PORTS: &[&str] = &["a", "b", "c", "d", "e", "f"];
 const MAX_POWER: u8 = 100;
 const AGENT_FILENAME: &str = "program.py";
 const AGENT_SLOT: u8 = 0;
@@ -112,6 +120,17 @@ fn to_velocity_i16(direction: PortDirection, power: u8) -> i16 {
     match direction {
         PortDirection::Even => vel,
         PortDirection::Odd => -vel,
+    }
+}
+
+/// Convert (direction, power) to the signed PWM value the firmware accepts on
+/// `port.X.pwm()` (-100..100). Used for non-tacho devices (LEDs, passive
+/// motors) that can't do PID speed control.
+fn to_pwm_i8(direction: PortDirection, power: u8) -> i8 {
+    let p = power.min(MAX_POWER).min(100) as i8;
+    match direction {
+        PortDirection::Even => p,
+        PortDirection::Odd => -p,
     }
 }
 
@@ -321,6 +340,9 @@ struct SpikeSlot {
     alive_flag: Arc<AtomicBool>,
     /// Last time a tunnel message (of any kind) arrived from the agent.
     last_heartbeat: Instant,
+    /// Cached LPF2 device type per port. Updated on agent push events; read
+    /// by the adapter's `validate_output_port`.
+    port_types: Arc<Mutex<[u16; PORT_COUNT]>>,
 }
 
 impl DeviceSlot for SpikeSlot {
@@ -421,6 +443,12 @@ impl SpikeSlot {
                     let _ = tx.send(result);
                 }
             }
+            Event::PortEvent { port, type_id } => {
+                debug_spike(&format!("port_event: port={} type=0x{:04x}", port, type_id));
+                if (port as usize) < PORT_COUNT {
+                    self.port_types.lock().unwrap()[port as usize] = type_id;
+                }
+            }
             Event::Ready | Event::Heartbeat => {}
         }
     }
@@ -493,6 +521,9 @@ pub struct SpikeAdapter {
     /// transport fails. Gated behind `connected()` so the REPL reports the
     /// disconnect accurately.
     alive: Arc<AtomicBool>,
+    /// LPF2 device type per port — cloned into the slot, populated by the
+    /// connect-time snapshot and refreshed by agent push events.
+    port_types: Arc<Mutex<[u16; PORT_COUNT]>>,
 }
 
 impl SpikeAdapter {
@@ -504,6 +535,7 @@ impl SpikeAdapter {
             display_name: "LEGO SPIKE Prime".to_string(),
             identifier: identifier.map(|s| s.to_string()),
             alive: Arc::new(AtomicBool::new(false)),
+            port_types: Arc::new(Mutex::new([PORT_TYPE_UNKNOWN; PORT_COUNT])),
         }
     }
 
@@ -553,6 +585,49 @@ impl SpikeAdapter {
             Reply::Ok => Ok(()),
             other => Err(format!("unexpected reply: {:?}", other)),
         }
+    }
+
+    /// Read the cached LPF2 type for a port and return true only if it's a
+    /// motor SPIKE 3's `motor` module will accept — that's specifically the
+    /// absolute-position motors (SPIKE-family angular: medium / large /
+    /// small / grey variants). Tacho-only devices (medium linear actuator,
+    /// Boost large, Technic XL) ENODEV via `motor.run`, so they take the
+    /// PWM dispatch path. Unknown letters and unknown types also return
+    /// false.
+    fn port_is_pid_capable(&self, port: &str) -> bool {
+        match port_index_validate(port) {
+            Some(idx) => is_absolute_motor(self.port_types.lock().unwrap()[idx]),
+            None => false,
+        }
+    }
+
+    /// Gate for rotate / reset / absolute-position operations. SPIKE 3's
+    /// `motor` module only accepts absolute-position motors (SPIKE-family
+    /// angular). Tacho-only devices (medium linear, Boost large, Technic
+    /// XL), passive motors, and lights ENODEV — error early with a clear
+    /// message. Mirrors PUP's `require_absolute_motor` wording.
+    ///
+    /// Note: PUP's LWP3 firmware accepts rotate-by-degrees on any tacho
+    /// (including Boost large / Technic XL); SPIKE 3 firmware is stricter.
+    /// That's a genuine platform difference, not a bug — surface it
+    /// clearly so users can pick the right hub for their motor.
+    fn require_absolute_motor(&self, port: &str) -> Result<(), String> {
+        let idx = port_index_validate(port)
+            .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+        let type_id = self.port_types.lock().unwrap()[idx];
+        if type_id == PORT_TYPE_UNKNOWN {
+            return Ok(()); // permissive when snapshot didn't resolve
+        }
+        if type_id == 0 {
+            return Err(format!("No device on port \"{}\"", port_letter(idx)));
+        }
+        if !is_absolute_motor(type_id) {
+            return Err(format!(
+                "Motor on port \"{}\" has no absolute-position encoder",
+                port_letter(idx)
+            ));
+        }
+        Ok(())
     }
 
     /// Issue a command that expects a value reply.
@@ -609,6 +684,10 @@ impl HardwareAdapter for SpikeAdapter {
 
         let (tx, rx) = mpsc::channel();
         self.alive.store(true, Ordering::SeqCst);
+        // Reset cache to "unknown" — leftover state from a prior session
+        // would otherwise leak into validate_output_port until the snapshot
+        // resolves.
+        *self.port_types.lock().unwrap() = [PORT_TYPE_UNKNOWN; PORT_COUNT];
         let slot = SpikeSlot {
             transport,
             rx,
@@ -617,10 +696,31 @@ impl HardwareAdapter for SpikeAdapter {
             alive: true,
             alive_flag: self.alive.clone(),
             last_heartbeat: Instant::now(),
+            port_types: self.port_types.clone(),
         };
         let slot_id = scheduler::register_slot(Box::new(slot));
         self.tx = Some(tx);
         self.slot_id = Some(slot_id);
+
+        // Best-effort snapshot of which devices are attached to which ports.
+        // Failure leaves the cache at PORT_TYPE_UNKNOWN, which validate_output_port
+        // treats permissively — so a firmware that doesn't expose port.X.info()
+        // still works, just without device-type errors.
+        if let Ok(Reply::TypeList(types)) = self.send_value(|rid| Ok(protocol::port_types(rid))) {
+            debug_spike(&format!(
+                "snapshot: a=0x{:04x} b=0x{:04x} c=0x{:04x} d=0x{:04x} e=0x{:04x} f=0x{:04x}",
+                types.first().copied().unwrap_or(0),
+                types.get(1).copied().unwrap_or(0),
+                types.get(2).copied().unwrap_or(0),
+                types.get(3).copied().unwrap_or(0),
+                types.get(4).copied().unwrap_or(0),
+                types.get(5).copied().unwrap_or(0),
+            ));
+            let mut cache = self.port_types.lock().unwrap();
+            for (i, t) in types.iter().enumerate().take(PORT_COUNT) {
+                cache[i] = *t;
+            }
+        }
         Ok(())
     }
 
@@ -645,11 +745,24 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
-        if OUTPUT_PORTS.contains(&port) {
-            Ok(())
-        } else {
-            Err(format!("Unknown output port \"{}\"", port))
+        let idx = port_index_validate(port)
+            .ok_or_else(|| format!("Unknown output port \"{}\"", port))?;
+        let type_id = self.port_types.lock().unwrap()[idx];
+        if type_id == PORT_TYPE_UNKNOWN {
+            // Snapshot didn't resolve, or firmware doesn't expose port.info().
+            // Defer to firmware to surface any per-command failure.
+            return Ok(());
         }
+        if type_id == 0 {
+            return Err(format!("No device on port \"{}\"", port_letter(idx)));
+        }
+        if !is_motor(type_id) && !is_led(type_id) {
+            return Err(format!(
+                "Port \"{}\" is not a motor or light",
+                port_letter(idx)
+            ));
+        }
+        Ok(())
     }
 
     fn validate_sensor_port(&self, port: &str, mode: Option<&str>) -> Result<(), String> {
@@ -670,14 +783,25 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
-        let vel = to_velocity_i16(direction, power);
-        let port = port.to_string();
-        self.send_void(move |rid| protocol::motor_run(rid, &port, vel))
+        let port_owned = port.to_string();
+        if self.port_is_pid_capable(port) {
+            let vel = to_velocity_i16(direction, power);
+            self.send_void(move |rid| protocol::motor_run(rid, &port_owned, vel))
+        } else {
+            // Non-tacho (LED, passive motor, or unknown firmware): direct PWM.
+            // `motor.run` would fail with ENODEV on these devices.
+            let pwm = to_pwm_i8(direction, power);
+            self.send_void(move |rid| protocol::port_pwm(rid, &port_owned, pwm))
+        }
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
-        let port = port.to_string();
-        self.send_void(move |rid| protocol::motor_stop(rid, &port))
+        let port_owned = port.to_string();
+        if self.port_is_pid_capable(port) {
+            self.send_void(move |rid| protocol::motor_stop(rid, &port_owned))
+        } else {
+            self.send_void(move |rid| protocol::port_pwm(rid, &port_owned, 0))
+        }
     }
 
     fn run_port_for_time(
@@ -700,6 +824,7 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         degrees: i32,
     ) -> Result<(), String> {
+        self.require_absolute_motor(port)?;
         let vel = to_velocity_i16(direction, power);
         let port = port.to_string();
         let deg = degrees.abs();
@@ -713,6 +838,7 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
+        self.require_absolute_motor(port)?;
         let port_owned = port.to_string();
         let current = match self.send_value(|rid| protocol::read_sensor(rid, &port_owned, "rotation"))? {
             Reply::Int(v) => v,
@@ -729,6 +855,7 @@ impl HardwareAdapter for SpikeAdapter {
     }
 
     fn reset_port_zero(&mut self, port: &str) -> Result<(), String> {
+        self.require_absolute_motor(port)?;
         let port = port.to_string();
         self.send_void(move |rid| protocol::motor_reset(rid, &port, 0))
     }
@@ -740,6 +867,7 @@ impl HardwareAdapter for SpikeAdapter {
         power: u8,
         position: i32,
     ) -> Result<(), String> {
+        self.require_absolute_motor(port)?;
         let vel = (power.min(MAX_POWER) as i16) * 10;
         let dir = direction_code(direction);
         let port = port.to_string();
@@ -761,6 +889,22 @@ impl HardwareAdapter for SpikeAdapter {
     // ── Batch overrides ─────────────────────────
 
     fn run_ports_for_time(&mut self, commands: &[PortCommand], tenths: u32) -> Result<(), String> {
+        // Hardware-parallel `parallel_run_for_time` only works for tacho
+        // motors (it routes through `motor.run` on the agent side, which
+        // returns ENODEV on LEDs/passive motors). Fall back to the default
+        // per-port path (start_port + sleep + stop_port) when the group
+        // isn't homogeneously tacho — start_port already dispatches to the
+        // right primitive per port.
+        if !commands.iter().all(|c| self.port_is_pid_capable(c.port)) {
+            for cmd in commands {
+                self.start_port(cmd.port, cmd.direction, cmd.power)?;
+            }
+            std::thread::sleep(Duration::from_millis(tenths as u64 * 100));
+            for cmd in commands {
+                self.stop_port(cmd.port)?;
+            }
+            return Ok(());
+        }
         let ms = tenths * 100;
         let entries: Vec<(String, i16)> = commands
             .iter()
@@ -778,6 +922,9 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         degrees: i32,
     ) -> Result<(), String> {
+        for cmd in commands {
+            self.require_absolute_motor(cmd.port)?;
+        }
         let entries: Vec<(String, i32, i16)> = commands
             .iter()
             .map(|c| (c.port.to_string(), degrees.abs(), to_velocity_i16(c.direction, c.power)))
@@ -794,6 +941,9 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
+        for cmd in commands {
+            self.require_absolute_motor(cmd.port)?;
+        }
         let entries: Vec<(String, i32, i16, u8)> = commands
             .iter()
             .map(|c| {
@@ -813,6 +963,9 @@ impl HardwareAdapter for SpikeAdapter {
         commands: &[PortCommand],
         position: i32,
     ) -> Result<(), String> {
+        for cmd in commands {
+            self.require_absolute_motor(cmd.port)?;
+        }
         // Reads are cheap (per-port round-trip), but the rotation itself
         // must run concurrently — so we fan out the reads, compute each
         // delta, then issue a single parallel_run_for_degrees.
@@ -862,6 +1015,9 @@ fn reply_to_logo(reply: Reply) -> LogoValue {
         Reply::Bool(b) => LogoValue::Word(if b { "true" } else { "false" }.to_string()),
         Reply::Ok => LogoValue::Number(0.0),
         Reply::Error(msg) => LogoValue::Word(msg),
+        Reply::TypeList(values) => LogoValue::List(
+            values.into_iter().map(|v| LogoValue::Number(v as f64)).collect(),
+        ),
     }
 }
 

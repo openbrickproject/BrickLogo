@@ -182,6 +182,92 @@ fn test_parse_event_empty() {
 }
 
 #[test]
+fn test_port_pwm_layout() {
+    let bytes = port_pwm(0x1234, "c", -50).unwrap();
+    assert_eq!(bytes[0], OP_PORT_PWM);
+    assert_eq!(&bytes[1..3], &0x1234u16.to_le_bytes());
+    assert_eq!(bytes[3], 2); // c
+    assert_eq!(bytes[4] as i8, -50);
+    assert_eq!(bytes.len(), 5);
+}
+
+#[test]
+fn test_port_pwm_unknown_port() {
+    assert!(port_pwm(1, "g", 50).is_err());
+}
+
+#[test]
+fn test_port_types_layout() {
+    let bytes = port_types(0x55);
+    assert_eq!(bytes, vec![OP_PORT_TYPES, 0x55, 0x00]);
+}
+
+#[test]
+fn test_parse_event_type_list() {
+    // rid=7, types=[1, 75, 0, 8, 0, 0]
+    let mut bytes = vec![REPLY_TYPE_LIST, 0x07, 0x00, 6];
+    for t in [1u16, 75, 0, 8, 0, 0] {
+        bytes.extend_from_slice(&t.to_le_bytes());
+    }
+    assert_eq!(
+        parse_event(&bytes).unwrap(),
+        Event::Reply {
+            rid: 7,
+            reply: Reply::TypeList(vec![1, 75, 0, 8, 0, 0]),
+        }
+    );
+}
+
+#[test]
+fn test_parse_event_type_list_empty() {
+    // count=0 is valid (zero ports queried) — should parse to an empty vec.
+    let bytes = vec![REPLY_TYPE_LIST, 0x01, 0x00, 0];
+    assert_eq!(
+        parse_event(&bytes).unwrap(),
+        Event::Reply { rid: 1, reply: Reply::TypeList(vec![]) }
+    );
+}
+
+#[test]
+fn test_parse_event_type_list_missing_count() {
+    // Header present but no count byte → must error rather than panic.
+    let bytes = vec![REPLY_TYPE_LIST, 0x01, 0x00];
+    assert!(parse_event(&bytes).is_err());
+}
+
+#[test]
+fn test_parse_event_port_event_attach() {
+    // port=2, type=8 (DEVICE_LIGHT)
+    let bytes = vec![REPLY_PORT_EVENT, 2, 0x08, 0x00];
+    assert_eq!(
+        parse_event(&bytes).unwrap(),
+        Event::PortEvent { port: 2, type_id: 8 }
+    );
+}
+
+#[test]
+fn test_parse_event_port_event_detach() {
+    // type=0 = detach
+    let bytes = vec![REPLY_PORT_EVENT, 5, 0x00, 0x00];
+    assert_eq!(
+        parse_event(&bytes).unwrap(),
+        Event::PortEvent { port: 5, type_id: 0 }
+    );
+}
+
+#[test]
+fn test_parse_event_port_event_truncated() {
+    assert!(parse_event(&[REPLY_PORT_EVENT, 0]).is_err());
+}
+
+#[test]
+fn test_parse_event_type_list_truncated_payload() {
+    // count=3 but only 4 bytes of payload (need 6).
+    let bytes = vec![REPLY_TYPE_LIST, 0x01, 0x00, 3, 0x01, 0x00, 0x4B, 0x00];
+    assert!(parse_event(&bytes).is_err());
+}
+
+#[test]
 fn test_parse_event_unknown_kind() {
     assert!(parse_event(&[0xFF, 0x01, 0x00]).is_err());
 }

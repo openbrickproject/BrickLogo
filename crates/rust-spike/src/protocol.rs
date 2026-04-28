@@ -18,18 +18,22 @@
 //! | 0A | read                     | rid u16, port u8, mode u8                                      |
 //! | 0B | read_hub                 | rid u16, mode u8                                               |
 //! | 0C | ping                     | rid u16                                                        |
+//! | 0D | port_types               | rid u16                                                        |
+//! | 0E | port_pwm                 | rid u16, port u8, value i8 (-100..100)                         |
 //!
 //! ## Replies (agent → host)
 //!
-//! | kind | name      | payload                              |
-//! |------|-----------|--------------------------------------|
-//! | 00   | ok        | rid u16                              |
-//! | 01   | int       | rid u16, value i32                   |
-//! | 02   | list      | rid u16, count u8, i32 × count       |
-//! | 03   | bool      | rid u16, value u8                    |
-//! | 04   | error     | rid u16, len u8, utf8_bytes × len    |
-//! | 10   | ready     | (no payload)                         |
-//! | 11   | heartbeat | (no payload)                         |
+//! | kind | name       | payload                                |
+//! |------|------------|----------------------------------------|
+//! | 00   | ok         | rid u16                                |
+//! | 01   | int        | rid u16, value i32                     |
+//! | 02   | list       | rid u16, count u8, i32 × count         |
+//! | 03   | bool       | rid u16, value u8                      |
+//! | 04   | error      | rid u16, len u8, utf8_bytes × len      |
+//! | 05   | type_list  | rid u16, count u8, u16 × count         |
+//! | 10   | ready       | (no payload)                                       |
+//! | 11   | heartbeat   | (no payload)                                       |
+//! | 12   | port_event  | port u8, type u16  (no rid; unsolicited on change) |
 
 // ── Opcodes ─────────────────────────────────────
 
@@ -45,6 +49,8 @@ pub const OP_PARALLEL_RUN_TO_ABS: u8 = 0x09;
 pub const OP_READ: u8 = 0x0A;
 pub const OP_READ_HUB: u8 = 0x0B;
 pub const OP_PING: u8 = 0x0C;
+pub const OP_PORT_TYPES: u8 = 0x0D;
+pub const OP_PORT_PWM: u8 = 0x0E;
 
 // ── Reply kinds ─────────────────────────────────
 
@@ -53,8 +59,10 @@ pub const REPLY_INT: u8 = 0x01;
 pub const REPLY_LIST: u8 = 0x02;
 pub const REPLY_BOOL: u8 = 0x03;
 pub const REPLY_ERROR: u8 = 0x04;
+pub const REPLY_TYPE_LIST: u8 = 0x05;
 pub const REPLY_READY: u8 = 0x10;
 pub const REPLY_HEARTBEAT: u8 = 0x11;
+pub const REPLY_PORT_EVENT: u8 = 0x12;
 
 // ── Sensor modes ────────────────────────────────
 
@@ -248,6 +256,22 @@ pub fn ping(rid: u16) -> Vec<u8> {
     header(OP_PING, rid, 3)
 }
 
+pub fn port_types(rid: u16) -> Vec<u8> {
+    header(OP_PORT_TYPES, rid, 3)
+}
+
+/// Direct PWM on a port. The agent dispatches at call time based on the
+/// device attached: tacho motors get `motor.run`, passive motors and lights
+/// get raw duty-cycle (signed for motors, unsigned for lights).
+/// `value` is `-100..100`; the agent scales to the firmware's 0..10000 range.
+pub fn port_pwm(rid: u16, port: &str, value: i8) -> Result<Vec<u8>, String> {
+    let p = port_index(port)?;
+    let mut buf = header(OP_PORT_PWM, rid, 5);
+    buf.push(p);
+    buf.push(value as u8);
+    Ok(buf)
+}
+
 // ── Reply parsing ───────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -257,6 +281,8 @@ pub enum Reply {
     List(Vec<i32>),
     Bool(bool),
     Error(String),
+    /// Snapshot of LPF2 device type IDs for ports A–F. `0` means no device.
+    TypeList(Vec<u16>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -267,6 +293,9 @@ pub enum Event {
     Ready,
     /// Agent heartbeat. No rid.
     Heartbeat,
+    /// Unsolicited port attach/detach push (agent debounces — only sent on
+    /// type-id change). `type_id == 0` means detach.
+    PortEvent { port: u8, type_id: u16 },
 }
 
 /// Parse one tunnel message payload as an `Event`. Returns `Err` on malformed
@@ -278,6 +307,15 @@ pub fn parse_event(data: &[u8]) -> Result<Event, String> {
     match data[0] {
         REPLY_READY => Ok(Event::Ready),
         REPLY_HEARTBEAT => Ok(Event::Heartbeat),
+        REPLY_PORT_EVENT => {
+            if data.len() < 4 {
+                return Err("port_event too short".into());
+            }
+            Ok(Event::PortEvent {
+                port: data[1],
+                type_id: u16::from_le_bytes([data[2], data[3]]),
+            })
+        }
         kind => {
             if data.len() < 3 {
                 return Err(format!("reply too short for kind {:#x}", kind));
@@ -321,6 +359,21 @@ fn parse_reply_body(kind: u8, body: &[u8]) -> Result<Reply, String> {
                 return Err("bool reply too short".into());
             }
             Ok(Reply::Bool(body[0] != 0))
+        }
+        REPLY_TYPE_LIST => {
+            if body.is_empty() {
+                return Err("type_list reply missing count".into());
+            }
+            let count = body[0] as usize;
+            if body.len() < 1 + count * 2 {
+                return Err("type_list reply truncated".into());
+            }
+            let mut values = Vec::with_capacity(count);
+            for i in 0..count {
+                let off = 1 + i * 2;
+                values.push(u16::from_le_bytes([body[off], body[off + 1]]));
+            }
+            Ok(Reply::TypeList(values))
         }
         REPLY_ERROR => {
             if body.is_empty() {

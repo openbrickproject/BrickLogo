@@ -17,6 +17,10 @@ fn test_device_classification() {
     assert!(is_motor(DEVICE_TRAIN_MOTOR));
     assert!(!is_motor(DEVICE_COLOR_SENSOR));
 
+    assert!(is_led(DEVICE_LIGHT));
+    assert!(!is_led(DEVICE_PASSIVE_MOTOR));
+    assert!(!is_led(DEVICE_COLOR_SENSOR));
+
     assert!(is_sensor(DEVICE_COLOR_SENSOR));
     assert!(is_sensor(DEVICE_DISTANCE_SENSOR));
     assert!(is_sensor(DEVICE_FORCE_SENSOR));

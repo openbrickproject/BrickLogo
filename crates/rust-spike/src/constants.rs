@@ -47,6 +47,10 @@ pub fn is_motor(type_id: u16) -> bool {
     )
 }
 
+pub fn is_led(type_id: u16) -> bool {
+    type_id == DEVICE_LIGHT
+}
+
 pub fn is_sensor(type_id: u16) -> bool {
     matches!(
         type_id,
@@ -73,6 +77,11 @@ pub fn is_tacho_motor(type_id: u16) -> bool {
     )
 }
 
+/// SPIKE 3 firmware's `motor` module only accepts motors with an absolute
+/// position encoder — i.e. the SPIKE-family angular motors. Tacho-only
+/// devices (medium linear actuator, Boost large, Technic XL) ENODEV via
+/// `motor.run` even though they have rotation encoders. The set of "motors
+/// that motor.run accepts" is exactly `is_absolute_motor`.
 pub fn is_absolute_motor(type_id: u16) -> bool {
     matches!(
         type_id,

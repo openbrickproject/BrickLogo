@@ -5,7 +5,7 @@
 /// Python source for the agent. Uploaded to `/flash/program0/program.py` and
 /// started via `ProgramFlowRequest(Start, 0)`.
 pub const AGENT_SOURCE: &str = r#"# BrickLogo SPIKE Prime agent (binary protocol).
-import hub, motor, runloop, color_sensor, distance_sensor, force_sensor
+import hub, motor, device, runloop, color_sensor, distance_sensor, force_sensor
 from hub import port, motion_sensor
 import struct
 
@@ -26,14 +26,18 @@ OP_PARALLEL_RUN_TO_ABS = 0x09
 OP_READ = 0x0A
 OP_READ_HUB = 0x0B
 OP_PING = 0x0C
+OP_PORT_TYPES = 0x0D
+OP_PORT_PWM = 0x0E
 
 R_OK = 0x00
 R_INT = 0x01
 R_LIST = 0x02
 R_BOOL = 0x03
 R_ERR = 0x04
+R_TYPE_LIST = 0x05
 R_READY = 0x10
 R_HB = 0x11
+R_PORT_EVENT = 0x12
 
 MODE_ROTATION = 0x00
 MODE_ABSOLUTE = 0x01
@@ -70,6 +74,37 @@ def _bool(rid, v):
 def _err(rid, msg):
     mb = str(msg).encode("utf-8")[:255]
     _tunnel.send(struct.pack("<BHB", R_ERR, rid, len(mb)) + mb)
+
+# SPIKE 3 firmware exposes the `device` module for per-port introspection
+# (LEGO removed the older `port.X.info()` / `port.X.callback()` API in 2023
+# but added module-level equivalents). `device.id(port)` returns the LPF2
+# type ID; raises when no device is attached (or briefly while one is
+# settling after attach — the 1 Hz watcher polls again until it stabilises).
+
+def _query_port_type(idx):
+    try:
+        return int(device.id(_ports[idx])) & 0xFFFF
+    except Exception:
+        return 0
+
+def _set_port_pwm(idx, value):
+    # OP_PORT_PWM is only dispatched by the host for *non-tacho* devices —
+    # tacho motors go through OP_MOTOR_RUN / motor.run() directly. So this
+    # path drives lights and passive (non-encoder) motors via the `device`
+    # module, which is the universal LPF2 PWM driver. The motor module
+    # rejects passive motors with ENODEV — don't use it here.
+    #
+    # `device.set_duty_cycle` is documented as 0..10000 (unsigned), but
+    # firmware versions vary on whether they accept negative values for
+    # direction. Try signed first; fall back to abs on rejection so at
+    # least forward drive always works.
+    p = _ports[idx]
+    v = max(-100, min(100, int(value)))
+    scaled = v * 100
+    try:
+        device.set_duty_cycle(p, scaled)
+    except Exception:
+        device.set_duty_cycle(p, abs(scaled))
 
 def _read_value(p_idx, mode):
     p = _ports[p_idx]
@@ -161,6 +196,17 @@ async def _exec(data):
             _list(rid, _read_hub(mode))
         elif op == OP_PING:
             _ok(rid)
+        elif op == OP_PORT_PWM:
+            p = data[3]
+            value = struct.unpack_from("<b", data, 4)[0]
+            _set_port_pwm(p, value)
+            _ok(rid)
+        elif op == OP_PORT_TYPES:
+            types = [_query_port_type(i) for i in range(len(_ports))]
+            buf = struct.pack("<BHB", R_TYPE_LIST, rid, len(types))
+            for t in types:
+                buf += struct.pack("<H", t & 0xFFFF)
+            _tunnel.send(buf)
         else:
             _err(rid, "unknown op")
     except Exception as e:
@@ -174,6 +220,25 @@ async def _heartbeat():
             pass
         await runloop.sleep_ms(2000)
 
+# Cache of last-seen device type per port. Initialised lazily on first poll
+# so we don't fire 6 spurious "attach" events at startup before the host
+# has done its initial OP_PORT_TYPES snapshot.
+_port_types_cache = [None] * len(_ports)
+
+async def _port_watcher():
+    # Poll device.id() for each port at ~1 Hz. Only emit a port_event when
+    # the type id actually changes — idle ports cost nothing on the wire.
+    while True:
+        for i in range(len(_ports)):
+            t = _query_port_type(i)
+            if _port_types_cache[i] != t:
+                _port_types_cache[i] = t
+                try:
+                    _tunnel.send(struct.pack("<BBH", R_PORT_EVENT, i, t & 0xFFFF))
+                except Exception:
+                    pass
+        await runloop.sleep_ms(1000)
+
 async def _main():
     _tunnel.send(bytes([R_READY]))
     while True:
@@ -181,7 +246,7 @@ async def _main():
             await _exec(_cmds.pop(0))
         await runloop.sleep_ms(5)
 
-runloop.run(_main(), _heartbeat())
+runloop.run(_main(), _heartbeat(), _port_watcher())
 "#;
 
 /// CRC32 of the agent source, computed with the 4-byte-padding scheme the

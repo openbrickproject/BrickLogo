@@ -124,6 +124,14 @@ fn enqueue_reply(state: &mut MockState, rid: u16, reply: Reply) {
             payload.push(len as u8);
             payload.extend_from_slice(&bytes[..len]);
         }
+        Reply::TypeList(values) => {
+            payload.push(protocol::REPLY_TYPE_LIST);
+            payload.extend_from_slice(&rid.to_le_bytes());
+            payload.push(values.len() as u8);
+            for v in values {
+                payload.extend_from_slice(&v.to_le_bytes());
+            }
+        }
     }
     // Wrap in plain TunnelMessage then COBS-frame.
     let mut msg = Vec::with_capacity(3 + payload.len());
@@ -152,6 +160,13 @@ fn make_adapter_with_override(
     let transport: Box<dyn SpikeTransport> = Box::new(MockTransport { state: state.clone() });
     let (tx, rx) = std::sync::mpsc::channel();
     let alive_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    // Seed all ports with a tacho motor type so existing tests get the
+    // motor.run / motor.stop dispatch path. Tests that need a different
+    // device type override via `make_adapter_with_types`.
+    let port_types = Arc::new(Mutex::new(
+        [rust_spike::constants::DEVICE_LARGE_ANGULAR_MOTOR;
+            rust_spike::constants::PORT_COUNT],
+    ));
     let slot = SpikeSlot {
         transport,
         rx,
@@ -160,12 +175,22 @@ fn make_adapter_with_override(
         alive: true,
         alive_flag: alive_flag.clone(),
         last_heartbeat: Instant::now(),
+        port_types: port_types.clone(),
     };
     let slot_id = scheduler::register_slot(Box::new(slot));
     let mut adapter = SpikeAdapter::new(None);
     adapter.tx = Some(tx);
     adapter.slot_id = Some(slot_id);
     adapter.alive = alive_flag;
+    adapter.port_types = port_types;
+    (adapter, state)
+}
+
+/// Variant of `make_adapter_with_override` that pre-seeds the port-type
+/// cache so `validate_output_port` sees specific devices on specific ports.
+fn make_adapter_with_types(types: [u16; 6]) -> (SpikeAdapter, Arc<Mutex<MockState>>) {
+    let (adapter, state) = make_adapter();
+    *adapter.port_types.lock().unwrap() = types;
     (adapter, state)
 }
 
@@ -368,11 +393,65 @@ fn test_read_sensor_list_value() {
 }
 
 #[test]
-fn test_validate_ports() {
+fn test_validate_output_port_unknown_letter() {
     let (adapter, _) = make_adapter();
+    assert!(adapter.validate_output_port("g").is_err());
+}
+
+#[test]
+fn test_validate_output_port_unknown_type_is_permissive() {
+    // PORT_TYPE_UNKNOWN (0xFFFF) means snapshot didn't resolve — adapter
+    // defers to firmware so we don't lock users out on an unrecognised
+    // firmware revision.
+    let (adapter, _) = make_adapter_with_types([0xFFFF; 6]);
     assert!(adapter.validate_output_port("a").is_ok());
     assert!(adapter.validate_output_port("f").is_ok());
-    assert!(adapter.validate_output_port("g").is_err());
+}
+
+#[test]
+fn test_validate_output_port_accepts_motor() {
+    let (adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LARGE_ANGULAR_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    assert!(adapter.validate_output_port("a").is_ok());
+}
+
+#[test]
+fn test_validate_output_port_accepts_light() {
+    let (adapter, _) = make_adapter_with_types([
+        0, 0, rust_spike::constants::DEVICE_LIGHT, 0, 0, 0,
+    ]);
+    assert!(adapter.validate_output_port("c").is_ok());
+}
+
+#[test]
+fn test_validate_output_port_rejects_sensor() {
+    let (adapter, _) = make_adapter_with_types([
+        0, rust_spike::constants::DEVICE_COLOR_SENSOR, 0, 0, 0, 0,
+    ]);
+    let err = adapter.validate_output_port("b").unwrap_err();
+    assert!(
+        err.contains("not a motor or light"),
+        "unexpected wording: {}",
+        err
+    );
+}
+
+#[test]
+fn test_validate_output_port_no_device() {
+    let (adapter, _) = make_adapter_with_types([0; 6]);
+    let err = adapter.validate_output_port("d").unwrap_err();
+    assert!(
+        err.contains("No device on port"),
+        "unexpected wording: {}",
+        err
+    );
+}
+
+#[test]
+fn test_validate_sensor_ports() {
+    let (adapter, _) = make_adapter();
     assert!(adapter.validate_sensor_port("a", Some("rotation")).is_ok());
     assert!(adapter.validate_sensor_port("z", None).is_err());
 }
@@ -413,6 +492,283 @@ fn test_reply_to_logo_bool() {
     assert_eq!(
         reply_to_logo(Reply::Bool(false)),
         LogoValue::Word("false".to_string())
+    );
+}
+
+#[test]
+fn test_start_port_on_led_uses_port_pwm() {
+    // LED on port A (DEVICE_LIGHT) — `motor.run` would ENODEV, so the
+    // adapter must dispatch to direct PWM instead.
+    let (mut adapter, state) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LIGHT,
+        0, 0, 0, 0, 0,
+    ]);
+    adapter.start_port("a", PortDirection::Even, 50).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PORT_PWM);
+    assert_eq!(cmd[3], 0); // port a
+    assert_eq!(cmd[4] as i8, 50);
+}
+
+#[test]
+fn test_start_port_on_passive_motor_uses_port_pwm() {
+    // DEVICE_PASSIVE_MOTOR has no tacho — same dispatch as LED.
+    let (mut adapter, state) = make_adapter_with_types([
+        0, 0, rust_spike::constants::DEVICE_PASSIVE_MOTOR, 0, 0, 0,
+    ]);
+    adapter.start_port("c", PortDirection::Odd, 75).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PORT_PWM);
+    assert_eq!(cmd[3], 2); // port c
+    assert_eq!(cmd[4] as i8, -75); // Odd direction → negative
+}
+
+#[test]
+fn test_stop_port_on_led_uses_port_pwm_zero() {
+    let (mut adapter, state) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LIGHT,
+        0, 0, 0, 0, 0,
+    ]);
+    adapter.stop_port("a").unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PORT_PWM);
+    assert_eq!(cmd[3], 0);
+    assert_eq!(cmd[4] as i8, 0);
+}
+
+#[test]
+fn test_start_port_unknown_type_uses_pwm() {
+    // PORT_TYPE_UNKNOWN = 0xFFFF (snapshot didn't resolve). PWM is the safe
+    // fallback — works on any output device, including tacho motors.
+    let (mut adapter, state) = make_adapter_with_types([0xFFFF; 6]);
+    adapter.start_port("a", PortDirection::Even, 50).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PORT_PWM);
+}
+
+#[test]
+fn test_start_port_on_linear_actuator_uses_port_pwm() {
+    // DEVICE_MEDIUM_LINEAR_MOTOR (38) has a tacho but no absolute encoder.
+    // SPIKE 3's `motor` module ENODEVs on it — adapter must treat it like
+    // a passive motor and dispatch to `device.set_duty_cycle` via OP_PORT_PWM.
+    let (mut adapter, state) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_MEDIUM_LINEAR_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    adapter.start_port("a", PortDirection::Even, 50).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PORT_PWM);
+}
+
+#[test]
+fn test_rotate_by_degrees_rejects_passive_motor() {
+    // Rotate-by-degrees only works for absolute motors on SPIKE 3.
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_PASSIVE_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter
+        .rotate_port_by_degrees("a", PortDirection::Even, 50, 90)
+        .unwrap_err();
+    adapter.disconnect();
+    assert!(
+        err.contains("absolute-position encoder"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_rotate_by_degrees_rejects_linear_actuator() {
+    // Tacho-only (no absolute) — same rejection as passive motor on SPIKE 3.
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_MEDIUM_LINEAR_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter
+        .rotate_port_by_degrees("a", PortDirection::Even, 50, 90)
+        .unwrap_err();
+    adapter.disconnect();
+    assert!(
+        err.contains("absolute-position encoder"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_rotate_by_degrees_rejects_light() {
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LIGHT,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter
+        .rotate_port_by_degrees("a", PortDirection::Even, 50, 90)
+        .unwrap_err();
+    adapter.disconnect();
+    assert!(err.contains("absolute-position encoder"));
+}
+
+#[test]
+fn test_reset_zero_rejects_passive_motor() {
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_PASSIVE_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter.reset_port_zero("a").unwrap_err();
+    adapter.disconnect();
+    assert!(err.contains("absolute-position encoder"));
+}
+
+#[test]
+fn test_rotate_to_abs_rejects_passive_motor() {
+    let (mut adapter, _) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_PASSIVE_MOTOR,
+        0, 0, 0, 0, 0,
+    ]);
+    let err = adapter
+        .rotate_to_abs("a", PortDirection::Even, 50, 90)
+        .unwrap_err();
+    adapter.disconnect();
+    assert!(err.contains("absolute-position encoder"));
+}
+
+#[test]
+fn test_run_ports_for_time_mixed_falls_back_to_per_port() {
+    // Mixed group: A is LED, B is tacho motor. The parallel op would route
+    // both through `motor.run`, ENODEV-ing on A. Adapter must split and
+    // dispatch per-port via start_port/stop_port.
+    let (mut adapter, state) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LIGHT,
+        rust_spike::constants::DEVICE_LARGE_ANGULAR_MOTOR,
+        0, 0, 0, 0,
+    ]);
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+    adapter.run_ports_for_time(&commands, 1).unwrap(); // 100ms
+    let cmds = state.lock().unwrap().commands.clone();
+    adapter.disconnect();
+
+    // No PARALLEL_RUN_FOR_TIME — instead two starts (one PWM, one MOTOR_RUN)
+    // and two stops (PWM 0 and MOTOR_STOP).
+    let parallel_count = cmds
+        .iter()
+        .filter(|c| parse_op(c) == protocol::OP_PARALLEL_RUN_FOR_TIME)
+        .count();
+    assert_eq!(parallel_count, 0, "expected no parallel op for mixed group");
+
+    let pwm_count = cmds
+        .iter()
+        .filter(|c| parse_op(c) == protocol::OP_PORT_PWM)
+        .count();
+    let motor_run_count = cmds
+        .iter()
+        .filter(|c| parse_op(c) == protocol::OP_MOTOR_RUN)
+        .count();
+    let motor_stop_count = cmds
+        .iter()
+        .filter(|c| parse_op(c) == protocol::OP_MOTOR_STOP)
+        .count();
+    assert_eq!(pwm_count, 2, "LED gets PWM start + PWM stop");
+    assert_eq!(motor_run_count, 1, "motor gets motor_run start");
+    assert_eq!(motor_stop_count, 1, "motor gets motor_stop");
+}
+
+#[test]
+fn test_run_ports_for_time_all_tacho_uses_parallel_op() {
+    // Sanity: when every port is a tacho motor, the parallel batch is still
+    // used (it's the whole point of the SPIKE override).
+    let (mut adapter, state) = make_adapter_with_types([
+        rust_spike::constants::DEVICE_LARGE_ANGULAR_MOTOR,
+        rust_spike::constants::DEVICE_LARGE_ANGULAR_MOTOR,
+        0, 0, 0, 0,
+    ]);
+    let commands = vec![
+        PortCommand { port: "a", direction: PortDirection::Even, power: 50 },
+        PortCommand { port: "b", direction: PortDirection::Even, power: 50 },
+    ];
+    adapter.run_ports_for_time(&commands, 10).unwrap();
+    let cmd = state.lock().unwrap().commands[0].clone();
+    adapter.disconnect();
+    assert_eq!(parse_op(&cmd), protocol::OP_PARALLEL_RUN_FOR_TIME);
+}
+
+#[test]
+fn test_port_event_push_updates_cache() {
+    // Agent's poll-and-diff loop pushes a port_event when a device type
+    // changes. Slot must accept it and update the shared cache so
+    // validate_output_port reflects the new state without reconnecting.
+    let (mut adapter, state) = make_adapter_with_types([0; 6]);
+    assert!(adapter.validate_output_port("c").is_err());
+
+    let payload = vec![
+        protocol::REPLY_PORT_EVENT,
+        2,
+        rust_spike::constants::DEVICE_LIGHT as u8,
+        (rust_spike::constants::DEVICE_LIGHT >> 8) as u8,
+    ];
+    let mut msg = Vec::with_capacity(3 + payload.len());
+    msg.push(atlantis::ID_TUNNEL_MESSAGE);
+    msg.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&payload);
+    state.lock().unwrap().outgoing.extend(cobs::pack(&msg));
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    loop {
+        if adapter.port_types.lock().unwrap()[2]
+            == rust_spike::constants::DEVICE_LIGHT
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "port_types[2] never updated; got {:#x}",
+                adapter.port_types.lock().unwrap()[2]
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    adapter.disconnect();
+    assert_eq!(
+        adapter.port_types.lock().unwrap()[2],
+        rust_spike::constants::DEVICE_LIGHT
+    );
+}
+
+#[test]
+fn test_port_event_out_of_bounds_dropped() {
+    // Malformed agent push with port=99 must be dropped silently.
+    let (mut adapter, state) = make_adapter_with_types([0; 6]);
+    let payload = vec![protocol::REPLY_PORT_EVENT, 99, 0x08, 0x00];
+    let mut msg = Vec::with_capacity(3 + payload.len());
+    msg.push(atlantis::ID_TUNNEL_MESSAGE);
+    msg.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&payload);
+    state.lock().unwrap().outgoing.extend(cobs::pack(&msg));
+
+    std::thread::sleep(Duration::from_millis(100));
+    let cache = *adapter.port_types.lock().unwrap();
+    adapter.disconnect();
+    assert_eq!(cache, [0u16; 6]);
+}
+
+#[test]
+fn test_reply_to_logo_type_list() {
+    assert_eq!(
+        reply_to_logo(Reply::TypeList(vec![1, 75, 0])),
+        LogoValue::List(vec![
+            LogoValue::Number(1.0),
+            LogoValue::Number(75.0),
+            LogoValue::Number(0.0),
+        ])
     );
 }
 
