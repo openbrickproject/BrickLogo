@@ -148,6 +148,13 @@ impl Parser {
 
         self.skip_newlines();
 
+        // Inline bracket form: `to NAME [body]` (parameters allowed before
+        // the bracket). Coexists with the classic `to NAME ... end` form.
+        if self.peek().token_type == TokenType::OpenBracket {
+            let body = self.parse_list_body()?;
+            return Ok(AstNode::ProcDef { name, params, body });
+        }
+
         let mut body = Vec::new();
         while !self.is_at_end() {
             if self.peek().token_type == TokenType::Word && self.peek().value == "end" {

@@ -195,6 +195,23 @@ fn test_recursion() {
 }
 
 #[test]
+fn test_procedure_inline_bracket_form() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to greet :name [print word \"Hello :name]").unwrap();
+    eval.evaluate("greet \"World").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["HelloWorld"]);
+}
+
+#[test]
+fn test_procedure_inline_bracket_form_recursion() {
+    let (mut eval, output) = create_evaluator();
+    eval.evaluate("to countdown :n [if :n = 0 [print \"done stop] print :n countdown :n - 1]")
+        .unwrap();
+    eval.evaluate("countdown 3").unwrap();
+    assert_eq!(output.lock().unwrap().as_slice(), &["3", "2", "1", "done"]);
+}
+
+#[test]
 fn test_output() {
     let (mut eval, _) = create_evaluator();
     eval.evaluate("to double :n output :n * 2 end").unwrap();

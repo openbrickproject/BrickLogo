@@ -63,6 +63,48 @@ fn test_procedure_def() {
 }
 
 #[test]
+fn test_procedure_def_inline_bracket() {
+    let ast = parse_str("to greet :name [print :name]");
+    assert!(
+        matches!(&ast[0], AstNode::ProcDef { name, params, body } if name == "greet" && params.len() == 1 && body.len() == 1)
+    );
+}
+
+#[test]
+fn test_procedure_def_inline_bracket_no_params() {
+    let ast = parse_str("to noop []");
+    assert!(
+        matches!(&ast[0], AstNode::ProcDef { name, params, body } if name == "noop" && params.is_empty() && body.is_empty())
+    );
+}
+
+#[test]
+fn test_procedure_def_inline_bracket_multiline() {
+    let tokens = tokenize("to greet :name [\nprint :name\nprint \"done\n]").unwrap();
+    let mut parser = Parser::new(HashMap::new());
+    parser.set_arity("print", 1);
+    let ast = parser.parse(tokens).unwrap();
+    assert!(
+        matches!(&ast[0], AstNode::ProcDef { name, params, body } if name == "greet" && params.len() == 1 && body.len() == 2)
+    );
+}
+
+#[test]
+fn test_procedure_def_inline_bracket_recursion_arity_registered() {
+    // The bracket form must register arity before the body is parsed,
+    // same as the classic form, so that recursive calls inside the body
+    // resolve correctly.
+    let tokens =
+        tokenize("to countdown :n [if :n = 0 [stop] print :n countdown :n - 1]").unwrap();
+    let mut parser = Parser::new(HashMap::new());
+    parser.set_arity("print", 1);
+    let ast = parser.parse(tokens).unwrap();
+    assert!(
+        matches!(&ast[0], AstNode::ProcDef { name, params, .. } if name == "countdown" && params.len() == 1)
+    );
+}
+
+#[test]
 fn test_repeat() {
     let tokens = tokenize("repeat 4 [print \"hi]").unwrap();
     let mut parser = Parser::new(HashMap::new());
