@@ -145,12 +145,17 @@ pub fn register_hardware_primitives(
                         if exclude_paths.contains(&info.port_name.as_str()) {
                             continue;
                         }
-                        if let serialport::SerialPortType::UsbPort(usb) = &info.port_type {
-                            if usb.vid != 0x1209 || usb.pid != 0xC550 {
-                                continue;
-                            }
-                        } else {
-                            continue;
+                        // Skip ports positively identified as something other than
+                        // BrickInterface. UsbPort with wrong VID/PID is definitely
+                        // not ours; PCI and Bluetooth ports never are. Unknown-type
+                        // ports (common on Windows when VID/PID isn't in the
+                        // registry) are tried and filtered by get_capabilities().
+                        match &info.port_type {
+                            serialport::SerialPortType::UsbPort(usb)
+                                if usb.vid != 0x1209 || usb.pid != 0xC550 => continue,
+                            serialport::SerialPortType::PciPort
+                            | serialport::SerialPortType::BluetoothPort => continue,
+                            _ => {}
                         }
                         match SharedBrickInterface::open(&info.port_name) {
                             Ok(shared) if shared.capabilities & required_cap != 0 => return Ok(shared),
@@ -182,6 +187,7 @@ pub fn register_hardware_primitives(
                     }
                     // Step 2: try config-listed ports not yet open
                     let pooled_paths: Vec<&str> = pool.iter().map(|e| e.path.as_str()).collect();
+                    let mut config_errors: Vec<String> = Vec::new();
                     for path in config_paths {
                         if pooled_paths.contains(&path.as_str()) {
                             continue;
@@ -191,13 +197,19 @@ pub fn register_hardware_primitives(
                                 pool.push(shared.clone());
                                 return Ok(shared);
                             }
-                            _ => continue,
+                            Ok(_) => config_errors.push(format!("{}: lacks required capability", path)),
+                            Err(e) => config_errors.push(format!("{}: {}", path, e)),
                         }
                     }
                     // Step 3: USB discovery — enumerate by VID/PID, skip already-pooled paths
-                    let shared = discover_brickinterface(required_cap, &pooled_paths)?;
-                    pool.push(shared.clone());
-                    Ok(shared)
+                    match discover_brickinterface(required_cap, &pooled_paths) {
+                        Ok(shared) => {
+                            pool.push(shared.clone());
+                            Ok(shared)
+                        }
+                        Err(e) if config_errors.is_empty() => Err(e),
+                        Err(e) => Err(format!("{} (tried: {})", e, config_errors.join("; "))),
+                    }
                 }
 
                 // Connect outside the port manager lock so the UI can redraw
