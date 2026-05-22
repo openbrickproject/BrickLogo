@@ -1,6 +1,7 @@
 use super::*;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
-use rust_brickinterface::BrickInterfaceTransport;
+use crate::shared_brick_interface::SharedBrickInterface;
+use rust_brickinterface::{BrickInterface, BrickInterfaceTransport};
 use rust_brickinterface::protocol::build_frame;
 use rust_brickinterface::constants::*;
 use std::collections::VecDeque;
@@ -57,8 +58,8 @@ fn enqueue_pf_ok(responses: &Arc<Mutex<VecDeque<u8>>>) {
 
 fn make_adapter() -> (PowerFunctionsAdapter, Arc<Mutex<Vec<u8>>>, Arc<Mutex<VecDeque<u8>>>) {
     let (transport, written, responses) = MockTransport::new();
-    let adapter = PowerFunctionsAdapter::new_with_transport(Box::new(transport));
-    (adapter, written, responses)
+    let shared = SharedBrickInterface::new(BrickInterface::from_transport(Box::new(transport)));
+    (PowerFunctionsAdapter::new_with_shared(shared), written, responses)
 }
 
 fn written_cmd(written: &[u8]) -> u8 { written[3] }

@@ -50,6 +50,33 @@ sudo ./bricklogo
 
 ## Configuration 
 
+### BrickInterface (Interface A and Power Functions)
+
+Interface A and Power Functions both connect through the BrickInterface USB adapter. Create a file called `bricklogo.config.json` in the same directory as the binary and add the adapter's serial port under `"brickinterface"`:
+
+```json
+{
+  "brickinterface": ["/dev/cu.usbmodem1234"]
+}
+```
+
+A single BrickInterface adapter can run Interface A and Power Functions at the same time — you only need one entry for both:
+
+```
+? connectto "interfacea "ia
+? connectto "powerfunctions "pf
+```
+
+For multiple BrickInterface adapters, list all ports. The first `connectto` that does not fit on an existing adapter connection opens the next port in the array:
+
+```json
+{
+  "brickinterface": ["/dev/cu.usbmodem1234", "/dev/cu.usbmodem5678"]
+}
+```
+
+On Linux the path is typically `/dev/ttyACM0`. On Windows it is `COM3` or similar.
+
 ### Control Lab and RCX serial tower
 
 Control Lab and the RCX serial IR tower use a serial port. Create a file called `bricklogo.config.json` in the same directory as the binary to tell BrickLogo which port to use:

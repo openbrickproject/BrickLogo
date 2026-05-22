@@ -1,5 +1,6 @@
 {
   "controllab": ["/dev/tty.usbserial-AC018HBC"],
+  "brickinterface": ["/dev/cu.usbmodem1234"],
   "ev3": ["/dev/cu.EV3-SerialPort-14"],
   "spike": ["/dev/cu.LEGOHub-SerialPort"]
 }

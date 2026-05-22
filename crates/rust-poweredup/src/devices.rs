@@ -249,7 +249,7 @@ pub fn mode_map_for_device(device_type: DeviceType) -> Vec<ModeMapEntry> {
 pub fn mode_for_event(device_type: DeviceType, event: &str) -> Option<u8> {
     mode_map_for_device(device_type)
         .iter()
-        .find(|e| e.event == event)
+        .find(|e| e.event.eq_ignore_ascii_case(event))
         .map(|e| e.mode)
 }
 

@@ -4,7 +4,7 @@ BrickLogo is a Logo programming environment for controlling LEGO motors and sens
 
 ## LEGO/Logo
 
-LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at MIT in the 1980s to connect the Logo programming language to physical LEGO models through motors and sensors. LEGO produced two implementations: LEGO TC Logo (1988) and LEGO DACTA Control Lab (1993).
+LEGO/Logo was designed by Mitchel Resnick, Stephen Ocko, and Seymour Papert at MIT in the 1980s to connect the Logo programming language to physical LEGO models through motors and sensors. LEGO produced two implementations: LEGO TC Logo (1988), which ran on the Interface A board introduced in 1986, and LEGO DACTA Control Lab (1993).
 
 BrickLogo is a spiritual evolution of LEGO/Logo. It draws from both TC Logo and Control Lab, adds support for current hardware, and introduces modern elements like concurrent tasks and networking, in the spirit of the original.
 
@@ -12,7 +12,7 @@ If you have used either TC Logo or Control Lab, the commands will be familiar. I
 
 ## Hardware
 
-BrickLogo works with six families of LEGO hardware:
+BrickLogo works with eight families of LEGO hardware:
 
 | Hardware | Connection | Devices |
 | --- | --- | --- |
@@ -20,6 +20,8 @@ BrickLogo works with six families of LEGO hardware:
 | LEGO Powered UP | Bluetooth | Move Hub, Powered UP Hub, Technic Hub, Remote Control |
 | LEGO Education WeDo 1.0 | USB | WeDo Hub with motors and sensors |
 | LEGO DACTA Control Lab | Serial | Interface B (8 outputs, 8 sensor inputs) |
+| LEGO Interface A | USB (via BrickInterface) | Interface A board (6 outputs, 2 sensor inputs) |
+| LEGO Power Functions | IR (via BrickInterface) | IR receivers with Output A and B, channels 1–4 |
 | LEGO Mindstorms RCX | IR Tower (serial or USB) | RCX programmable brick |
 | Raspberry Pi Build HAT | Serial (Pi GPIO) | Powered UP and SPIKE motors and sensors |
 

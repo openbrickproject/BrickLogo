@@ -1,6 +1,7 @@
 use super::*;
 use crate::adapter::{HardwareAdapter, PortDirection};
-use rust_brickinterface::BrickInterfaceTransport;
+use crate::shared_brick_interface::SharedBrickInterface;
+use rust_brickinterface::{BrickInterface, BrickInterfaceTransport};
 use rust_brickinterface::protocol::build_frame;
 use rust_brickinterface::constants::*;
 use std::collections::VecDeque;
@@ -52,8 +53,8 @@ fn enqueue_ok(responses: &Arc<Mutex<VecDeque<u8>>>) {
 
 fn make_adapter() -> (InterfaceAAdapter, Arc<Mutex<Vec<u8>>>, Arc<Mutex<VecDeque<u8>>>) {
     let (transport, written, responses) = MockTransport::new();
-    let adapter = InterfaceAAdapter::new_with_transport(Box::new(transport));
-    (adapter, written, responses)
+    let shared = SharedBrickInterface::new(BrickInterface::from_transport(Box::new(transport)));
+    (InterfaceAAdapter::new_with_shared(shared), written, responses)
 }
 
 // Pull CMD and payload out of the raw bytes the adapter wrote.

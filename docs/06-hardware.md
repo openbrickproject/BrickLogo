@@ -10,6 +10,8 @@ For the Logo primitives — `connectto`, `listento`, `sensor`, `rotate`, and the
 - [LEGO Powered UP](#lego-powered-up)
 - [LEGO Education WeDo 1.0](#lego-education-wedo-10)
 - [LEGO DACTA Control Lab](#lego-dacta-control-lab)
+- [LEGO Interface A](#lego-interface-a)
+- [LEGO Power Functions](#lego-power-functions)
 - [LEGO Mindstorms RCX](#lego-mindstorms-rcx)
 - [LEGO Mindstorms NXT](#lego-mindstorms-nxt)
 - [LEGO Mindstorms EV3](#lego-mindstorms-ev3)
@@ -142,6 +144,71 @@ Each `connectto "controllab` call consumes the next path in the array. Typical p
 | `"light` | Light intensity (0–255) |
 | `"rotation` | Accumulated rotation count |
 | `"raw` | Raw sensor value (0–1023) |
+
+---
+
+## LEGO Interface A
+
+Connects via BrickInterface (USB). `connectto "interfacea` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`:
+
+```json
+{ "brickinterface": ["/dev/cu.usbmodem1234"] }
+```
+
+Each `connectto "interfacea` call consumes one Interface A slot on the next available adapter. Typical paths:
+
+- macOS: `/dev/cu.usbmodem*`
+- Linux: `/dev/ttyACM0` or similar
+- Windows: `COM3` (or similar)
+
+| Output Ports | Input Ports |
+| --- | --- |
+| 0, 1, 2, 3, 4, 5 | 6, 7 |
+
+Ports 0–5 are output ports. `setpower` accepts values 0–255. Direction commands (`seteven`, `setodd`, `rd`) are accepted but have no effect.
+
+### Sensor modes
+
+| Port | Mode | Returns |
+| --- | --- | --- |
+| 6, 7 | `"touch` | `"true` if closed, `"false` if open |
+
+The input ports also support edge counting. Use `counter` to read the accumulated count since the last reset, and `resetcounter` to clear it.
+
+### Notes
+
+- Interface A and Power Functions share a single BrickInterface adapter. One adapter can run both at the same time without a second serial port entry. See [LEGO Power Functions](#lego-power-functions) below.
+
+---
+
+## LEGO Power Functions
+
+Connects via BrickInterface (USB). `connectto "powerfunctions` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`. Interface A and Power Functions share the same adapter and the same config entry — a single BrickInterface can run both at once:
+
+```json
+{ "brickinterface": ["/dev/cu.usbmodem1234"] }
+```
+
+Ports are named by channel number and output color, matching the labelling on LEGO's official receivers and the Power Functions RC protocol specification:
+
+| Port | Channel | Output |
+| --- | --- | --- |
+| `"red1` | 1 | A |
+| `"blue1` | 1 | B |
+| `"red2` | 2 | A |
+| `"blue2` | 2 | B |
+| `"red3` | 3 | A |
+| `"blue3` | 3 | B |
+| `"red4` | 4 | A |
+| `"blue4` | 4 | B |
+
+`setpower` accepts values 0–7. `seteven` drives forward, `setodd` drives in reverse. There are no sensor inputs.
+
+### Notes
+
+- Multiple receivers on the same channel respond to the same commands. Use different channels for independent control of separate models.
+- A BrickInterface adapter and a hardware Power Functions remote can coexist as long as they use different channels.
+- For multiple BrickInterface adapters, list all serial ports in the `"brickinterface"` array. A second `connectto "powerfunctions` that cannot share an existing adapter opens the next port in the array.
 
 ---
 

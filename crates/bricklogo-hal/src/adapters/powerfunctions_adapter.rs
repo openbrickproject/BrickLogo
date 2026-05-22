@@ -1,9 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 use bricklogo_lang::value::LogoValue;
-use rust_brickinterface::BrickInterface;
-#[cfg(test)]
-use rust_brickinterface::BrickInterfaceTransport;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
+use crate::shared_brick_interface::SharedBrickInterface;
 
 const OUTPUT_PORTS: &[&str] = &[
     "red1", "blue1", "red2", "blue2", "red3", "blue3", "red4", "blue4",
@@ -41,33 +40,29 @@ fn to_step(direction: PortDirection, power: u8) -> u8 {
 }
 
 pub struct PowerFunctionsAdapter {
-    serial_path: String,
-    device: Option<BrickInterface>,
+    shared: Option<Arc<SharedBrickInterface>>,
     display_name: String,
     output_ports: Vec<String>,
     steps: [u8; 8],
 }
 
 impl PowerFunctionsAdapter {
-    pub fn new(serial_path: &str) -> Self {
+    pub fn new_with_shared(shared: Arc<SharedBrickInterface>) -> Self {
         PowerFunctionsAdapter {
-            serial_path: serial_path.to_string(),
-            device: None,
+            shared: Some(shared),
             display_name: "LEGO Power Functions (BrickInterface)".to_string(),
             output_ports: OUTPUT_PORTS.iter().map(|s| s.to_string()).collect(),
             steps: [0u8; 8],
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_transport(transport: Box<dyn BrickInterfaceTransport>) -> Self {
-        let mut adapter = Self::new("/dev/null");
-        adapter.device = Some(BrickInterface::from_transport(transport));
-        adapter
-    }
-
-    fn device_mut(&mut self) -> Result<&mut BrickInterface, String> {
-        self.device.as_mut().ok_or_else(|| "Not connected".to_string())
+    fn device_lock(&self) -> Result<std::sync::MutexGuard<'_, rust_brickinterface::BrickInterface>, String> {
+        self.shared
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?
+            .device
+            .lock()
+            .map_err(|_| "Device mutex poisoned".to_string())
     }
 }
 
@@ -75,21 +70,21 @@ impl HardwareAdapter for PowerFunctionsAdapter {
     fn display_name(&self) -> &str { &self.display_name }
     fn output_ports(&self) -> &[String] { &self.output_ports }
     fn input_ports(&self) -> &[String] { &[] }
-    fn connected(&self) -> bool { self.device.is_some() }
+    fn connected(&self) -> bool { self.shared.is_some() }
     fn max_power(&self) -> u8 { MAX_POWER }
 
     fn connect(&mut self) -> Result<(), String> {
-        let device = BrickInterface::open(&self.serial_path)?;
-        self.device = Some(device);
-        self.steps = [0u8; 8];
         Ok(())
     }
 
     fn disconnect(&mut self) {
-        if let Some(ref mut device) = self.device {
-            let _ = device.ir_abort_all();
+        if let Some(ref shared) = self.shared {
+            if let Ok(mut dev) = shared.device.lock() {
+                let _ = dev.ir_abort_all();
+            }
+            shared.release_powerfunctions();
         }
-        self.device = None;
+        self.shared = None;
         self.steps = [0u8; 8];
     }
 
@@ -109,13 +104,13 @@ impl HardwareAdapter for PowerFunctionsAdapter {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         let step = to_step(direction, power);
         self.steps[port_index(ch, is_blue)] = step;
-        self.device_mut()?.pf_send_single_pwm(ch, is_blue, step)
+        self.device_lock()?.pf_send_single_pwm(ch, is_blue, step)
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         self.steps[port_index(ch, is_blue)] = 0;
-        self.device_mut()?.pf_send_single_pwm(ch, is_blue, 0)
+        self.device_lock()?.pf_send_single_pwm(ch, is_blue, 0)
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {

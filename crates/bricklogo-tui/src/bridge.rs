@@ -11,9 +11,11 @@ use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::spike_adapter::SpikeAdapter;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
 use bricklogo_hal::port_manager::PortManager;
+use bricklogo_hal::shared_brick_interface::SharedBrickInterface;
 use bricklogo_lang::error::LogoError;
 use bricklogo_lang::evaluator::{Evaluator, PrimitiveSpec};
 use bricklogo_lang::value::LogoValue;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -23,9 +25,7 @@ pub struct BrickLogoConfig {
     #[serde(default)]
     pub controllab: Vec<String>,
     #[serde(default)]
-    pub interfacea: Vec<String>,
-    #[serde(default)]
-    pub powerfunctions: Vec<String>,
+    pub brickinterface: Vec<String>,
     #[serde(default)]
     pub wedo: Vec<String>,
     #[serde(default)]
@@ -65,12 +65,15 @@ pub fn register_hardware_primitives(
     let config = Arc::new(Mutex::new(BrickLogoConfig::load()));
     let used_indices: Arc<Mutex<std::collections::HashMap<String, usize>>> =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let bi_pool: Arc<Mutex<Vec<Arc<SharedBrickInterface>>>> =
+        Arc::new(Mutex::new(Vec::new()));
 
     // ── Connection ──────────────────────────────
 
     let pm_ref = pm.clone();
     let config_ref = config.clone();
     let indices_ref = used_indices.clone();
+    let bi_pool_ref = bi_pool.clone();
     let system_fn_ref = system_fn.clone();
     let stop_flag = eval.stop_flag();
     eval.register_primitive(
@@ -110,6 +113,31 @@ pub fn register_hardware_primitives(
                     }
                 }
 
+                fn allocate_brickinterface(
+                    pool: &mut Vec<Arc<SharedBrickInterface>>,
+                    paths: &[String],
+                    kind: &str,
+                ) -> Result<Arc<SharedBrickInterface>, String> {
+                    for entry in pool.iter() {
+                        let available = match kind {
+                            "interfacea" => !entry.interfacea_active.load(Ordering::SeqCst),
+                            "powerfunctions" => !entry.powerfunctions_active.load(Ordering::SeqCst),
+                            _ => false,
+                        };
+                        if available {
+                            return Ok(entry.clone());
+                        }
+                    }
+                    let next_index = pool.len();
+                    if next_index >= paths.len() {
+                        return Err("No BrickInterface port available in bricklogo.config.json".to_string());
+                    }
+                    let shared = SharedBrickInterface::open(&paths[next_index])
+                        .map_err(|e| format!("Could not open BrickInterface at {}: {}", paths[next_index], e))?;
+                    pool.push(shared.clone());
+                    Ok(shared)
+                }
+
                 // Connect outside the port manager lock so the UI can redraw
                 let adapter: Box<dyn HardwareAdapter> = match device_type.as_str() {
                     "wedo" => {
@@ -138,36 +166,24 @@ pub fn register_hardware_primitives(
                         Box::new(adapter)
                     }
                     "interfacea" => {
-                        let serial_path =
-                            next_config_entry(&config.interfacea, &mut indices, "interfacea")
-                                .ok_or_else(|| {
-                                    LogoError::Runtime(
-                                "No Interface A serial port configured in bricklogo.config.json"
-                                    .to_string(),
-                            )
-                                })?;
-                        let mut adapter = InterfaceAAdapter::new(&serial_path);
+                        let shared = {
+                            let mut pool = bi_pool_ref.lock().unwrap();
+                            allocate_brickinterface(&mut pool, &config.brickinterface, "interfacea")
+                                .map_err(LogoError::Runtime)?
+                        };
+                        shared.interfacea_active.store(true, Ordering::SeqCst);
                         system_fn_ref("Connecting to LEGO Interface A (BrickInterface)...");
-                        adapter
-                            .connect()
-                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                        Box::new(adapter)
+                        Box::new(InterfaceAAdapter::new_with_shared(shared))
                     }
                     "powerfunctions" => {
-                        let serial_path =
-                            next_config_entry(&config.powerfunctions, &mut indices, "powerfunctions")
-                                .ok_or_else(|| {
-                                    LogoError::Runtime(
-                                "No Power Functions serial port configured in bricklogo.config.json"
-                                    .to_string(),
-                            )
-                                })?;
-                        let mut adapter = PowerFunctionsAdapter::new(&serial_path);
+                        let shared = {
+                            let mut pool = bi_pool_ref.lock().unwrap();
+                            allocate_brickinterface(&mut pool, &config.brickinterface, "powerfunctions")
+                                .map_err(LogoError::Runtime)?
+                        };
+                        shared.powerfunctions_active.store(true, Ordering::SeqCst);
                         system_fn_ref("Connecting to LEGO Power Functions (BrickInterface)...");
-                        adapter
-                            .connect()
-                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
-                        Box::new(adapter)
+                        Box::new(PowerFunctionsAdapter::new_with_shared(shared))
                     }
                     "science" => {
                         let mut adapter = CoralAdapter::new();
@@ -233,7 +249,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
                                 .to_string(),
                         ));
                     }

@@ -1,9 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 use bricklogo_lang::value::LogoValue;
-use rust_brickinterface::BrickInterface;
-#[cfg(test)]
-use rust_brickinterface::BrickInterfaceTransport;
 use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::shared_brick_interface::SharedBrickInterface;
 
 const OUTPUT_PORTS: &[&str] = &["0", "1", "2", "3", "4", "5"];
 const INPUT_PORTS: &[&str] = &["6", "7"];
@@ -14,8 +13,7 @@ fn output_index(port: &str) -> Option<usize> {
 }
 
 pub struct InterfaceAAdapter {
-    serial_path: String,
-    device: Option<BrickInterface>,
+    shared: Option<Arc<SharedBrickInterface>>,
     display_name: String,
     output_ports: Vec<String>,
     input_ports: Vec<String>,
@@ -23,10 +21,9 @@ pub struct InterfaceAAdapter {
 }
 
 impl InterfaceAAdapter {
-    pub fn new(serial_path: &str) -> Self {
+    pub fn new_with_shared(shared: Arc<SharedBrickInterface>) -> Self {
         InterfaceAAdapter {
-            serial_path: serial_path.to_string(),
-            device: None,
+            shared: Some(shared),
             display_name: "LEGO Interface A (BrickInterface)".to_string(),
             output_ports: OUTPUT_PORTS.iter().map(|s| s.to_string()).collect(),
             input_ports: INPUT_PORTS.iter().map(|s| s.to_string()).collect(),
@@ -34,15 +31,13 @@ impl InterfaceAAdapter {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_transport(transport: Box<dyn BrickInterfaceTransport>) -> Self {
-        let mut adapter = Self::new("/dev/null");
-        adapter.device = Some(BrickInterface::from_transport(transport));
-        adapter
-    }
-
-    fn device_mut(&mut self) -> Result<&mut BrickInterface, String> {
-        self.device.as_mut().ok_or_else(|| "Not connected".to_string())
+    fn device_lock(&self) -> Result<std::sync::MutexGuard<'_, rust_brickinterface::BrickInterface>, String> {
+        self.shared
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?
+            .device
+            .lock()
+            .map_err(|_| "Device mutex poisoned".to_string())
     }
 }
 
@@ -50,21 +45,21 @@ impl HardwareAdapter for InterfaceAAdapter {
     fn display_name(&self) -> &str { &self.display_name }
     fn output_ports(&self) -> &[String] { &self.output_ports }
     fn input_ports(&self) -> &[String] { &self.input_ports }
-    fn connected(&self) -> bool { self.device.is_some() }
+    fn connected(&self) -> bool { self.shared.is_some() }
     fn max_power(&self) -> u8 { MAX_POWER }
 
     fn connect(&mut self) -> Result<(), String> {
-        let device = BrickInterface::open(&self.serial_path)?;
-        self.device = Some(device);
-        self.duties = [0u8; 6];
         Ok(())
     }
 
     fn disconnect(&mut self) {
-        if let Some(ref mut device) = self.device {
-            let _ = device.set_outputs(&[0u8; 6]);
+        if let Some(ref shared) = self.shared {
+            if let Ok(mut dev) = shared.device.lock() {
+                let _ = dev.set_outputs(&[0u8; 6]);
+            }
+            shared.release_interfacea();
         }
-        self.device = None;
+        self.shared = None;
         self.duties = [0u8; 6];
     }
 
@@ -82,14 +77,14 @@ impl HardwareAdapter for InterfaceAAdapter {
         let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         self.duties[idx] = power;
         let duties = self.duties;
-        self.device_mut()?.set_output(idx, power, &duties).map_err(|e| e)
+        self.device_lock()?.set_output(idx, power, &duties)
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         self.duties[idx] = 0;
         let duties = self.duties;
-        self.device_mut()?.set_output(idx, 0, &duties)
+        self.device_lock()?.set_output(idx, 0, &duties)
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
@@ -120,14 +115,14 @@ impl HardwareAdapter for InterfaceAAdapter {
             "7" => 1,
             _ => return Err(format!("Unknown sensor port \"{}\"", port)),
         };
-        let state = self.device_mut()?.get_inputs()?;
+        let state = self.device_lock()?.get_inputs()?;
         // Firmware: bit=1 means open/pulled-up (Logo "false"), bit=0 means closed (Logo "true").
         let pressed = (state & (1 << bit)) == 0;
         Ok(Some(LogoValue::Word(if pressed { "true" } else { "false" }.to_string())))
     }
 
     fn read_counter(&mut self, port: &str) -> Result<u32, String> {
-        let (c6, c7) = self.device_mut()?.get_counts()?;
+        let (c6, c7) = self.device_lock()?.get_counts()?;
         match port {
             "6" => Ok(c6),
             "7" => Ok(c7),
@@ -141,7 +136,7 @@ impl HardwareAdapter for InterfaceAAdapter {
             "7" => 7,
             _ => return Err(format!("Unknown sensor port \"{}\"", port)),
         };
-        self.device_mut()?.reset_count(hw)
+        self.device_lock()?.reset_count(hw)
     }
 }
 
