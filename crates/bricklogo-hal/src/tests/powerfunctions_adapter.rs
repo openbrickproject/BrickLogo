@@ -304,3 +304,9 @@ fn test_rotate_to_abs_unsupported() {
     let (mut adapter, _, _) = make_adapter();
     assert!(adapter.rotate_to_abs("red1", PortDirection::Even, 5, 0).is_err());
 }
+
+#[test]
+fn test_parallel_safe_is_false() {
+    let (adapter, _, _) = make_adapter();
+    assert!(!adapter.parallel_safe(), "PF adapter must not run in parallel (IR interference)");
+}

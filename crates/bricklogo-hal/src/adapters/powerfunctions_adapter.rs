@@ -88,6 +88,8 @@ impl HardwareAdapter for PowerFunctionsAdapter {
         self.steps = [0u8; 8];
     }
 
+    fn parallel_safe(&self) -> bool { false }
+
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
         if parse_port(port).is_some() {
             Ok(())

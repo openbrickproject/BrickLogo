@@ -403,30 +403,44 @@ impl PortManager {
     }
 
     /// Batch start ports, grouped by device.
+    /// Parallel-safe adapters (Interface A) fire concurrently across devices;
+    /// IR-based adapters (Power Functions) run sequentially to avoid carrier
+    /// collisions between simultaneous transmissions.
     fn batch_start(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
         let groups = self.group_by_device(ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let commands: Vec<PortCommand> = port_cmds
-                .iter()
-                .map(|(port, dir, power)| PortCommand {
-                    port: port.as_str(),
-                    direction: *dir,
-                    power: *power,
-                })
+        let (par, seq): (Vec<_>, Vec<_>) = groups.into_iter().partition(|(name, _)| {
+            self.devices.get(name).map(|e| e.adapter.parallel_safe()).unwrap_or(true)
+        });
+        if !par.is_empty() {
+            self.run_parallel_by_device(par, |adapter, cmds| adapter.start_ports(cmds))?;
+        }
+        for (name, port_cmds) in seq {
+            let entry = self.devices.get_mut(&name).unwrap();
+            let cmds: Vec<PortCommand> = port_cmds.iter()
+                .map(|(p, d, pw)| PortCommand { port: p.as_str(), direction: *d, power: *pw })
                 .collect();
-            entry.adapter.start_ports(&commands)?;
+            entry.adapter.start_ports(&cmds)?;
         }
         Ok(())
     }
 
     /// Batch stop ports, grouped by device.
+    /// Same parallel/sequential split as batch_start.
     fn batch_stop(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
         let groups = self.group_by_device(ports);
-        for (device_name, port_cmds) in groups {
-            let entry = self.devices.get_mut(&device_name).unwrap();
-            let port_refs: Vec<&str> = port_cmds.iter().map(|(p, _, _)| p.as_str()).collect();
-            entry.adapter.stop_ports(&port_refs)?;
+        let (par, seq): (Vec<_>, Vec<_>) = groups.into_iter().partition(|(name, _)| {
+            self.devices.get(name).map(|e| e.adapter.parallel_safe()).unwrap_or(true)
+        });
+        if !par.is_empty() {
+            self.run_parallel_by_device(par, |adapter, cmds| {
+                let port_strs: Vec<&str> = cmds.iter().map(|c| c.port).collect();
+                adapter.stop_ports(&port_strs)
+            })?;
+        }
+        for (name, port_cmds) in seq {
+            let entry = self.devices.get_mut(&name).unwrap();
+            let port_strs: Vec<&str> = port_cmds.iter().map(|(p, _, _)| p.as_str()).collect();
+            entry.adapter.stop_ports(&port_strs)?;
         }
         Ok(())
     }

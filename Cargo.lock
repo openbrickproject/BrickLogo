@@ -170,9 +170,11 @@ dependencies = [
  "bricklogo-net",
  "crossterm",
  "ratatui",
+ "rust-brickinterface",
  "rust-rcx",
  "serde",
  "serde_json",
+ "serialport",
 ]
 
 [[package]]

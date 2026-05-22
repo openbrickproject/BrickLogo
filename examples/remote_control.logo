@@ -3,9 +3,6 @@
 ; Powered UP Remote drives two devices over a shared BrickInterface:
 ;   Left  Up/Down  → Power Functions red1 forward / reverse
 ;   Right Up/Down  → Interface A motor pair a forward / reverse
-;
-; Config required in bricklogo.config.json:
-;   { "brickinterface": ["/dev/cu.usbmodem1234"] }
 
 connectto "pup "remote
 connectto "powerfunctions "pf

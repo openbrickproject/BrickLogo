@@ -129,6 +129,13 @@ pub trait HardwareAdapter: Send {
         Err("This device does not support counters".to_string())
     }
 
+    /// Whether this adapter can safely fire in parallel with other adapters.
+    /// Adapters that use IR transmissions (Power Functions, Legacy, RCX) return
+    /// false — simultaneous IR bursts from different BrickInterface devices
+    /// interfere on the 38 kHz carrier. Direct electrical adapters (Interface A)
+    /// return the default true.
+    fn parallel_safe(&self) -> bool { true }
+
     // ── Batch operations (default: sequential) ───
 
     /// Start multiple ports simultaneously.

@@ -79,6 +79,14 @@ impl HardwareAdapter for SleepyAdapter {
     fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
     fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
 
+    fn start_ports(&mut self, _commands: &[PortCommand]) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+    fn stop_ports(&mut self, _ports: &[&str]) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
     fn run_ports_for_time(&mut self, _commands: &[PortCommand], tenths: u32) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(tenths as u64 * 100));
         Ok(())
@@ -92,6 +100,47 @@ impl HardwareAdapter for SleepyAdapter {
         Ok(())
     }
     fn rotate_ports_to_abs(&mut self, _commands: &[PortCommand], _position: i32) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+}
+
+/// Like SleepyAdapter but overrides parallel_safe() to false — simulates an
+/// IR-based adapter (Power Functions) where concurrent transmissions interfere.
+struct SlowIRAdapter {
+    ports: Vec<String>,
+}
+
+impl SlowIRAdapter {
+    fn new(ports: &[&str]) -> Self {
+        SlowIRAdapter { ports: ports.iter().map(|s| s.to_string()).collect() }
+    }
+}
+
+impl HardwareAdapter for SlowIRAdapter {
+    fn display_name(&self) -> &str { "SlowIR" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 7 }
+    fn start_port(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    fn parallel_safe(&self) -> bool { false }
+    fn start_ports(&mut self, _commands: &[PortCommand]) -> Result<(), String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+    fn stop_ports(&mut self, _ports: &[&str]) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(200));
         Ok(())
     }
@@ -338,6 +387,90 @@ fn test_rotate_to_abs_runs_across_devices_in_parallel() {
     assert!(
         elapsed < Duration::from_millis(400),
         "rotate_to_abs ran sequentially: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_on_runs_across_parallel_safe_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    let ports = vec!["a.p".into(), "b.p".into(), "c.p".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.on(&ports).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "on ran sequentially across parallel-safe devices: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_off_runs_across_parallel_safe_devices_in_parallel() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    pm.add_device("b", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    pm.add_device("c", Box::new(SleepyAdapter::new(&["p"])), "mock");
+    let ports = vec!["a.p".into(), "b.p".into(), "c.p".into()];
+    pm.ensure_port_states(&ports).unwrap();
+    pm.on(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.off(&ports).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "off ran sequentially across parallel-safe devices: took {:?}, expected <400ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_on_runs_sequentially_for_non_parallel_safe_devices() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    pm.add_device("b", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    pm.add_device("c", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    let ports = vec!["a.p".into(), "b.p".into(), "c.p".into()];
+    pm.ensure_port_states(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.on(&ports).unwrap();
+    let elapsed = start.elapsed();
+
+    // Sequential: 3 × 200ms = 600ms; assert it took at least 2 devices worth
+    // of time so we know they were NOT fanned out in parallel.
+    assert!(
+        elapsed >= Duration::from_millis(380),
+        "on ran in parallel for non-parallel-safe devices: took {:?}, expected >=380ms",
+        elapsed
+    );
+}
+
+#[test]
+fn test_off_runs_sequentially_for_non_parallel_safe_devices() {
+    let mut pm = PortManager::new();
+    pm.add_device("a", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    pm.add_device("b", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    pm.add_device("c", Box::new(SlowIRAdapter::new(&["p"])), "ir");
+    let ports = vec!["a.p".into(), "b.p".into(), "c.p".into()];
+    pm.ensure_port_states(&ports).unwrap();
+    pm.on(&ports).unwrap();
+
+    let start = Instant::now();
+    pm.off(&ports).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= Duration::from_millis(380),
+        "off ran in parallel for non-parallel-safe devices: took {:?}, expected >=380ms",
         elapsed
     );
 }

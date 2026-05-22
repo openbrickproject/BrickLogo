@@ -15,6 +15,7 @@ use bricklogo_hal::shared_brick_interface::SharedBrickInterface;
 use bricklogo_lang::error::LogoError;
 use bricklogo_lang::evaluator::{Evaluator, PrimitiveSpec};
 use bricklogo_lang::value::LogoValue;
+use rust_brickinterface::constants::*;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -113,14 +114,65 @@ pub fn register_hardware_primitives(
                     }
                 }
 
+                fn required_cap_for(kind: &str) -> Option<u16> {
+                    match kind {
+                        "interfacea"     => Some(CAP_INTERFACE_A),
+                        "powerfunctions" => Some(CAP_PF_IR),
+                        "legacy"         => Some(CAP_LEGACY_IR),
+                        "rcx"            => Some(CAP_RCX_IR),
+                        _                => None,
+                    }
+                }
+
+                fn cap_error_message(required_cap: u16) -> String {
+                    let name = match required_cap {
+                        CAP_INTERFACE_A => "Interface A",
+                        CAP_PF_IR       => "Power Functions",
+                        CAP_LEGACY_IR   => "Legacy IR",
+                        CAP_RCX_IR      => "RCX IR",
+                        _               => "the required feature",
+                    };
+                    format!("No BrickInterface with {} support found", name)
+                }
+
+                fn discover_brickinterface(
+                    required_cap: u16,
+                    exclude_paths: &[&str],
+                ) -> Result<Arc<SharedBrickInterface>, String> {
+                    let ports = serialport::available_ports()
+                        .map_err(|e| format!("Could not enumerate serial ports: {}", e))?;
+                    for info in ports {
+                        if exclude_paths.contains(&info.port_name.as_str()) {
+                            continue;
+                        }
+                        if let serialport::SerialPortType::UsbPort(usb) = &info.port_type {
+                            if usb.vid != 0x1209 || usb.pid != 0xC550 {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                        match SharedBrickInterface::open(&info.port_name) {
+                            Ok(shared) if shared.capabilities & required_cap != 0 => return Ok(shared),
+                            _ => continue,
+                        }
+                    }
+                    Err(cap_error_message(required_cap))
+                }
+
                 fn allocate_brickinterface(
                     pool: &mut Vec<Arc<SharedBrickInterface>>,
-                    paths: &[String],
+                    config_paths: &[String],
                     kind: &str,
+                    required_cap: u16,
                 ) -> Result<Arc<SharedBrickInterface>, String> {
+                    // Step 1: reuse an existing open connection that has the cap and a free slot
                     for entry in pool.iter() {
+                        if entry.capabilities & required_cap == 0 {
+                            continue;
+                        }
                         let available = match kind {
-                            "interfacea" => !entry.interfacea_active.load(Ordering::SeqCst),
+                            "interfacea"     => !entry.interfacea_active.load(Ordering::SeqCst),
                             "powerfunctions" => !entry.powerfunctions_active.load(Ordering::SeqCst),
                             _ => false,
                         };
@@ -128,12 +180,22 @@ pub fn register_hardware_primitives(
                             return Ok(entry.clone());
                         }
                     }
-                    let next_index = pool.len();
-                    if next_index >= paths.len() {
-                        return Err("No BrickInterface port available in bricklogo.config.json".to_string());
+                    // Step 2: try config-listed ports not yet open
+                    let pooled_paths: Vec<&str> = pool.iter().map(|e| e.path.as_str()).collect();
+                    for path in config_paths {
+                        if pooled_paths.contains(&path.as_str()) {
+                            continue;
+                        }
+                        match SharedBrickInterface::open(path) {
+                            Ok(shared) if shared.capabilities & required_cap != 0 => {
+                                pool.push(shared.clone());
+                                return Ok(shared);
+                            }
+                            _ => continue,
+                        }
                     }
-                    let shared = SharedBrickInterface::open(&paths[next_index])
-                        .map_err(|e| format!("Could not open BrickInterface at {}: {}", paths[next_index], e))?;
+                    // Step 3: USB discovery — enumerate by VID/PID, skip already-pooled paths
+                    let shared = discover_brickinterface(required_cap, &pooled_paths)?;
                     pool.push(shared.clone());
                     Ok(shared)
                 }
@@ -166,9 +228,10 @@ pub fn register_hardware_primitives(
                         Box::new(adapter)
                     }
                     "interfacea" => {
+                        let cap = required_cap_for("interfacea").unwrap();
                         let shared = {
                             let mut pool = bi_pool_ref.lock().unwrap();
-                            allocate_brickinterface(&mut pool, &config.brickinterface, "interfacea")
+                            allocate_brickinterface(&mut pool, &config.brickinterface, "interfacea", cap)
                                 .map_err(LogoError::Runtime)?
                         };
                         shared.interfacea_active.store(true, Ordering::SeqCst);
@@ -176,9 +239,10 @@ pub fn register_hardware_primitives(
                         Box::new(InterfaceAAdapter::new_with_shared(shared))
                     }
                     "powerfunctions" => {
+                        let cap = required_cap_for("powerfunctions").unwrap();
                         let shared = {
                             let mut pool = bi_pool_ref.lock().unwrap();
-                            allocate_brickinterface(&mut pool, &config.brickinterface, "powerfunctions")
+                            allocate_brickinterface(&mut pool, &config.brickinterface, "powerfunctions", cap)
                                 .map_err(LogoError::Runtime)?
                         };
                         shared.powerfunctions_active.store(true, Ordering::SeqCst);
