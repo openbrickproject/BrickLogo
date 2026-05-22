@@ -781,6 +781,30 @@ impl PortManager {
         Ok(Some(LogoValue::List(results)))
     }
 
+    pub fn read_counter(&mut self, port_strs: &[String]) -> Result<u32, String> {
+        if port_strs.is_empty() {
+            return Err("No sensor port selected (use listento)".to_string());
+        }
+        let ports = self.resolve_ports(port_strs)?;
+        let qp = &ports[0];
+        let entry = self.devices.get_mut(&qp.device_name)
+            .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+        entry.adapter.read_counter(&qp.port)
+    }
+
+    pub fn reset_counter(&mut self, port_strs: &[String]) -> Result<(), String> {
+        if port_strs.is_empty() {
+            return Err("No sensor port selected (use listento)".to_string());
+        }
+        let ports = self.resolve_ports(port_strs)?;
+        for qp in &ports {
+            let entry = self.devices.get_mut(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.reset_counter(&qp.port)?;
+        }
+        Ok(())
+    }
+
     // ── Firmware upload ─────────────────────────
 
 }

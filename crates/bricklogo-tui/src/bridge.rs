@@ -3,6 +3,8 @@ use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
 use bricklogo_hal::adapters::ev3_adapter::EV3Adapter;
+use bricklogo_hal::adapters::interfacea_adapter::InterfaceAAdapter;
+use bricklogo_hal::adapters::powerfunctions_adapter::PowerFunctionsAdapter;
 use bricklogo_hal::adapters::nxt_adapter::NxtAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
@@ -20,6 +22,10 @@ use std::sync::Mutex;
 pub struct BrickLogoConfig {
     #[serde(default)]
     pub controllab: Vec<String>,
+    #[serde(default)]
+    pub interfacea: Vec<String>,
+    #[serde(default)]
+    pub powerfunctions: Vec<String>,
     #[serde(default)]
     pub wedo: Vec<String>,
     #[serde(default)]
@@ -131,6 +137,38 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "interfacea" => {
+                        let serial_path =
+                            next_config_entry(&config.interfacea, &mut indices, "interfacea")
+                                .ok_or_else(|| {
+                                    LogoError::Runtime(
+                                "No Interface A serial port configured in bricklogo.config.json"
+                                    .to_string(),
+                            )
+                                })?;
+                        let mut adapter = InterfaceAAdapter::new(&serial_path);
+                        system_fn_ref("Connecting to LEGO Interface A (BrickInterface)...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
+                    "powerfunctions" => {
+                        let serial_path =
+                            next_config_entry(&config.powerfunctions, &mut indices, "powerfunctions")
+                                .ok_or_else(|| {
+                                    LogoError::Runtime(
+                                "No Power Functions serial port configured in bricklogo.config.json"
+                                    .to_string(),
+                            )
+                                })?;
+                        let mut adapter = PowerFunctionsAdapter::new(&serial_path);
+                        system_fn_ref("Connecting to LEGO Power Functions (BrickInterface)...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     "science" => {
                         let mut adapter = CoralAdapter::new();
                         adapter.set_stop_flag(stop_flag.clone());
@@ -195,7 +233,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\""
+                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\""
                                 .to_string(),
                         ));
                     }
@@ -570,6 +608,30 @@ pub fn register_hardware_primitives(
                 }
                 _ => Ok(Some(LogoValue::Word("false".to_string()))),
             }
+        }),
+    });
+
+    // ── Counter primitives (Interface A) ────────────
+
+    let pm_ref = pm.clone();
+    eval.register_primitive("counter", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_inputs().to_vec();
+            let val = pm_ref.lock().unwrap().read_counter(&ports)
+                .map_err(LogoError::Runtime)?;
+            Ok(Some(LogoValue::Number(val as f64)))
+        }),
+    });
+
+    let pm_ref = pm.clone();
+    eval.register_primitive("resetcount", PrimitiveSpec {
+        min_args: 0, max_args: 0,
+        func: Arc::new(move |_, _, eval| {
+            let ports = eval.selected_inputs().to_vec();
+            pm_ref.lock().unwrap().reset_counter(&ports)
+                .map_err(LogoError::Runtime)?;
+            Ok(None)
         }),
     });
 

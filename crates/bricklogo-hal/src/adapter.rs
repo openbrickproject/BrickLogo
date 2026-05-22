@@ -121,6 +121,14 @@ pub trait HardwareAdapter: Send {
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String>;
 
+    fn read_counter(&mut self, _port: &str) -> Result<u32, String> {
+        Err("This device does not support counters".to_string())
+    }
+
+    fn reset_counter(&mut self, _port: &str) -> Result<(), String> {
+        Err("This device does not support counters".to_string())
+    }
+
     // ── Batch operations (default: sequential) ───
 
     /// Start multiple ports simultaneously.

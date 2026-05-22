@@ -13,6 +13,7 @@ members = [
     "crates/rust-ev3",
     "crates/rust-nxt",
     "crates/rust-spike",
+    "crates/rust-brickinterface",
     "crates/rust-stm32dfu",
     "crates/bricklogo-net",
 ]
