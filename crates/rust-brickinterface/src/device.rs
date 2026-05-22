@@ -78,22 +78,15 @@ impl BrickInterface {
 
     // ── Interface A ───────────────────────────────────────────────────────────
 
-    /// Set all six output duties at once (6-byte form — every output is updated).
-    pub fn set_outputs(&mut self, duties: &[u8; 6]) -> Result<(), String> {
-        let (reply, _) = self.conn.send_recv(CMD_IFACE_SET_OUTPUTS, duties.as_slice())?;
-        expect_ok(reply)
-    }
-
-    /// Set one output duty without disturbing the others (7-byte masked form).
-    /// `current_duties` is the caller's cached state for the other five outputs.
-    pub fn set_output(&mut self, index: usize, duty: u8, current_duties: &[u8; 6]) -> Result<(), String> {
-        if index > 5 {
-            return Err(format!("Output index {} out of range (0..=5)", index));
-        }
-        let mut payload = [0u8; 7];
-        payload[..6].copy_from_slice(current_duties.as_slice());
-        payload[index] = duty;
-        payload[6] = 1 << index;
+    /// Set selected output duties. `mask` bit i set = update output i.
+    /// `duties` contains exactly one byte per set bit in `mask`, in ascending
+    /// bit order. E.g. mask=0x05 with duties=[a, b] sets output 0 to `a` and
+    /// output 2 to `b`; outputs 1, 3, 4, 5 are left untouched by the firmware.
+    pub fn set_outputs_masked(&mut self, mask: u8, duties: &[u8]) -> Result<(), String> {
+        let mask = mask & 0x3F;
+        let mut payload = Vec::with_capacity(1 + duties.len());
+        payload.push(mask);
+        payload.extend_from_slice(duties);
         let (reply, _) = self.conn.send_recv(CMD_IFACE_SET_OUTPUTS, &payload)?;
         expect_ok(reply)
     }

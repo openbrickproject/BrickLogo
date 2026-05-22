@@ -76,9 +76,7 @@ fn test_start_port_sends_masked_set_outputs() {
     let w = written.lock().unwrap();
     assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
     let p = written_payload(&w);
-    assert_eq!(p.len(), 7, "should use 7-byte masked form");
-    assert_eq!(p[0], 200, "duty[0] should be 200");
-    assert_eq!(p[6], 0x01, "mask should be bit 0");
+    assert_eq!(p, &[0x01, 200], "mask=0x01 then single duty byte");
 }
 
 #[test]
@@ -98,7 +96,7 @@ fn test_start_port_direction_is_ignored() {
 }
 
 #[test]
-fn test_start_port_preserves_other_duties() {
+fn test_start_port_sends_only_changed_output() {
     let (mut adapter, written, responses) = make_adapter();
     enqueue_ok(&responses);
     enqueue_ok(&responses);
@@ -107,12 +105,11 @@ fn test_start_port_preserves_other_duties() {
     adapter.start_port("2", PortDirection::Even, 50).unwrap();
 
     let all = written.lock().unwrap();
-    // Second frame starts after the first (parse both).
-    let first_len = 2 + all[1] as usize + 1; // SOF + LEN + len + CHK
+    let first_len = 2 + all[1] as usize + 1;
+    let p1 = written_payload(&all);
     let p2 = written_payload(&all[first_len..]);
-    assert_eq!(p2[0], 100, "duty[0] should still be 100 in second frame");
-    assert_eq!(p2[2], 50,  "duty[2] should be 50");
-    assert_eq!(p2[6], 0x04, "mask should be bit 2 only");
+    assert_eq!(p1, &[0x01, 100], "first frame: mask=0x01, duty=100");
+    assert_eq!(p2, &[0x04, 50],  "second frame: mask=0x04, duty=50");
 }
 
 #[test]
@@ -127,8 +124,7 @@ fn test_stop_port_sends_zero_duty() {
     let all = written.lock().unwrap();
     let first_len = 2 + all[1] as usize + 1;
     let p_stop = written_payload(&all[first_len..]);
-    assert_eq!(p_stop[1], 0,    "duty[1] should be 0 after stop");
-    assert_eq!(p_stop[6], 0x02, "mask should be bit 1");
+    assert_eq!(p_stop, &[0x02, 0], "mask=0x02, duty=0");
 }
 
 #[test]
@@ -143,8 +139,8 @@ fn test_disconnect_zeroes_all_outputs() {
     let all = written.lock().unwrap();
     let first_len = 2 + all[1] as usize + 1;
     let p_disc = written_payload(&all[first_len..]);
-    assert_eq!(p_disc.len(), 6, "disconnect uses 6-byte all-outputs form");
-    assert!(p_disc.iter().all(|&b| b == 0), "all duties should be zero");
+    assert_eq!(p_disc[0], 0x3F, "mask should be all 6 bits");
+    assert!(p_disc[1..].iter().all(|&b| b == 0), "all duties should be zero");
 }
 
 // ── Sensor (input) behaviour ──────────────────────────────────────────────────
@@ -245,9 +241,76 @@ fn test_validate_output_port_rejects_input_ports() {
 }
 
 #[test]
-fn test_validate_output_port_rejects_named_ports() {
+fn test_validate_output_port_accepts_pair_ports() {
     let (adapter, _, _) = make_adapter();
-    assert!(adapter.validate_output_port("a").is_err());
+    assert!(adapter.validate_output_port("a").is_ok());
+    assert!(adapter.validate_output_port("b").is_ok());
+    assert!(adapter.validate_output_port("c").is_ok());
+}
+
+#[test]
+fn test_pair_port_a_even_sets_output0_clears_output1() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses);
+
+    adapter.start_port("a", PortDirection::Even, 200).unwrap();
+
+    let w = written.lock().unwrap();
+    assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
+    // mask=0x03 (bits 0+1), duties=[200, 0]
+    assert_eq!(written_payload(&w), &[0x03, 200, 0]);
+}
+
+#[test]
+fn test_pair_port_a_odd_sets_output1_clears_output0() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses);
+
+    adapter.start_port("a", PortDirection::Odd, 200).unwrap();
+
+    // mask=0x03, duties=[0, 200]
+    assert_eq!(written_payload(&written.lock().unwrap()), &[0x03, 0, 200]);
+}
+
+#[test]
+fn test_stop_pair_port_a_clears_both_outputs() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses); // start
+    enqueue_ok(&responses); // stop
+
+    adapter.start_port("a", PortDirection::Even, 200).unwrap();
+    adapter.stop_port("a").unwrap();
+
+    let w = written.lock().unwrap();
+    let first_len = 2 + w[1] as usize + 1;
+    // mask=0x03, duties=[0, 0]
+    assert_eq!(written_payload(&w[first_len..]), &[0x03, 0, 0]);
+}
+
+#[test]
+fn test_pair_port_b_even_sets_output2_clears_output3() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses);
+
+    adapter.start_port("b", PortDirection::Even, 128).unwrap();
+
+    // mask=0x0C (bits 2+3), duties=[128, 0]
+    assert_eq!(written_payload(&written.lock().unwrap()), &[0x0C, 128, 0]);
+}
+
+#[test]
+fn test_pair_port_direction_change_swaps_active_output() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses); // even
+    enqueue_ok(&responses); // odd
+
+    adapter.start_port("a", PortDirection::Even, 150).unwrap();
+    adapter.start_port("a", PortDirection::Odd, 150).unwrap();
+
+    let w = written.lock().unwrap();
+    let first_len = 2 + w[1] as usize + 1;
+    // second frame: mask=0x03, duties=[0, 150]
+    assert_eq!(written_payload(&w[first_len..]), &[0x03, 0, 150]);
 }
 
 #[test]

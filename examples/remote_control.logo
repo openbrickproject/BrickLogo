@@ -1,0 +1,39 @@
+; remote_control.logo
+;
+; Powered UP Remote drives two devices over a shared BrickInterface:
+;   Left  Up/Down  → Power Functions red1 forward / reverse
+;   Right Up/Down  → Interface A motor pair a forward / reverse
+;
+; Config required in bricklogo.config.json:
+;   { "brickinterface": ["/dev/cu.usbmodem1234"] }
+
+connectto "pup "remote
+connectto "powerfunctions "pf
+connectto "interfacea "ia
+
+make "prev_left 0
+make "prev_right 0
+
+to handle_left
+  listento "remote.a
+  make "btn carefully [sensor "remoteButton] [0]
+  if :btn = :prev_left [stop]
+  make "prev_left :btn
+  talkto "pf.red1
+  ifelse :btn = 1   [seteven on] [
+  ifelse :btn = 255 [setodd  on] [
+  off]]
+end
+
+to handle_right
+  listento "remote.b
+  make "btn carefully [sensor "remoteButton] [0]
+  if :btn = :prev_right [stop]
+  make "prev_right :btn
+  talkto "ia.a
+  ifelse :btn = 1   [seteven on] [
+  ifelse :btn = 255 [setodd  on] [
+  off]]
+end
+
+forever [handle_left handle_right]

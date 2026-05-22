@@ -4,7 +4,7 @@ use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortDirection};
 use crate::shared_brick_interface::SharedBrickInterface;
 
-const OUTPUT_PORTS: &[&str] = &["0", "1", "2", "3", "4", "5"];
+const OUTPUT_PORTS: &[&str] = &["0", "1", "2", "3", "4", "5", "a", "b", "c"];
 const INPUT_PORTS: &[&str] = &["6", "7"];
 const MAX_POWER: u8 = 255;
 
@@ -12,12 +12,23 @@ fn output_index(port: &str) -> Option<usize> {
     port.parse::<usize>().ok().filter(|&i| i < 6)
 }
 
+// Returns (even_index, odd_index) for TC Logo motor pair ports "a"/"b"/"c".
+// Even direction → even_index on, odd_index off.
+// Odd direction  → even_index off, odd_index on.
+fn pair_indices(port: &str) -> Option<(usize, usize)> {
+    match port {
+        "a" => Some((0, 1)),
+        "b" => Some((2, 3)),
+        "c" => Some((4, 5)),
+        _ => None,
+    }
+}
+
 pub struct InterfaceAAdapter {
     shared: Option<Arc<SharedBrickInterface>>,
     display_name: String,
     output_ports: Vec<String>,
     input_ports: Vec<String>,
-    duties: [u8; 6],
 }
 
 impl InterfaceAAdapter {
@@ -27,7 +38,6 @@ impl InterfaceAAdapter {
             display_name: "LEGO Interface A (BrickInterface)".to_string(),
             output_ports: OUTPUT_PORTS.iter().map(|s| s.to_string()).collect(),
             input_ports: INPUT_PORTS.iter().map(|s| s.to_string()).collect(),
-            duties: [0u8; 6],
         }
     }
 
@@ -55,16 +65,15 @@ impl HardwareAdapter for InterfaceAAdapter {
     fn disconnect(&mut self) {
         if let Some(ref shared) = self.shared {
             if let Ok(mut dev) = shared.device.lock() {
-                let _ = dev.set_outputs(&[0u8; 6]);
+                let _ = dev.set_outputs_masked(0x3F, &[0u8; 6]);
             }
             shared.release_interfacea();
         }
         self.shared = None;
-        self.duties = [0u8; 6];
     }
 
     fn validate_output_port(&self, port: &str) -> Result<(), String> {
-        if output_index(port).is_some() { Ok(()) }
+        if output_index(port).is_some() || matches!(port, "a" | "b" | "c") { Ok(()) }
         else { Err(format!("Unknown output port \"{}\"", port)) }
     }
 
@@ -73,18 +82,28 @@ impl HardwareAdapter for InterfaceAAdapter {
         else { Err(format!("Unknown sensor port \"{}\"", port)) }
     }
 
-    fn start_port(&mut self, port: &str, _direction: PortDirection, power: u8) -> Result<(), String> {
-        let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.duties[idx] = power;
-        let duties = self.duties;
-        self.device_lock()?.set_output(idx, power, &duties)
+    fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
+        if let Some((even_idx, odd_idx)) = pair_indices(port) {
+            let (d_even, d_odd) = match direction {
+                PortDirection::Even => (power, 0),
+                PortDirection::Odd  => (0, power),
+            };
+            let mask = (1u8 << even_idx) | (1u8 << odd_idx);
+            self.device_lock()?.set_outputs_masked(mask, &[d_even, d_odd])
+        } else {
+            let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+            self.device_lock()?.set_outputs_masked(1 << idx, &[power])
+        }
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
-        let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.duties[idx] = 0;
-        let duties = self.duties;
-        self.device_lock()?.set_output(idx, 0, &duties)
+        if let Some((even_idx, odd_idx)) = pair_indices(port) {
+            let mask = (1u8 << even_idx) | (1u8 << odd_idx);
+            self.device_lock()?.set_outputs_masked(mask, &[0, 0])
+        } else {
+            let idx = output_index(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+            self.device_lock()?.set_outputs_masked(1 << idx, &[0])
+        }
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {

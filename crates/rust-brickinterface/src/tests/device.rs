@@ -66,59 +66,63 @@ fn written_payload(written: &[u8]) -> Vec<u8> {
     written[4..2 + len].to_vec()
 }
 
-// ── set_outputs ───────────────────────────────────────────────────────────────
+// ── set_outputs_masked ────────────────────────────────────────────────────────
 
 #[test]
-fn test_set_outputs_sends_six_byte_form() {
+fn test_set_outputs_masked_single_output() {
     let (mut dev, written, responses) = make_device();
     enqueue_ok(&responses);
 
-    let duties = [10u8, 20, 30, 40, 50, 60];
-    dev.set_outputs(&duties).unwrap();
+    dev.set_outputs_masked(0x01, &[200]).unwrap();
 
     let w = written.lock().unwrap();
     assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
-    assert_eq!(written_payload(&w), duties.as_slice());
+    assert_eq!(written_payload(&w), &[0x01, 200]);
 }
 
-// ── set_output (masked) ───────────────────────────────────────────────────────
-
 #[test]
-fn test_set_output_sends_masked_form() {
+fn test_set_outputs_masked_two_outputs() {
     let (mut dev, written, responses) = make_device();
     enqueue_ok(&responses);
 
-    let current = [0u8; 6];
-    dev.set_output(2, 200, &current).unwrap();
+    dev.set_outputs_masked(0x03, &[100, 0]).unwrap();
 
     let w = written.lock().unwrap();
-    assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
-    let p = written_payload(&w);
-    assert_eq!(p.len(), 7);
-    assert_eq!(p[2], 200, "duty[2] should be 200");
-    assert_eq!(p[6], 0x04, "mask should be bit 2");
+    assert_eq!(written_payload(&w), &[0x03, 100, 0]);
 }
 
 #[test]
-fn test_set_output_preserves_other_duties_in_payload() {
+fn test_set_outputs_masked_all_outputs() {
     let (mut dev, written, responses) = make_device();
     enqueue_ok(&responses);
 
-    let current = [10u8, 20, 30, 40, 50, 60];
-    dev.set_output(0, 255, &current).unwrap();
+    dev.set_outputs_masked(0x3F, &[10, 20, 30, 40, 50, 60]).unwrap();
 
     let w = written.lock().unwrap();
-    let p = written_payload(&w);
-    assert_eq!(p[0], 255); // updated
-    assert_eq!(p[1], 20);  // preserved
-    assert_eq!(p[5], 60);  // preserved
-    assert_eq!(p[6], 0x01);
+    assert_eq!(written_payload(&w), &[0x3F, 10, 20, 30, 40, 50, 60]);
 }
 
 #[test]
-fn test_set_output_rejects_out_of_range_index() {
-    let (mut dev, _, _) = make_device();
-    assert!(dev.set_output(6, 0, &[0u8; 6]).is_err());
+fn test_set_outputs_masked_non_contiguous_outputs() {
+    // mask=0x05 = bits 0 and 2; duties=[a, b] sets output 0 to a, output 2 to b
+    let (mut dev, written, responses) = make_device();
+    enqueue_ok(&responses);
+
+    dev.set_outputs_masked(0x05, &[0xFF, 0x80]).unwrap();
+
+    let w = written.lock().unwrap();
+    assert_eq!(written_payload(&w), &[0x05, 0xFF, 0x80]);
+}
+
+#[test]
+fn test_set_outputs_masked_strips_high_bits() {
+    let (mut dev, written, responses) = make_device();
+    enqueue_ok(&responses);
+
+    dev.set_outputs_masked(0xFF, &[1, 2, 3, 4, 5, 6]).unwrap();
+
+    let w = written.lock().unwrap();
+    assert_eq!(written_payload(&w)[0], 0x3F, "high bits should be masked off");
 }
 
 // ── get_inputs ────────────────────────────────────────────────────────────────
