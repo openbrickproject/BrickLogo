@@ -22,10 +22,6 @@ impl SharedBrickInterface {
 
     pub fn open(serial_path: &str) -> Result<Arc<Self>, String> {
         let mut device = BrickInterface::open(serial_path)?;
-        // USB CDC ports on Windows may re-enumerate after open and need
-        // a brief settle before the device is ready to respond.
-        #[cfg(target_os = "windows")]
-        std::thread::sleep(std::time::Duration::from_millis(200));
         let capabilities = device.get_capabilities()
             .map_err(|e| format!("Could not query capabilities on {}: {}", serial_path, e))?;
         Ok(Arc::new(SharedBrickInterface {

@@ -58,10 +58,17 @@ pub struct BrickInterface {
 impl BrickInterface {
     /// Open a connection to a BrickInterface on the given serial port.
     pub fn open(serial_path: &str) -> Result<Self, String> {
-        let serial = serialport::new(serial_path, 115200)
+        let mut serial = serialport::new(serial_path, 115200)
             .timeout(Duration::from_millis(50))
             .open()
             .map_err(|e| format!("Could not open {}: {}", serial_path, e))?;
+        // The CH55x USB-CDC firmware only transmits while the host has DTR
+        // asserted (it gates all TX on the control-line state). macOS asserts
+        // DTR when opening a cu.* port; Windows does not, so without this the
+        // device receives commands but never sends a reply. Assert it
+        // explicitly. Errors are ignored — a port that can't set DTR will
+        // surface a clear timeout on the first query instead.
+        let _ = serial.write_data_terminal_ready(true);
         Ok(Self::from_transport(Box::new(serial)))
     }
 
