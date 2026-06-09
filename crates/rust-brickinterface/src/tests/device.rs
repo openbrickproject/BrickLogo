@@ -40,7 +40,16 @@ impl BrickInterfaceTransport for MockTransport {
     fn flush(&mut self) -> Result<(), String> { Ok(()) }
 }
 
+// Command replies echo the request's (non-zero) SEQ on the wire; the driver
+// only distinguishes events (SEQ 0x00) from replies, so any non-zero value
+// works here.
 fn enqueue(responses: &Arc<Mutex<VecDeque<u8>>>, cmd: u8, payload: &[u8]) {
+    let frame = build_frame(0x5A, cmd, payload);
+    responses.lock().unwrap().extend(frame);
+}
+
+// Async events (IR_DONE) use SEQ 0x00.
+fn enqueue_event(responses: &Arc<Mutex<VecDeque<u8>>>, cmd: u8, payload: &[u8]) {
     let frame = build_frame(0x00, cmd, payload);
     responses.lock().unwrap().extend(frame);
 }
@@ -225,9 +234,12 @@ fn test_get_version_parses_reply() {
 
 // ── pf_send_single_pwm ────────────────────────────────────────────────────────
 
+// What a real device produces per accepted send: the IR_ACCEPTED reply, then
+// (after the burst) the async IR_DONE event. The driver consumes the IR_DONE
+// lazily — on the next PF send or on abort.
 fn enqueue_pf_ok(responses: &Arc<Mutex<VecDeque<u8>>>) {
     enqueue(responses, REPLY_IR_ACCEPTED, &[]);
-    enqueue(responses, REPLY_IR_DONE, &[]);
+    enqueue_event(responses, REPLY_IR_DONE, &[]);
 }
 
 #[test]
@@ -276,6 +288,53 @@ fn test_pf_send_single_pwm_rejects_bad_step() {
     assert!(dev.pf_send_single_pwm(0, false, 16).is_err());
 }
 
+#[test]
+fn test_pf_send_returns_after_accept_without_ir_done() {
+    // The burst (~0.4-0.6 s) runs in the background: the send must return on
+    // IR_ACCEPTED alone, not wait for IR_DONE.
+    let (mut dev, _, responses) = make_device();
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+}
+
+#[test]
+fn test_pf_send_consumes_previous_burst_ir_done_first() {
+    let (mut dev, written, responses) = make_device();
+
+    // First send: accepted, burst in flight.
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+
+    // Device finishes the burst, then accepts the second send.
+    enqueue_event(&responses, REPLY_IR_DONE, &[0x01, 0x01]);
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 0).unwrap();
+
+    // Both PF_SEND frames went out.
+    let all = written.lock().unwrap();
+    assert_eq!(written_cmd(&all), CMD_PF_SEND);
+    let first_len = 2 + all[1] as usize + 1;
+    assert_eq!(written_cmd(&all[first_len..]), CMD_PF_SEND);
+}
+
+#[test]
+fn test_pf_send_times_out_when_previous_burst_never_completes() {
+    // With a burst in flight and no IR_DONE forthcoming, the next send must
+    // fail with a timeout rather than transmit into the firmware's busy slot.
+    let (mut dev, written, responses) = make_device();
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+
+    let err = dev.pf_send_single_pwm(0, false, 0).unwrap_err();
+    assert!(err.contains("Timed out"), "got: {}", err);
+
+    // Only the first PF_SEND was written — the second never went out.
+    let all = written.lock().unwrap();
+    let first_len = 2 + all[1] as usize + 1;
+    assert_eq!(all.len(), first_len);
+}
+
 // ── pf_send_combo_pwm ────────────────────────────────────────────────────────
 
 #[test]
@@ -309,6 +368,38 @@ fn test_pf_send_combo_pwm_rejects_bad_step() {
     assert!(dev.pf_send_combo_pwm(0, 0, 16).is_err());
 }
 
+// ── pf_wait_idle ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_pf_wait_idle_true_when_no_burst() {
+    let (mut dev, _, _) = make_device();
+    assert!(dev.pf_wait_idle(0).unwrap());
+}
+
+#[test]
+fn test_pf_wait_idle_false_while_burst_in_flight() {
+    let (mut dev, _, responses) = make_device();
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+
+    // No IR_DONE forthcoming: a short bounded wait reports busy, not error.
+    assert!(!dev.pf_wait_idle(10).unwrap());
+}
+
+#[test]
+fn test_pf_wait_idle_consumes_ir_done_then_send_is_immediate() {
+    let (mut dev, _, responses) = make_device();
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+
+    enqueue_event(&responses, REPLY_IR_DONE, &[0x01, 0x01]);
+    assert!(dev.pf_wait_idle(100).unwrap());
+
+    // The burst flag is cleared, so the next send needs no further wait.
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 0).unwrap();
+}
+
 // ── ir_abort_all ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -318,6 +409,38 @@ fn test_ir_abort_all_sends_correct_command() {
 
     dev.ir_abort_all().unwrap();
     assert_eq!(written_cmd(&written.lock().unwrap()), CMD_IR_ABORT_ALL);
+}
+
+#[test]
+fn test_ir_abort_all_drains_aborted_burst_ir_done() {
+    let (mut dev, _, responses) = make_device();
+
+    // Burst in flight…
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    dev.pf_send_single_pwm(0, false, 5).unwrap();
+
+    // …aborted: firmware replies OK, then emits the aborted token's IR_DONE.
+    enqueue_ok(&responses);
+    enqueue_event(&responses, REPLY_IR_DONE, &[0x01, 0x01]);
+    dev.ir_abort_all().unwrap();
+
+    // Connection is idle and the event was consumed — the next command's
+    // reply parses cleanly.
+    enqueue(&responses, REPLY_PONG, &[]);
+    dev.ping().unwrap();
+}
+
+// ── async event filtering ────────────────────────────────────────────────────
+
+#[test]
+fn test_stray_ir_done_event_not_mistaken_for_reply() {
+    // An IR_DONE (SEQ 0x00) sitting in the receive buffer ahead of a command
+    // reply must be skipped, not returned as the reply.
+    let (mut dev, _, responses) = make_device();
+    enqueue_event(&responses, REPLY_IR_DONE, &[0x01, 0x01]);
+    enqueue(&responses, REPLY_PONG, &[]);
+
+    dev.ping().unwrap();
 }
 
 // ── get_capabilities ─────────────────────────────────────────────────────────

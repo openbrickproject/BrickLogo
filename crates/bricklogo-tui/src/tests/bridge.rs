@@ -155,7 +155,7 @@ fn test_bridge_connect_rejects_unknown_type() {
     let err = eval.evaluate("connectto \"nope \"bot").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\""
+        "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
     );
 }
 
@@ -385,4 +385,79 @@ fn test_if_connected_pattern() {
     assert_eq!(eval.evaluate(":result").unwrap(), Some(LogoValue::Word("yes".to_string())));
     eval.evaluate("if connected? \"nope [make \"result \"bad]").unwrap();
     assert_eq!(eval.evaluate(":result").unwrap(), Some(LogoValue::Word("yes".to_string())));
+}
+
+// ── BrickLogoConfig loading ───────────────────────────────────────────────────
+
+// Write `content` to a unique temp file and run BrickLogoConfig::from_file on
+// it, collecting any warnings. `None` exercises the missing-file path.
+fn load_config_from(content: Option<&str>) -> (BrickLogoConfig, Vec<String>) {
+    let path = std::env::temp_dir().join(format!(
+        "bricklogo-config-test-{}-{:?}.json",
+        std::process::id(),
+        std::thread::current().id(),
+    ));
+    if let Some(c) = content {
+        std::fs::write(&path, c).unwrap();
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+    let warnings = Mutex::new(Vec::new());
+    let config = BrickLogoConfig::from_file(&path, &|msg| {
+        warnings.lock().unwrap().push(msg.to_string());
+    });
+    let _ = std::fs::remove_file(&path);
+    (config, warnings.into_inner().unwrap())
+}
+
+#[test]
+fn test_config_valid_file_parses_silently() {
+    let (config, warnings) =
+        load_config_from(Some(r#"{ "controllab": ["/dev/tty.usbserial-X"], "rcx": [] }"#));
+    assert_eq!(config.controllab, vec!["/dev/tty.usbserial-X"]);
+    assert!(config.rcx.is_empty());
+    assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+}
+
+#[test]
+fn test_config_missing_file_defaults_silently() {
+    let (config, warnings) = load_config_from(None);
+    assert!(config.controllab.is_empty());
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn test_config_invalid_json_warns_and_defaults() {
+    // Trailing comma — the classic hand-edit slip. Must warn (with serde's
+    // line/column detail) instead of silently dropping the whole config.
+    let (config, warnings) =
+        load_config_from(Some("{\n  \"controllab\": [\"/dev/tty.usbserial-X\"],\n}\n"));
+    assert!(config.controllab.is_empty(), "invalid config must fall back to defaults");
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].contains("invalid JSON") && warnings[0].contains("line"),
+        "warning should say what and where: {}",
+        warnings[0]
+    );
+}
+
+#[test]
+fn test_config_unreadable_file_warns_and_defaults() {
+    // A directory at the config path makes read_to_string fail while
+    // `exists()` is true.
+    let path = std::env::temp_dir().join(format!(
+        "bricklogo-config-test-dir-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir(&path);
+    std::fs::create_dir(&path).unwrap();
+    let warnings = Mutex::new(Vec::new());
+    let config = BrickLogoConfig::from_file(&path, &|msg| {
+        warnings.lock().unwrap().push(msg.to_string());
+    });
+    let _ = std::fs::remove_dir(&path);
+    assert!(config.controllab.is_empty());
+    let warnings = warnings.into_inner().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("could not read"), "got: {}", warnings[0]);
 }

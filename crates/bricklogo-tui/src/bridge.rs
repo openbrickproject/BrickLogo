@@ -44,16 +44,46 @@ pub struct BrickLogoConfig {
 }
 
 impl BrickLogoConfig {
+    /// Load `bricklogo.config.json` from the working directory, warning on
+    /// stderr if the file exists but can't be used. For contexts where
+    /// stderr isn't visible (the TUI), use [`Self::load_reporting`].
     pub fn load() -> Self {
-        let config_path = std::path::Path::new("bricklogo.config.json");
-        if config_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(config_path) {
-                if let Ok(config) = serde_json::from_str(&content) {
-                    return config;
+        Self::load_reporting(&|msg| eprintln!("{}", msg))
+    }
+
+    /// Like [`Self::load`], but problems are reported through `warn`.
+    /// A missing file is not a problem (defaults apply silently); a file
+    /// that exists but can't be read or parsed is — silently ignoring it
+    /// turns a config typo into mysteriously absent devices later.
+    pub fn load_reporting(warn: &dyn Fn(&str)) -> Self {
+        Self::from_file(std::path::Path::new("bricklogo.config.json"), warn)
+    }
+
+    fn from_file(path: &std::path::Path, warn: &dyn Fn(&str)) -> Self {
+        if !path.exists() {
+            return Self::default();
+        }
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(config) => config,
+                Err(e) => {
+                    warn(&format!(
+                        "Warning: {} is invalid JSON ({}) — ignoring it and using defaults",
+                        path.display(),
+                        e
+                    ));
+                    Self::default()
                 }
+            },
+            Err(e) => {
+                warn(&format!(
+                    "Warning: could not read {} ({}) — ignoring it and using defaults",
+                    path.display(),
+                    e
+                ));
+                Self::default()
             }
         }
-        Self::default()
     }
 }
 
@@ -63,7 +93,11 @@ pub fn register_hardware_primitives(
     pm: Arc<Mutex<PortManager>>,
     system_fn: Arc<dyn Fn(&str) + Send + Sync>,
 ) {
-    let config = Arc::new(Mutex::new(BrickLogoConfig::load()));
+    // Route config warnings through the system-message channel — the TUI has
+    // already taken over the screen by now, so stderr would be invisible.
+    let config = Arc::new(Mutex::new(BrickLogoConfig::load_reporting(&|msg| {
+        system_fn(msg)
+    })));
     let used_indices: Arc<Mutex<std::collections::HashMap<String, usize>>> =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
     let bi_pool: Arc<Mutex<Vec<Arc<SharedBrickInterface>>>> =

@@ -4,11 +4,22 @@ use crate::protocol::{build_frame, try_parse_frame};
 use crate::transport::BrickInterfaceTransport;
 
 const REPLY_TIMEOUT_MS: u64 = 1000;
+// A PF burst takes up to ~0.56 s (channel 4, spec-spaced repeats, fw >= 0.4)
+// from accept to IR_DONE. Waiting starts right after the previous accept, so
+// allow one full burst plus USB margin.
+const IR_DONE_TIMEOUT_MS: u64 = 1500;
+// After IR_ABORT_ALL, fw >= 0.4 emits the aborted burst's IR_DONE within one
+// firmware loop pass; 0.3 firmware swallows it. Short best-effort drain.
+const ABORT_DRAIN_TIMEOUT_MS: u64 = 250;
 
 struct Connection {
     transport: Box<dyn BrickInterfaceTransport>,
     seq: u8,
     read_buf: Vec<u8>,
+    // True while an accepted IR burst is still transmitting (its IR_DONE has
+    // not been seen yet). Set on IR_ACCEPTED, cleared whenever an IR_DONE
+    // event is consumed — by wait_ir_done or in passing by recv_reply.
+    ir_pending: bool,
 }
 
 impl Connection {
@@ -22,10 +33,15 @@ impl Connection {
         s
     }
 
-    fn recv_one(&mut self) -> Result<(u8, Vec<u8>), String> {
-        let deadline = Instant::now() + Duration::from_millis(REPLY_TIMEOUT_MS);
+    /// Read until one complete frame is available or `deadline` passes.
+    /// Returns `(seq, cmd, payload)`.
+    fn recv_frame(&mut self, deadline: Instant) -> Result<(u8, u8, Vec<u8>), String> {
         let mut tmp = [0u8; 64];
         loop {
+            if let Some((seq, cmd, payload, consumed)) = try_parse_frame(&self.read_buf) {
+                self.read_buf.drain(..consumed);
+                return Ok((seq, cmd, payload));
+            }
             if Instant::now() >= deadline {
                 return Err("Reply timed out".to_string());
             }
@@ -34,9 +50,47 @@ impl Connection {
                 Ok(_) => {}
                 Err(e) => return Err(format!("Read failed: {}", e)),
             }
-            if let Some((reply_cmd, reply_payload, consumed)) = try_parse_frame(&self.read_buf) {
-                self.read_buf.drain(..consumed);
-                return Ok((reply_cmd, reply_payload));
+        }
+    }
+
+    /// Wait for the reply to the command just sent. Frames with SEQ 0x00 are
+    /// asynchronous events, not replies — an IR_DONE clears `ir_pending`, and
+    /// every event is skipped so it can never be mistaken for a reply.
+    fn recv_reply(&mut self) -> Result<(u8, Vec<u8>), String> {
+        let deadline = Instant::now() + Duration::from_millis(REPLY_TIMEOUT_MS);
+        loop {
+            let (seq, cmd, payload) = self.recv_frame(deadline)?;
+            if seq == 0x00 {
+                if cmd == REPLY_IR_DONE {
+                    self.ir_pending = false;
+                }
+                continue;
+            }
+            return Ok((cmd, payload));
+        }
+    }
+
+    /// Wait for the in-flight IR burst (if any) to report IR_DONE.
+    /// Returns `Ok(true)` once the transmitter is idle (immediately so when
+    /// no burst is outstanding), `Ok(false)` if the burst is still in the
+    /// air when `timeout_ms` expires, or `Err` on a transport failure.
+    fn wait_ir_done(&mut self, timeout_ms: u64) -> Result<bool, String> {
+        if !self.ir_pending {
+            return Ok(true);
+        }
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            match self.recv_frame(deadline) {
+                Ok((seq, cmd, _)) => {
+                    if seq == 0x00 && cmd == REPLY_IR_DONE {
+                        self.ir_pending = false;
+                        return Ok(true);
+                    }
+                    // No command is outstanding here; anything else is a
+                    // stale frame — drop it.
+                }
+                Err(e) if e == "Reply timed out" => return Ok(false),
+                Err(e) => return Err(e),
             }
         }
     }
@@ -46,7 +100,7 @@ impl Connection {
         let frame = build_frame(seq, cmd, payload);
         self.transport.write_all(&frame)?;
         self.transport.flush()?;
-        self.recv_one()
+        self.recv_reply()
     }
 }
 
@@ -58,8 +112,12 @@ pub struct BrickInterface {
 impl BrickInterface {
     /// Open a connection to a BrickInterface on the given serial port.
     pub fn open(serial_path: &str) -> Result<Self, String> {
+        // Short read timeout: recv loops check their deadlines between
+        // blocking reads, so this bounds how far a sliced wait (pf_wait_idle
+        // under a shared lock) can overshoot its slice. 10 ms keeps
+        // worst-case lock hold below a 60 Hz scheduler tick.
         let mut serial = serialport::new(serial_path, 115200)
-            .timeout(Duration::from_millis(50))
+            .timeout(Duration::from_millis(10))
             .open()
             .map_err(|e| format!("Could not open {}: {}", serial_path, e))?;
         // The CH55x USB-CDC firmware only transmits while the host has DTR
@@ -79,6 +137,7 @@ impl BrickInterface {
                 transport,
                 seq: 1,
                 read_buf: Vec::new(),
+                ir_pending: false,
             },
         }
     }
@@ -138,7 +197,12 @@ impl BrickInterface {
     /// Send a Single PWM command to one output of a PF receiver.
     /// `channel`: 0-3 (PF channels 1-4). `output_b`: false=A/red, true=B/blue.
     /// `step`: 0=float, 1-7=forward, 8=brake, 9-15=reverse (7/7 down to 1/7).
-    /// Blocks until the firmware confirms the IR transmission is complete (REPLY_IR_DONE).
+    ///
+    /// Returns as soon as the firmware accepts the burst (REPLY_IR_ACCEPTED);
+    /// the IR transmission itself (~0.4-0.6 s of spec-spaced repeats) carries
+    /// on in the background and its IR_DONE event is consumed by a later
+    /// call. If a previous burst is still in flight, blocks first until that
+    /// one completes — the firmware has a single transmit slot.
     pub fn pf_send_single_pwm(&mut self, channel: u8, output_b: bool, step: u8) -> Result<(), String> {
         if channel > 3 {
             return Err(format!("PF channel {} out of range (0..=3)", channel));
@@ -147,14 +211,14 @@ impl BrickInterface {
             return Err(format!("PF step {} out of range (0..=15)", step));
         }
         let data = if output_b { 0x10 | step } else { step };
+        if !self.conn.wait_ir_done(IR_DONE_TIMEOUT_MS)? {
+            return Err("Timed out waiting for IR transmission to complete".to_string());
+        }
         let (r1, _) = self.conn.send_recv(CMD_PF_SEND, &[channel, PF_MODE_SINGLE_PWM, data, 0x00])?;
         if r1 != REPLY_IR_ACCEPTED {
             return Err(format!("Expected IR_ACCEPTED (0x{:02X}), got 0x{:02X}", REPLY_IR_ACCEPTED, r1));
         }
-        let (r2, _) = self.conn.recv_one()?;
-        if r2 != REPLY_IR_DONE {
-            return Err(format!("Expected IR_DONE (0x{:02X}), got 0x{:02X}", REPLY_IR_DONE, r2));
-        }
+        self.conn.ir_pending = true;
         Ok(())
     }
 
@@ -162,7 +226,11 @@ impl BrickInterface {
     /// Uses the escape bit (nibble 0 bit 2 = 1) to select Combo PWM mode in the PF protocol.
     /// `channel`: 0-3. `step_a`: Output A (red) step. `step_b`: Output B (blue) step.
     /// Step encoding: 0=float, 1-7=forward, 8=brake, 9-15=reverse (7/7 down to 1/7).
-    /// Blocks until the firmware confirms the IR transmission is complete (REPLY_IR_DONE).
+    ///
+    /// Returns as soon as the firmware accepts the burst (REPLY_IR_ACCEPTED);
+    /// see [`Self::pf_send_single_pwm`] for the in-flight burst semantics.
+    /// Note: Combo PWM receivers stop on a lost-IR timeout — re-send
+    /// periodically to hold a state.
     pub fn pf_send_combo_pwm(&mut self, channel: u8, step_a: u8, step_b: u8) -> Result<(), String> {
         if channel > 3 {
             return Err(format!("PF channel {} out of range (0..=3)", channel));
@@ -171,21 +239,45 @@ impl BrickInterface {
             return Err(format!("PF step out of range (0..=15): step_a={}, step_b={}", step_a, step_b));
         }
         let data = (step_b << 4) | step_a;
+        if !self.conn.wait_ir_done(IR_DONE_TIMEOUT_MS)? {
+            return Err("Timed out waiting for IR transmission to complete".to_string());
+        }
         let (r1, _) = self.conn.send_recv(CMD_PF_SEND, &[channel, PF_MODE_COMBO_PWM, data, 0x00])?;
         if r1 != REPLY_IR_ACCEPTED {
             return Err(format!("Expected IR_ACCEPTED (0x{:02X}), got 0x{:02X}", REPLY_IR_ACCEPTED, r1));
         }
-        let (r2, _) = self.conn.recv_one()?;
-        if r2 != REPLY_IR_DONE {
-            return Err(format!("Expected IR_DONE (0x{:02X}), got 0x{:02X}", REPLY_IR_DONE, r2));
-        }
+        self.conn.ir_pending = true;
         Ok(())
     }
 
-    /// Abort all pending IR transmissions.
+    /// Wait up to `timeout_ms` for any in-flight IR burst to complete.
+    ///
+    /// Returns `Ok(true)` when the transmitter is idle (immediately so if no
+    /// burst is outstanding), `Ok(false)` if a burst is still in the air when
+    /// the timeout expires, `Err` only on transport failure.
+    ///
+    /// Intended for callers that share one device across threads (e.g. the
+    /// BrickLogo HAL): wait in short slices and release the shared lock
+    /// between slices so other traffic — Interface A in particular — can
+    /// interleave. Once this returns `true`, the next `pf_send_*` proceeds
+    /// without any further wait.
+    pub fn pf_wait_idle(&mut self, timeout_ms: u64) -> Result<bool, String> {
+        self.conn.wait_ir_done(timeout_ms)
+    }
+
+    /// Abort any in-flight or queued IR transmission.
+    ///
+    /// Firmware >= 0.4 still resolves the aborted burst's token with an
+    /// IR_DONE event moments after the OK; drain it (best-effort — 0.3
+    /// firmware swallows it) so the connection ends up idle either way.
     pub fn ir_abort_all(&mut self) -> Result<(), String> {
         let (reply, _) = self.conn.send_recv(CMD_IR_ABORT_ALL, &[])?;
-        expect_ok(reply)
+        expect_ok(reply)?;
+        if self.conn.ir_pending {
+            let _ = self.conn.wait_ir_done(ABORT_DRAIN_TIMEOUT_MS);
+            self.conn.ir_pending = false;
+        }
+        Ok(())
     }
 
     // ── Core ──────────────────────────────────────────────────────────────────

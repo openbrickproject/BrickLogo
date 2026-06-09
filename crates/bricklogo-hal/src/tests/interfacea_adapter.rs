@@ -42,8 +42,10 @@ impl BrickInterfaceTransport for MockTransport {
     fn flush(&mut self) -> Result<(), String> { Ok(()) }
 }
 
+// Command replies echo a non-zero SEQ on the wire (SEQ 0x00 is reserved for
+// async events, which the driver skips when waiting for a reply).
 fn enqueue(responses: &Arc<Mutex<VecDeque<u8>>>, cmd: u8, payload: &[u8]) {
-    let frame = build_frame(0x00, cmd, payload);
+    let frame = build_frame(0x5A, cmd, payload);
     responses.lock().unwrap().extend(frame);
 }
 

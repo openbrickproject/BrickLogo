@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use bricklogo_lang::value::LogoValue;
 use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::shared_brick_interface::SharedBrickInterface;
@@ -8,6 +8,13 @@ const OUTPUT_PORTS: &[&str] = &[
     "red1", "blue1", "red2", "blue2", "red3", "blue3", "red4", "blue4",
 ];
 const MAX_POWER: u8 = 7;
+
+// How long to hold the shared device lock per burst-wait slice. Interface A
+// traffic on the same BrickInterface gets the lock between slices, so this
+// bounds how long a sensor poll can stall behind a PF send.
+const PF_WAIT_SLICE_MS: u64 = 20;
+// Overall cap on waiting for the previous burst (one burst is ~0.6 s max).
+const PF_WAIT_TOTAL_MS: u64 = 2000;
 
 fn parse_port(port: &str) -> Option<(u8, bool)> {
     let (is_blue, num_str) = if let Some(n) = port.strip_prefix("blue") {
@@ -64,6 +71,30 @@ impl PowerFunctionsAdapter {
             .lock()
             .map_err(|_| "Device mutex poisoned".to_string())
     }
+
+    /// Send a Single PWM command, waiting out any previous burst in short
+    /// lock slices. Sequential semantics are unchanged (this call still
+    /// blocks until the previous burst finishes and this one is accepted),
+    /// but the shared device lock is released between slices so concurrent
+    /// Interface A commands on the same BrickInterface keep flowing.
+    fn send_single_pwm(&self, channel: u8, output_b: bool, step: u8) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_millis(PF_WAIT_TOTAL_MS);
+        loop {
+            let mut dev = self.device_lock()?;
+            if dev.pf_wait_idle(PF_WAIT_SLICE_MS)? {
+                // Transmitter idle — pf_send's own wait is a no-op now, so
+                // the lock is only held for the accept round-trip (~ms).
+                return dev.pf_send_single_pwm(channel, output_b, step);
+            }
+            drop(dev); // let Interface A (and other) callers in
+            if Instant::now() >= deadline {
+                return Err("Timed out waiting for IR transmission to complete".to_string());
+            }
+            // std's Mutex is unfair; without a pause we tend to re-acquire
+            // immediately and starve the threads we just unblocked.
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 impl HardwareAdapter for PowerFunctionsAdapter {
@@ -106,13 +137,13 @@ impl HardwareAdapter for PowerFunctionsAdapter {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         let step = to_step(direction, power);
         self.steps[port_index(ch, is_blue)] = step;
-        self.device_lock()?.pf_send_single_pwm(ch, is_blue, step)
+        self.send_single_pwm(ch, is_blue, step)
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         self.steps[port_index(ch, is_blue)] = 0;
-        self.device_lock()?.pf_send_single_pwm(ch, is_blue, 0)
+        self.send_single_pwm(ch, is_blue, 0)
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {

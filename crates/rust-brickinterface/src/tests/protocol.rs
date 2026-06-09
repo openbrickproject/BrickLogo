@@ -30,7 +30,8 @@ fn test_build_frame_checksum_changes_with_payload() {
 #[test]
 fn test_parse_frame_valid_roundtrip() {
     let frame = build_frame(0x5A, 0x81, &[]); // PONG reply
-    let (cmd, payload, consumed) = try_parse_frame(&frame).unwrap();
+    let (seq, cmd, payload, consumed) = try_parse_frame(&frame).unwrap();
+    assert_eq!(seq, 0x5A);
     assert_eq!(cmd, 0x81);
     assert!(payload.is_empty());
     assert_eq!(consumed, frame.len());
@@ -40,17 +41,29 @@ fn test_parse_frame_valid_roundtrip() {
 fn test_parse_frame_with_payload() {
     let counts = [5u8, 0, 0, 0, 10, 0, 0, 0];
     let frame = build_frame(0x01, 0x91, &counts);
-    let (cmd, payload, consumed) = try_parse_frame(&frame).unwrap();
+    let (seq, cmd, payload, consumed) = try_parse_frame(&frame).unwrap();
+    assert_eq!(seq, 0x01);
     assert_eq!(cmd, 0x91);
     assert_eq!(payload, counts);
     assert_eq!(consumed, frame.len());
 }
 
 #[test]
+fn test_parse_frame_async_event_has_seq_zero() {
+    // IR_DONE events use SEQ 0x00 — callers rely on this to tell events
+    // apart from command replies.
+    let frame = build_frame(0x00, 0xA1, &[0x7B, 0x01]);
+    let (seq, cmd, payload, _) = try_parse_frame(&frame).unwrap();
+    assert_eq!(seq, 0x00);
+    assert_eq!(cmd, 0xA1);
+    assert_eq!(payload, &[0x7B, 0x01]);
+}
+
+#[test]
 fn test_parse_frame_skips_leading_garbage() {
     let mut buf = vec![0x00, 0xFF, 0x55];
     buf.extend(build_frame(0x01, 0x84, &[]));
-    let (cmd, _, consumed) = try_parse_frame(&buf).unwrap();
+    let (_, cmd, _, consumed) = try_parse_frame(&buf).unwrap();
     assert_eq!(cmd, 0x84);
     assert_eq!(consumed, buf.len());
 }
@@ -60,7 +73,7 @@ fn test_parse_frame_bad_checksum_skipped() {
     let mut frame = build_frame(0x01, 0x84, &[]);
     *frame.last_mut().unwrap() ^= 0xFF; // corrupt CHK
     frame.extend(build_frame(0x02, 0x81, &[]));
-    let (cmd, _, _) = try_parse_frame(&frame).unwrap();
+    let (_, cmd, _, _) = try_parse_frame(&frame).unwrap();
     assert_eq!(cmd, 0x81, "should skip bad-checksum frame and parse the valid one");
 }
 
@@ -76,7 +89,7 @@ fn test_parse_frame_two_consecutive_parses_first() {
     let f2 = build_frame(0x02, 0x84, &[]);
     let mut buf = f1.clone();
     buf.extend(&f2);
-    let (cmd, _, consumed) = try_parse_frame(&buf).unwrap();
+    let (_, cmd, _, consumed) = try_parse_frame(&buf).unwrap();
     assert_eq!(cmd, 0x81);
     assert_eq!(consumed, f1.len());
 }
@@ -85,6 +98,19 @@ fn test_parse_frame_two_consecutive_parses_first() {
 fn test_parse_frame_invalid_len_skipped() {
     let mut buf = vec![0xAA, 0x01, 0xFF, 0xFF]; // LEN=1, below minimum
     buf.extend(build_frame(0x02, 0x84, &[]));
-    let (cmd, _, _) = try_parse_frame(&buf).unwrap();
+    let (_, cmd, _, _) = try_parse_frame(&buf).unwrap();
     assert_eq!(cmd, 0x84);
+}
+
+#[test]
+fn test_parse_frame_max_payload_40_bytes() {
+    // Protocol 1.1 framing: payloads up to 40 bytes (LEN 42), e.g. a fully
+    // framed 37-byte RCX packet plus carrier byte on CMD_RCX_SEND_RAW.
+    let payload: Vec<u8> = (0..40).collect();
+    let frame = build_frame(0x07, 0x51, &payload);
+    let (seq, cmd, parsed, consumed) = try_parse_frame(&frame).unwrap();
+    assert_eq!(seq, 0x07);
+    assert_eq!(cmd, 0x51);
+    assert_eq!(parsed, payload);
+    assert_eq!(consumed, frame.len());
 }

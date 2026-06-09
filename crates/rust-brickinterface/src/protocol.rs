@@ -20,11 +20,14 @@ pub fn build_frame(seq: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Try to parse one complete, valid frame from `buf`.
-/// Returns `(reply_cmd, payload, consumed_bytes)` on success, `None` if
+/// Returns `(seq, reply_cmd, payload, consumed_bytes)` on success, `None` if
 /// the buffer does not yet contain a complete valid frame.
 /// Silently discards bytes before the SOF and frames with bad checksums,
 /// matching the firmware's receiver state machine.
-pub fn try_parse_frame(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
+///
+/// SEQ `0x00` marks an asynchronous event (e.g. `REPLY_IR_DONE`); replies to
+/// commands echo the request's (non-zero) SEQ.
+pub fn try_parse_frame(buf: &[u8]) -> Option<(u8, u8, Vec<u8>, usize)> {
     let mut i = 0;
     while i < buf.len() {
         if buf[i] != 0xAA {
@@ -35,7 +38,8 @@ pub fn try_parse_frame(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
             return None;
         }
         let len = buf[i + 1] as usize;
-        if len < 2 || len > 34 {
+        // Protocol 1.1 (fw >= 0.4) carries up to 40 payload bytes (LEN 42).
+        if len < 2 || len > 42 {
             i += 1;
             continue;
         }
@@ -52,9 +56,10 @@ pub fn try_parse_frame(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
             i += 1;
             continue;
         }
+        let seq = buf[i + 2];
         let cmd = buf[i + 3];
         let payload = buf[i + 4..i + 2 + len].to_vec();
-        return Some((cmd, payload, total));
+        return Some((seq, cmd, payload, total));
     }
     None
 }

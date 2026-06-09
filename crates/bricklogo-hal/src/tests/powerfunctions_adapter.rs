@@ -42,7 +42,14 @@ impl BrickInterfaceTransport for MockTransport {
     fn flush(&mut self) -> Result<(), String> { Ok(()) }
 }
 
+// Command replies echo a non-zero SEQ; async events (IR_DONE) use SEQ 0x00.
+// The driver skips SEQ-0 frames when waiting for a reply.
 fn enqueue(responses: &Arc<Mutex<VecDeque<u8>>>, cmd: u8, payload: &[u8]) {
+    let frame = build_frame(0x5A, cmd, payload);
+    responses.lock().unwrap().extend(frame);
+}
+
+fn enqueue_event(responses: &Arc<Mutex<VecDeque<u8>>>, cmd: u8, payload: &[u8]) {
     let frame = build_frame(0x00, cmd, payload);
     responses.lock().unwrap().extend(frame);
 }
@@ -53,7 +60,7 @@ fn enqueue_ok(responses: &Arc<Mutex<VecDeque<u8>>>) {
 
 fn enqueue_pf_ok(responses: &Arc<Mutex<VecDeque<u8>>>) {
     enqueue(responses, REPLY_IR_ACCEPTED, &[]);
-    enqueue(responses, REPLY_IR_DONE, &[]);
+    enqueue_event(responses, REPLY_IR_DONE, &[]);
 }
 
 fn make_adapter() -> (PowerFunctionsAdapter, Arc<Mutex<Vec<u8>>>, Arc<Mutex<VecDeque<u8>>>) {
@@ -234,6 +241,50 @@ fn test_stop_ports_cross_channel_succeeds() {
     assert_eq!(written_payload(&all), &[0x00, PF_MODE_SINGLE_PWM, 0x00, 0x00]);
     let first_len = 2 + all[1] as usize + 1;
     assert_eq!(written_payload(&all[first_len..]), &[0x02, PF_MODE_SINGLE_PWM, 0x10, 0x00]);
+}
+
+// ── Interface A decoupling ────────────────────────────────────────────────────
+
+#[test]
+fn test_device_usable_while_pf_send_waits_out_previous_burst() {
+    use std::time::{Duration, Instant};
+
+    // Build by hand so the test keeps a handle on the shared device.
+    let (transport, _written, responses) = MockTransport::new();
+    let shared = SharedBrickInterface::new(BrickInterface::from_transport(Box::new(transport)));
+    let mut adapter = PowerFunctionsAdapter::new_with_shared(shared.clone());
+
+    // First send: accepted, burst "in flight" (its IR_DONE deliberately
+    // withheld so the second send has to wait).
+    enqueue(&responses, REPLY_IR_ACCEPTED, &[]);
+    adapter.start_port("red1", PortDirection::Even, 5).unwrap();
+
+    // Second send on another thread: slices the wait, releasing the device
+    // lock between slices.
+    let responses_bg = responses.clone();
+    let bg = std::thread::spawn(move || adapter.start_port("red1", PortDirection::Even, 7));
+    std::thread::sleep(Duration::from_millis(30)); // let it start slicing
+
+    // Meanwhile this thread can use the same device (as the Interface A
+    // adapter would). Enqueue the reply under the lock so the PF wait can't
+    // skim it first.
+    let t0 = Instant::now();
+    {
+        let mut dev = shared.device.lock().unwrap();
+        enqueue(&responses, REPLY_IFACE_INPUTS, &[0x02]);
+        assert_eq!(dev.get_inputs().unwrap(), 0x02);
+    }
+    // Far below the 2 s the PF path would hold the lock if it weren't sliced.
+    assert!(
+        t0.elapsed() < Duration::from_millis(1500),
+        "Interface A call stalled behind the PF burst wait: {:?}",
+        t0.elapsed()
+    );
+
+    // Let the waiting send complete: burst finishes, second send accepted.
+    enqueue_event(&responses_bg, REPLY_IR_DONE, &[]);
+    enqueue(&responses_bg, REPLY_IR_ACCEPTED, &[]);
+    bg.join().expect("PF thread panicked").unwrap();
 }
 
 // ── Disconnect ────────────────────────────────────────────────────────────────
