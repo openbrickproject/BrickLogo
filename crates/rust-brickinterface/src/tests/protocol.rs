@@ -105,7 +105,7 @@ fn test_parse_frame_invalid_len_skipped() {
 #[test]
 fn test_parse_frame_max_payload_40_bytes() {
     // Protocol 1.1 framing: payloads up to 40 bytes (LEN 42), e.g. a fully
-    // framed 37-byte RCX packet plus carrier byte on CMD_RCX_SEND_RAW.
+    // protocol 1.1 payload cap.
     let payload: Vec<u8> = (0..40).collect();
     let frame = build_frame(0x07, 0x51, &payload);
     let (seq, cmd, parsed, consumed) = try_parse_frame(&frame).unwrap();

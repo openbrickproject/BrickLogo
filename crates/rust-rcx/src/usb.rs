@@ -104,7 +104,7 @@ impl RcxUsb {
 
     /// Check if the RCX is alive.
     pub fn ping(&self) -> Result<bool, String> {
-        let msg = protocol::cmd_alive();
+        let msg = protocol::cmd_alive(false);
         match self.request(&msg) {
             Ok(payload) => Ok(!payload.is_empty()),
             Err(_) => Ok(false),

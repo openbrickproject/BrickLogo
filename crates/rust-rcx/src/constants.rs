@@ -28,6 +28,13 @@ pub const MOTOR_OFF: u8 = 0x40;
 pub const MOTOR_FLOAT: u8 = 0x00;
 
 // ── Opcodes ──────────────────────────────────────
+// Bit 3 of every direct opcode is the toggle bit: the brick treats a command
+// whose opcode byte (toggle included) matches the previously received one as
+// a retransmission, re-sending its reply without re-executing. Senders flip
+// the bit between logical commands and reuse it on deliberate retransmissions
+// — see the `toggle` parameter on protocol's cmd builders.
+pub const TOGGLE_BIT: u8 = 0x08;
+
 pub const OP_ALIVE: u8 = 0x10;
 pub const OP_GET_VALUE: u8 = 0x12;
 pub const OP_SET_MOTOR_POWER: u8 = 0x13;

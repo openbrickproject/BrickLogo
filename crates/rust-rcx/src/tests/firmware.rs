@@ -29,12 +29,20 @@ fn test_upload_sequence() {
     // Should have: delete + start + 2 data blocks + unlock = 5 calls
     assert_eq!(calls.len(), 5);
 
-    // Verify opcodes in the framed messages (opcode is at index 3, after 55 FF 00)
-    assert_eq!(calls[0][3], OP_DELETE_FIRMWARE);
-    assert_eq!(calls[1][3], OP_START_FIRMWARE_DOWNLOAD);
-    assert_eq!(calls[2][3], OP_TRANSFER_DATA); // block 1
-    assert_eq!(calls[3][3], OP_TRANSFER_DATA); // block 2 (last, index=0)
-    assert_eq!(calls[4][3], OP_UNLOCK_FIRMWARE);
+    // Verify opcodes in the framed messages (opcode is at index 3, after
+    // 55 FF 00) — masking off the per-command toggle bit.
+    assert_eq!(calls[0][3] & !TOGGLE_BIT, OP_DELETE_FIRMWARE);
+    assert_eq!(calls[1][3] & !TOGGLE_BIT, OP_START_FIRMWARE_DOWNLOAD);
+    assert_eq!(calls[2][3] & !TOGGLE_BIT, OP_TRANSFER_DATA); // block 1
+    assert_eq!(calls[3][3] & !TOGGLE_BIT, OP_TRANSFER_DATA); // block 2 (last, index=0)
+    assert_eq!(calls[4][3] & !TOGGLE_BIT, OP_UNLOCK_FIRMWARE);
+
+    // The toggle bit must alternate across consecutive commands; otherwise
+    // the brick treats e.g. block 2 as a retransmission of block 1.
+    for (i, call) in calls.iter().enumerate() {
+        let expected = if i % 2 == 1 { TOGGLE_BIT } else { 0 };
+        assert_eq!(call[3] & TOGGLE_BIT, expected, "toggle wrong at command {}", i);
+    }
 
     // Block 1 should have index=1, block 2 (last) should have index=0
     // Index is at bytes 5,7 (after opcode complement pair)

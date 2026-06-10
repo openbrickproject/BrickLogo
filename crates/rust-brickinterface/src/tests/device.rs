@@ -1,5 +1,4 @@
 use super::*;
-use crate::constants::*;
 use crate::protocol::build_frame;
 use crate::transport::BrickInterfaceTransport;
 use std::collections::VecDeque;
@@ -455,5 +454,4 @@ fn test_get_capabilities_brickinterface_bitmap() {
     assert_eq!(caps, 0x0037);
     assert!(caps & crate::constants::CAP_INTERFACE_A != 0);
     assert!(caps & crate::constants::CAP_PF_IR != 0);
-    assert!(caps & crate::constants::CAP_RCX_IR != 0);
 }

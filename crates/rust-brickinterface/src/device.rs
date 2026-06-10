@@ -211,15 +211,7 @@ impl BrickInterface {
             return Err(format!("PF step {} out of range (0..=15)", step));
         }
         let data = if output_b { 0x10 | step } else { step };
-        if !self.conn.wait_ir_done(IR_DONE_TIMEOUT_MS)? {
-            return Err("Timed out waiting for IR transmission to complete".to_string());
-        }
-        let (r1, _) = self.conn.send_recv(CMD_PF_SEND, &[channel, PF_MODE_SINGLE_PWM, data, 0x00])?;
-        if r1 != REPLY_IR_ACCEPTED {
-            return Err(format!("Expected IR_ACCEPTED (0x{:02X}), got 0x{:02X}", REPLY_IR_ACCEPTED, r1));
-        }
-        self.conn.ir_pending = true;
-        Ok(())
+        self.ir_send(CMD_PF_SEND, &[channel, PF_MODE_SINGLE_PWM, data, 0x00])
     }
 
     /// Send a Combo PWM command to both outputs of a PF receiver simultaneously.
@@ -239,15 +231,7 @@ impl BrickInterface {
             return Err(format!("PF step out of range (0..=15): step_a={}, step_b={}", step_a, step_b));
         }
         let data = (step_b << 4) | step_a;
-        if !self.conn.wait_ir_done(IR_DONE_TIMEOUT_MS)? {
-            return Err("Timed out waiting for IR transmission to complete".to_string());
-        }
-        let (r1, _) = self.conn.send_recv(CMD_PF_SEND, &[channel, PF_MODE_COMBO_PWM, data, 0x00])?;
-        if r1 != REPLY_IR_ACCEPTED {
-            return Err(format!("Expected IR_ACCEPTED (0x{:02X}), got 0x{:02X}", REPLY_IR_ACCEPTED, r1));
-        }
-        self.conn.ir_pending = true;
-        Ok(())
+        self.ir_send(CMD_PF_SEND, &[channel, PF_MODE_COMBO_PWM, data, 0x00])
     }
 
     /// Wait up to `timeout_ms` for any in-flight IR burst to complete.
@@ -263,6 +247,23 @@ impl BrickInterface {
     /// without any further wait.
     pub fn pf_wait_idle(&mut self, timeout_ms: u64) -> Result<bool, String> {
         self.conn.wait_ir_done(timeout_ms)
+    }
+
+    /// Shared accept path for background IR sends: wait out any in-flight
+    /// transmission, issue the command, expect IR_ACCEPTED, mark pending.
+    fn ir_send(&mut self, cmd: u8, payload: &[u8]) -> Result<(), String> {
+        if !self.conn.wait_ir_done(IR_DONE_TIMEOUT_MS)? {
+            return Err("Timed out waiting for IR transmission to complete".to_string());
+        }
+        let (r1, _) = self.conn.send_recv(cmd, payload)?;
+        if r1 != REPLY_IR_ACCEPTED {
+            return Err(format!(
+                "Expected IR_ACCEPTED (0x{:02X}), got 0x{:02X}",
+                REPLY_IR_ACCEPTED, r1
+            ));
+        }
+        self.conn.ir_pending = true;
+        Ok(())
     }
 
     /// Abort any in-flight or queued IR transmission.

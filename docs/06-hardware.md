@@ -237,6 +237,7 @@ Connects via serial or USB IR tower. `connectto "rcx`. USB towers are detected a
 ### Notes
 
 - The RCX needs firmware loaded once after batteries are inserted. See [Advanced Usage — Firmware upload](04-advanced.md#rcx).
+- IR is broadcast: every RCX in range obeys every command. Separate bricks physically (rooms, aiming, the tower's short-range switch) if you run more than one.
 
 ---
 

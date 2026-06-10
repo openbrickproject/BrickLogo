@@ -66,73 +66,81 @@ fn find_header(data: &[u8]) -> Option<usize> {
     None
 }
 
+/// Apply the toggle bit to an opcode. The brick ignores (but re-acks) a
+/// command whose opcode byte — toggle included — matches the previous one,
+/// so callers alternate `toggle` between logical commands and keep it fixed
+/// across retransmissions of the same command.
+fn op(opcode: u8, toggle: bool) -> u8 {
+    if toggle { opcode | TOGGLE_BIT } else { opcode }
+}
+
 // ── Motor commands ──────────────────────────────
 
 /// Set motor direction.
 /// `motors`: bitmask (MOTOR_A | MOTOR_B | MOTOR_C)
 /// `direction`: DIR_FORWARD, DIR_REVERSE, or DIR_FLIP
-pub fn cmd_set_direction(motors: u8, direction: u8) -> Vec<u8> {
+pub fn cmd_set_direction(motors: u8, direction: u8, toggle: bool) -> Vec<u8> {
     let code = motors | direction;
-    frame_message(&[OP_SET_MOTOR_DIRECTION, code])
+    frame_message(&[op(OP_SET_MOTOR_DIRECTION, toggle), code])
 }
 
 /// Set motor power.
 /// `motors`: bitmask, `power`: 0-7
-pub fn cmd_set_power(motors: u8, power: u8) -> Vec<u8> {
+pub fn cmd_set_power(motors: u8, power: u8, toggle: bool) -> Vec<u8> {
     let clamped = power.min(7);
-    frame_message(&[OP_SET_MOTOR_POWER, motors, 2, clamped]) // source=2 (immediate)
+    frame_message(&[op(OP_SET_MOTOR_POWER, toggle), motors, 2, clamped]) // source=2 (immediate)
 }
 
 /// Turn motors on, off, or float.
 /// `motors`: bitmask, `state`: MOTOR_ON, MOTOR_OFF, or MOTOR_FLOAT
-pub fn cmd_set_motor_state(motors: u8, state: u8) -> Vec<u8> {
+pub fn cmd_set_motor_state(motors: u8, state: u8, toggle: bool) -> Vec<u8> {
     let code = motors | state;
-    frame_message(&[OP_SET_MOTOR_ON_OFF, code])
+    frame_message(&[op(OP_SET_MOTOR_ON_OFF, toggle), code])
 }
 
 // ── Sensor commands ─────────────────────────────
 
 /// Set sensor type (Raw, Touch, Temperature, Light, Rotation).
-pub fn cmd_set_sensor_type(sensor: u8, sensor_type: u8) -> Vec<u8> {
-    frame_message(&[OP_SET_SENSOR_TYPE, sensor, sensor_type])
+pub fn cmd_set_sensor_type(sensor: u8, sensor_type: u8, toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_SET_SENSOR_TYPE, toggle), sensor, sensor_type])
 }
 
 /// Set sensor mode (Raw, Boolean, Percent, Celsius, etc.) with slope.
-pub fn cmd_set_sensor_mode(sensor: u8, mode: u8) -> Vec<u8> {
-    frame_message(&[OP_SET_SENSOR_MODE, sensor, mode])
+pub fn cmd_set_sensor_mode(sensor: u8, mode: u8, toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_SET_SENSOR_MODE, toggle), sensor, mode])
 }
 
 /// Clear sensor value (reset counter).
-pub fn cmd_clear_sensor(sensor: u8) -> Vec<u8> {
-    frame_message(&[OP_CLEAR_SENSOR, sensor])
+pub fn cmd_clear_sensor(sensor: u8, toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_CLEAR_SENSOR, toggle), sensor])
 }
 
 /// Read a value from a source. For sensors, use SOURCE_SENSOR_VALUE with sensor index.
-pub fn cmd_get_value(source: u8, argument: u8) -> Vec<u8> {
-    frame_message(&[OP_GET_VALUE, source, argument])
+pub fn cmd_get_value(source: u8, argument: u8, toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_GET_VALUE, toggle), source, argument])
 }
 
 // ── System commands ─────────────────────────────
 
 /// Alive/ping check.
-pub fn cmd_alive() -> Vec<u8> {
-    frame_message(&[OP_ALIVE])
+pub fn cmd_alive(toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_ALIVE, toggle)])
 }
 
 /// Get battery voltage.
-pub fn cmd_get_battery() -> Vec<u8> {
-    frame_message(&[OP_GET_BATTERY])
+pub fn cmd_get_battery(toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_GET_BATTERY, toggle)])
 }
 
 /// Play a preset sound (0-5).
-pub fn cmd_play_sound(sound: u8) -> Vec<u8> {
-    frame_message(&[OP_PLAY_SOUND, sound.min(5)])
+pub fn cmd_play_sound(sound: u8, toggle: bool) -> Vec<u8> {
+    frame_message(&[op(OP_PLAY_SOUND, toggle), sound.min(5)])
 }
 
 /// Play a tone at the given frequency (Hz) and duration (1/100s).
-pub fn cmd_play_tone(frequency: u16, duration: u8) -> Vec<u8> {
+pub fn cmd_play_tone(frequency: u16, duration: u8, toggle: bool) -> Vec<u8> {
     frame_message(&[
-        OP_PLAY_TONE,
+        op(OP_PLAY_TONE, toggle),
         (frequency & 0xFF) as u8,
         (frequency >> 8) as u8,
         duration,
@@ -142,17 +150,17 @@ pub fn cmd_play_tone(frequency: u16, duration: u8) -> Vec<u8> {
 // ── Firmware commands ───────────────────────────
 
 /// Delete firmware. Must be called before uploading new firmware.
-pub fn cmd_delete_firmware() -> Vec<u8> {
-    let mut payload = vec![OP_DELETE_FIRMWARE];
+pub fn cmd_delete_firmware(toggle: bool) -> Vec<u8> {
+    let mut payload = vec![op(OP_DELETE_FIRMWARE, toggle)];
     payload.extend_from_slice(&FIRMWARE_DELETE_KEY);
     frame_message(&payload)
 }
 
 /// Start firmware download. `address` is typically 0x8000, `checksum` is the
 /// sum of all firmware image bytes.
-pub fn cmd_start_firmware_download(address: u16, checksum: u16) -> Vec<u8> {
+pub fn cmd_start_firmware_download(address: u16, checksum: u16, toggle: bool) -> Vec<u8> {
     frame_message(&[
-        OP_START_FIRMWARE_DOWNLOAD,
+        op(OP_START_FIRMWARE_DOWNLOAD, toggle),
         (address & 0xFF) as u8,
         (address >> 8) as u8,
         (checksum & 0xFF) as u8,
@@ -163,9 +171,9 @@ pub fn cmd_start_firmware_download(address: u16, checksum: u16) -> Vec<u8> {
 
 /// Transfer a block of firmware data. `index` is 1-based; use 0 for the final block.
 /// `data` must be at most FIRMWARE_BLOCK_SIZE bytes.
-pub fn cmd_transfer_data(index: u16, data: &[u8]) -> Vec<u8> {
+pub fn cmd_transfer_data(index: u16, data: &[u8], toggle: bool) -> Vec<u8> {
     let mut payload = vec![
-        OP_TRANSFER_DATA,
+        op(OP_TRANSFER_DATA, toggle),
         (index & 0xFF) as u8,
         (index >> 8) as u8,
         (data.len() as u16 & 0xFF) as u8,
@@ -179,8 +187,8 @@ pub fn cmd_transfer_data(index: u16, data: &[u8]) -> Vec<u8> {
 }
 
 /// Unlock firmware after upload. The RCX verifies its ROM checksum before replying.
-pub fn cmd_unlock_firmware() -> Vec<u8> {
-    let mut payload = vec![OP_UNLOCK_FIRMWARE];
+pub fn cmd_unlock_firmware(toggle: bool) -> Vec<u8> {
+    let mut payload = vec![op(OP_UNLOCK_FIRMWARE, toggle)];
     payload.extend_from_slice(&FIRMWARE_UNLOCK_KEY);
     frame_message(&payload)
 }

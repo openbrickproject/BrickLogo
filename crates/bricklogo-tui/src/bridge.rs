@@ -153,7 +153,6 @@ pub fn register_hardware_primitives(
                         "interfacea"     => Some(CAP_INTERFACE_A),
                         "powerfunctions" => Some(CAP_PF_IR),
                         "legacy"         => Some(CAP_LEGACY_IR),
-                        "rcx"            => Some(CAP_RCX_IR),
                         _                => None,
                     }
                 }
@@ -163,7 +162,6 @@ pub fn register_hardware_primitives(
                         CAP_INTERFACE_A => "Interface A",
                         CAP_PF_IR       => "Power Functions",
                         CAP_LEGACY_IR   => "Legacy IR",
-                        CAP_RCX_IR      => "RCX IR",
                         _               => "the required feature",
                     };
                     format!("No BrickInterface with {} support found", name)

@@ -18,8 +18,6 @@ pub const PF_MODE_SINGLE_CST: u8 = 0x02;
 pub const PF_MODE_COMBO_PWM: u8 = 0x03;
 pub const CMD_LEGACY_SEND: u8 = 0x30;
 pub const CMD_IR_ABORT_ALL: u8 = 0x40;
-pub const CMD_RCX_SEND: u8 = 0x50;
-pub const CMD_RCX_SEND_RAW: u8 = 0x51;
 
 // ── Device → host replies ─────────────────────────────────────────────────────
 
@@ -39,4 +37,3 @@ pub const CAP_INTERFACE_A: u16 = 0x0001;
 pub const CAP_PF_IR: u16 = 0x0002;
 pub const CAP_LEGACY_IR: u16 = 0x0004;
 pub const CAP_IR_DONE_EVENTS: u16 = 0x0010;
-pub const CAP_RCX_IR: u16 = 0x0020;

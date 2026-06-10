@@ -19,15 +19,23 @@ where
 {
     let total_blocks = (image.data.len() + FIRMWARE_BLOCK_SIZE - 1) / FIRMWARE_BLOCK_SIZE;
 
+    // Toggle bit: alternate per logical command so none is mistaken for a
+    // retransmission of its predecessor. Retries inside send_with_retry
+    // resend the identical frame — same toggle — which is exactly the
+    // retransmission case the protocol's duplicate filter absorbs.
+    let mut toggle = false;
+
     // Phase 1: Delete firmware
     progress(0, total_blocks, "Deleting old firmware");
-    let msg = protocol::cmd_delete_firmware();
+    let msg = protocol::cmd_delete_firmware(toggle);
+    toggle = !toggle;
     send_with_retry(&msg, send_request, FIRMWARE_MAX_RETRIES)
         .map_err(|e| format!("Delete firmware failed: {}", e))?;
 
     // Phase 2: Start firmware download
     progress(0, total_blocks, "Starting firmware download");
-    let msg = protocol::cmd_start_firmware_download(image.base_address, image.checksum);
+    let msg = protocol::cmd_start_firmware_download(image.base_address, image.checksum, toggle);
+    toggle = !toggle;
     let reply = send_with_retry(&msg, send_request, FIRMWARE_MAX_RETRIES)
         .map_err(|e| format!("Start download failed: {}", e))?;
     // Check for error code in reply (byte 1, 0 = success)
@@ -49,7 +57,8 @@ where
 
         progress(block_index as usize, total_blocks, "Uploading firmware");
 
-        let msg = protocol::cmd_transfer_data(index, block_data);
+        let msg = protocol::cmd_transfer_data(index, block_data, toggle);
+        toggle = !toggle;
         let reply = send_with_retry(&msg, send_request, FIRMWARE_MAX_RETRIES)
             .map_err(|e| format!("Transfer block {} failed: {}", block_index, e))?;
 
@@ -64,7 +73,7 @@ where
 
     // Phase 4: Unlock firmware
     progress(total_blocks, total_blocks, "Unlocking firmware");
-    let msg = protocol::cmd_unlock_firmware();
+    let msg = protocol::cmd_unlock_firmware(toggle);
     // Unlock takes longer — RCX verifies ROM checksum
     send_with_retry(&msg, send_request, FIRMWARE_MAX_RETRIES)
         .map_err(|e| format!("Unlock firmware failed: {}", e))?;

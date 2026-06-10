@@ -173,9 +173,22 @@ struct RcxSlot {
     transport: Box<dyn RcxTransport>,
     rx: mpsc::Receiver<RcxCommand>,
     alive: bool,
+    // Toggle-bit state: alternated on every logical command so the brick
+    // never mistakes a new command for a retransmission of the previous one
+    // (it compares opcode bytes, toggle included).
+    toggle: bool,
 }
 
 impl RcxSlot {
+    /// Hand out the toggle value for the next logical command and flip the
+    /// stored state. Retries of the *same* command reuse the value (they are
+    /// retransmissions); each new command gets the opposite one.
+    fn next_toggle(&mut self) -> bool {
+        let t = self.toggle;
+        self.toggle = !self.toggle;
+        t
+    }
+
     fn send_with_retry(&mut self, msg: &[u8]) -> Result<(), String> {
         let mut last_err = String::new();
         for _ in 0..COMMAND_RETRIES {
@@ -200,40 +213,39 @@ impl DeviceSlot for RcxSlot {
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
                 RcxCommand::SetDirection { mask, direction, reply_tx } => {
-                    let msg = protocol::cmd_set_direction(mask, direction);
+                    let msg = protocol::cmd_set_direction(mask, direction, self.next_toggle());
                     let r = self.send_with_retry(&msg);
                     Self::reply(reply_tx, r);
                 }
                 RcxCommand::SetPower { mask, power, reply_tx } => {
-                    let msg = protocol::cmd_set_power(mask, power);
+                    let msg = protocol::cmd_set_power(mask, power, self.next_toggle());
                     let r = self.send_with_retry(&msg);
                     Self::reply(reply_tx, r);
                 }
                 RcxCommand::MotorOn { mask, reply_tx } => {
-                    let msg = protocol::cmd_set_motor_state(mask, MOTOR_ON);
+                    let msg = protocol::cmd_set_motor_state(mask, MOTOR_ON, self.next_toggle());
                     let r = self.send_with_retry(&msg);
                     Self::reply(reply_tx, r);
                 }
                 RcxCommand::MotorOff { mask, reply_tx } => {
-                    let msg = protocol::cmd_set_motor_state(mask, MOTOR_OFF);
+                    let msg = protocol::cmd_set_motor_state(mask, MOTOR_OFF, self.next_toggle());
                     let r = self.send_with_retry(&msg);
                     Self::reply(reply_tx, r);
                 }
                 RcxCommand::SetSensorType { sensor, sensor_type } => {
-                    let msg = protocol::cmd_set_sensor_type(sensor, sensor_type);
+                    let msg = protocol::cmd_set_sensor_type(sensor, sensor_type, self.next_toggle());
                     let _ = self.send_with_retry(&msg);
                 }
                 RcxCommand::SetSensorMode { sensor, mode } => {
-                    let msg = protocol::cmd_set_sensor_mode(sensor, mode);
+                    let msg = protocol::cmd_set_sensor_mode(sensor, mode, self.next_toggle());
                     let _ = self.send_with_retry(&msg);
                 }
                 RcxCommand::ReadSensor { sensor, source, reply_tx } => {
-                    let msg = protocol::cmd_get_value(source, sensor);
-                    let result = self.transport.request(&msg)
-                        .and_then(|payload| {
-                            protocol::reply_value(&payload)
-                                .ok_or_else(|| "Invalid sensor reply".to_string())
-                        });
+                    let msg = protocol::cmd_get_value(source, sensor, self.next_toggle());
+                    let result = self.transport.request(&msg).and_then(|payload| {
+                        protocol::reply_value(&payload)
+                            .ok_or_else(|| "Invalid sensor reply".to_string())
+                    });
                     let _ = reply_tx.send(result);
                 }
             }
@@ -326,6 +338,7 @@ impl HardwareAdapter for RcxAdapter {
             transport,
             rx,
             alive: true,
+            toggle: false,
         };
 
         let slot_id = scheduler::register_slot(Box::new(slot));

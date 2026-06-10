@@ -36,6 +36,7 @@ fn make_adapter_with_mock() -> (RcxAdapter, Arc<Mutex<Vec<Vec<u8>>>>) {
         transport,
         rx,
         alive: true,
+        toggle: false,
     };
     let slot_id = scheduler::register_slot(Box::new(slot));
     let mut adapter = RcxAdapter::new(None);
@@ -44,10 +45,11 @@ fn make_adapter_with_mock() -> (RcxAdapter, Arc<Mutex<Vec<Vec<u8>>>>) {
     (adapter, sent)
 }
 
-/// Return all frames whose opcode matches `op`.
+/// Return all frames whose opcode matches `op`, ignoring the per-command
+/// toggle bit.
 fn frames_with_op(sent: &[Vec<u8>], op: u8) -> Vec<Vec<u8>> {
     sent.iter()
-        .filter(|f| f.len() > 3 && f[3] == op)
+        .filter(|f| f.len() > 3 && f[3] & !TOGGLE_BIT == op)
         .cloned()
         .collect()
 }
@@ -142,4 +144,40 @@ fn test_rcx_run_ports_for_time_timing() {
         "sequentialized: {:?}",
         elapsed
     );
+}
+
+// ── Toggle bit ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_rcx_toggle_alternates_across_commands() {
+    let (mut adapter, sent) = make_adapter_with_mock();
+
+    // start_port = SetDirection + SetPower + MotorOn; stop_port = SetPower +
+    // MotorOff. Five logical commands → toggle 0,1,0,1,0.
+    adapter.start_port("a", PortDirection::Even, 5).unwrap();
+    adapter.stop_port("a").unwrap();
+    adapter.disconnect();
+
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 5, "expected 5 frames, got {:?}", sent.len());
+    for (i, frame) in sent.iter().enumerate() {
+        let expected = if i % 2 == 1 { TOGGLE_BIT } else { 0 };
+        assert_eq!(
+            frame[3] & TOGGLE_BIT,
+            expected,
+            "toggle wrong on command {} (opcode 0x{:02X})",
+            i,
+            frame[3]
+        );
+        assert_eq!(frame[4], !frame[3], "complement must track the toggled opcode");
+    }
+    // The brick compares each opcode byte (toggle included) against the
+    // immediately previous one — every adjacent pair must differ, or the
+    // second command is dropped as a retransmission.
+    for pair in sent.windows(2) {
+        assert_ne!(
+            pair[0][3], pair[1][3],
+            "adjacent frames share an opcode byte — brick would drop the second"
+        );
+    }
 }

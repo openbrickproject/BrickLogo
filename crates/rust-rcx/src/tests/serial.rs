@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_find_reply_after_echo() {
     // Simulate: sent 7 bytes (alive), echo comes back, then reply
-    let sent = protocol::cmd_alive();
+    let sent = protocol::cmd_alive(false);
     let reply_op: u8 = !OP_ALIVE;
     let checksum = reply_op;
     let mut data = sent.clone();
@@ -16,6 +16,6 @@ fn test_find_reply_after_echo() {
 
 #[test]
 fn test_find_reply_no_reply_yet() {
-    let sent = protocol::cmd_alive();
+    let sent = protocol::cmd_alive(false);
     assert!(find_reply_after_echo(&sent, sent.len()).is_none());
 }
