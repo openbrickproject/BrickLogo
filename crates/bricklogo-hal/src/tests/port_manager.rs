@@ -474,3 +474,102 @@ fn test_off_runs_sequentially_for_non_parallel_safe_devices() {
         elapsed
     );
 }
+
+// ── Batched state sync (setpower / rd) ──────────────────────────────────────
+
+/// Records each start_ports invocation as one entry, so tests can tell
+/// batched dispatch from per-port loops.
+struct BatchRecordingAdapter {
+    ports: Vec<String>,
+    batches: std::sync::Arc<Mutex<Vec<Vec<(String, u8)>>>>,
+}
+
+impl HardwareAdapter for BatchRecordingAdapter {
+    fn display_name(&self) -> &str { "BatchRec" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 7 }
+    fn start_port(&mut self, port: &str, _dir: PortDirection, power: u8) -> Result<(), String> {
+        self.batches.lock().unwrap().push(vec![(port.to_string(), power)]);
+        Ok(())
+    }
+    fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        self.batches.lock().unwrap().push(
+            commands.iter().map(|c| (c.port.to_string(), c.power)).collect(),
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn test_set_power_batches_running_ports_into_one_start_ports_call() {
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string(), "b".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let ports = vec!["a".to_string(), "b".to_string()];
+
+    pm.on(&ports).unwrap();
+    pm.set_power(&ports, 5).unwrap();
+
+    let b = batches.lock().unwrap();
+    assert_eq!(b.len(), 2, "on + setpower should each be one batch: {:?}", b);
+    // setpower delivered both ports in a single grouped call — the property
+    // the PF adapter needs to pair them into one Combo message.
+    assert_eq!(b[1], vec![("a".to_string(), 5), ("b".to_string(), 5)]);
+    drop(b);
+
+    // Unchanged state must not retransmit (sync dedup preserved).
+    pm.set_power(&ports, 5).unwrap();
+    assert_eq!(batches.lock().unwrap().len(), 2);
+
+    // rd on running ports is also one batch.
+    pm.reverse_direction(&ports);
+    assert_eq!(batches.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn test_set_power_after_one_port_off_transmits_only_the_running_port() {
+    // talkto both → on → off one → setpower: the stopped port must stay
+    // silent on the air (its new power just latches into state), and the
+    // running port arrives alone — so the PF adapter sees a lone output,
+    // not a pair, and no combo touches the stopped motor.
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string(), "b".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let both = vec!["a".to_string(), "b".to_string()];
+
+    pm.on(&both).unwrap();                       // batch 1: a+b
+    pm.off(&["b".to_string()]).unwrap();         // stop (not recorded by mock)
+    pm.set_power(&both, 3).unwrap();             // batch 2: must be a alone
+
+    let b = batches.lock().unwrap();
+    assert_eq!(b.len(), 2, "batches: {:?}", b);
+    assert_eq!(b[1], vec![("a".to_string(), 3)]);
+    drop(b);
+
+    // The stopped port's power latched: turning both back on starts the
+    // pair together at the new level.
+    pm.on(&both).unwrap();
+    let b = batches.lock().unwrap();
+    assert_eq!(b[2], vec![("a".to_string(), 3), ("b".to_string(), 3)]);
+}

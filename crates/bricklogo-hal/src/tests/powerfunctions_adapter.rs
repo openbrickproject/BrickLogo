@@ -153,11 +153,25 @@ fn test_stop_port_sends_float_step() {
 
 // ── Combo (multi-port) behaviour ──────────────────────────────────────────────
 
+/// Split the raw written stream into per-frame payloads.
+fn all_payloads(mut raw: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    while raw.len() >= 3 {
+        let len = raw[1] as usize;
+        out.push(written_payload(raw));
+        raw = &raw[2 + len + 1..];
+    }
+    out
+}
+
 #[test]
-fn test_start_ports_same_channel_sends_two_single_pwm() {
+fn test_start_ports_same_channel_pair_combo_then_latching_singles() {
+    // Both outputs of one channel: a Combo PWM starts both motors in the
+    // same IR message, then latching singles preserve run-out-of-range.
     let (mut adapter, written, responses) = make_adapter();
-    enqueue_pf_ok(&responses); // red1
-    enqueue_pf_ok(&responses); // blue1
+    for _ in 0..3 {
+        enqueue_pf_ok(&responses); // combo, latch A, latch B
+    }
 
     let cmds = [
         PortCommand { port: "red1", direction: PortDirection::Even, power: 5 },
@@ -165,19 +179,20 @@ fn test_start_ports_same_channel_sends_two_single_pwm() {
     ];
     adapter.start_ports(&cmds).unwrap();
 
-    let all = written.lock().unwrap();
-    assert_eq!(written_cmd(&all), CMD_PF_SEND);
-    assert_eq!(written_payload(&all), &[0x00, PF_MODE_SINGLE_PWM, 0x05, 0x00]);
-    let first_len = 2 + all[1] as usize + 1;
-    // blue1: output B, step 3 → 0x10 | 3 = 0x13
-    assert_eq!(written_payload(&all[first_len..]), &[0x00, PF_MODE_SINGLE_PWM, 0x13, 0x00]);
+    let frames = all_payloads(&written.lock().unwrap());
+    assert_eq!(frames.len(), 3);
+    // combo: data = (step_b << 4) | step_a = 0x35
+    assert_eq!(frames[0], &[0x00, PF_MODE_COMBO_PWM, 0x35, 0x00]);
+    assert_eq!(frames[1], &[0x00, PF_MODE_SINGLE_PWM, 0x05, 0x00]);
+    assert_eq!(frames[2], &[0x00, PF_MODE_SINGLE_PWM, 0x13, 0x00]);
 }
 
 #[test]
-fn test_start_ports_combo_reverse_direction() {
+fn test_start_ports_pair_reverse_direction() {
     let (mut adapter, written, responses) = make_adapter();
-    enqueue_pf_ok(&responses); // red2
-    enqueue_pf_ok(&responses); // blue2
+    for _ in 0..3 {
+        enqueue_pf_ok(&responses);
+    }
 
     let cmds = [
         PortCommand { port: "red2", direction: PortDirection::Odd, power: 7 },
@@ -185,12 +200,12 @@ fn test_start_ports_combo_reverse_direction() {
     ];
     adapter.start_ports(&cmds).unwrap();
 
-    let all = written.lock().unwrap();
-    // red2: channel 1, output A, reverse step = 16-7 = 9
-    assert_eq!(written_payload(&all), &[0x01, PF_MODE_SINGLE_PWM, 0x09, 0x00]);
-    let first_len = 2 + all[1] as usize + 1;
-    // blue2: channel 1, output B, forward step 7 → 0x10 | 7 = 0x17
-    assert_eq!(written_payload(&all[first_len..]), &[0x01, PF_MODE_SINGLE_PWM, 0x17, 0x00]);
+    let frames = all_payloads(&written.lock().unwrap());
+    assert_eq!(frames.len(), 3);
+    // red2 reverse step 16-7=9, blue2 forward 7 → combo data 0x79
+    assert_eq!(frames[0], &[0x01, PF_MODE_COMBO_PWM, 0x79, 0x00]);
+    assert_eq!(frames[1], &[0x01, PF_MODE_SINGLE_PWM, 0x09, 0x00]);
+    assert_eq!(frames[2], &[0x01, PF_MODE_SINGLE_PWM, 0x17, 0x00]);
 }
 
 #[test]
@@ -214,19 +229,65 @@ fn test_start_ports_cross_channel_succeeds() {
 }
 
 #[test]
-fn test_stop_ports_sends_two_single_pwm_float() {
+fn test_stop_ports_same_channel_pair_is_one_combo_burst() {
     let (mut adapter, written, responses) = make_adapter();
-    enqueue_pf_ok(&responses); // red1
-    enqueue_pf_ok(&responses); // blue1
+    enqueue_pf_ok(&responses);
 
     adapter.stop_ports(&["red1", "blue1"]).unwrap();
 
-    let all = written.lock().unwrap();
-    // red1: output A, step 0 (float)
-    assert_eq!(written_payload(&all), &[0x00, PF_MODE_SINGLE_PWM, 0x00, 0x00]);
-    let first_len = 2 + all[1] as usize + 1;
-    // blue1: output B, step 0 (float) → 0x10 | 0 = 0x10
-    assert_eq!(written_payload(&all[first_len..]), &[0x00, PF_MODE_SINGLE_PWM, 0x10, 0x00]);
+    let frames = all_payloads(&written.lock().unwrap());
+    // Stopped outputs need no latch: the combo timeout's effect (float) is
+    // the state they're already in. One burst stops both simultaneously.
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0], &[0x00, PF_MODE_COMBO_PWM, 0x00, 0x00]);
+}
+
+#[test]
+fn test_start_ports_pair_with_one_stopped_latches_only_the_running_output() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_pf_ok(&responses); // combo
+    enqueue_pf_ok(&responses); // latch for the running output only
+
+    let cmds = [
+        PortCommand { port: "red1", direction: PortDirection::Even, power: 5 },
+        PortCommand { port: "blue1", direction: PortDirection::Even, power: 0 },
+    ];
+    adapter.start_ports(&cmds).unwrap();
+
+    let frames = all_payloads(&written.lock().unwrap());
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], &[0x00, PF_MODE_COMBO_PWM, 0x05, 0x00]); // A=5, B=float
+    assert_eq!(frames[1], &[0x00, PF_MODE_SINGLE_PWM, 0x05, 0x00]); // latch A
+}
+
+#[test]
+fn test_start_ports_mixed_pairs_and_loners_serve_channels_in_appearance_order() {
+    // talkto ["pf.red1 "pf.red3 "pf.blue1 "pf.blue4 "pf.blue3] on:
+    // ch1 pair (red1+blue1), ch3 pair (red3+blue3), ch4 loner (blue4) —
+    // channels served in first-appearance order: ch1, ch3, ch4.
+    let (mut adapter, written, responses) = make_adapter();
+    for _ in 0..7 {
+        enqueue_pf_ok(&responses); // 2 pairs x 3 + 1 loner
+    }
+
+    let cmds = [
+        PortCommand { port: "red1", direction: PortDirection::Even, power: 7 },
+        PortCommand { port: "red3", direction: PortDirection::Even, power: 7 },
+        PortCommand { port: "blue1", direction: PortDirection::Even, power: 7 },
+        PortCommand { port: "blue4", direction: PortDirection::Even, power: 7 },
+        PortCommand { port: "blue3", direction: PortDirection::Even, power: 7 },
+    ];
+    adapter.start_ports(&cmds).unwrap();
+
+    let frames = all_payloads(&written.lock().unwrap());
+    assert_eq!(frames.len(), 7);
+    assert_eq!(frames[0], &[0x00, PF_MODE_COMBO_PWM, 0x77, 0x00]); // ch1 pair
+    assert_eq!(frames[1], &[0x00, PF_MODE_SINGLE_PWM, 0x07, 0x00]);
+    assert_eq!(frames[2], &[0x00, PF_MODE_SINGLE_PWM, 0x17, 0x00]);
+    assert_eq!(frames[3], &[0x02, PF_MODE_COMBO_PWM, 0x77, 0x00]); // ch3 pair
+    assert_eq!(frames[4], &[0x02, PF_MODE_SINGLE_PWM, 0x07, 0x00]);
+    assert_eq!(frames[5], &[0x02, PF_MODE_SINGLE_PWM, 0x17, 0x00]);
+    assert_eq!(frames[6], &[0x03, PF_MODE_SINGLE_PWM, 0x17, 0x00]); // ch4 loner
 }
 
 #[test]

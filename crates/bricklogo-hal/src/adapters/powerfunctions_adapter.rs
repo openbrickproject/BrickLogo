@@ -72,19 +72,22 @@ impl PowerFunctionsAdapter {
             .map_err(|_| "Device mutex poisoned".to_string())
     }
 
-    /// Send a Single PWM command, waiting out any previous burst in short
-    /// lock slices. Sequential semantics are unchanged (this call still
-    /// blocks until the previous burst finishes and this one is accepted),
-    /// but the shared device lock is released between slices so concurrent
+    /// Issue one PF send, waiting out any previous burst in short lock
+    /// slices. Sequential semantics are unchanged (this call still blocks
+    /// until the previous burst finishes and this one is accepted), but the
+    /// shared device lock is released between slices so concurrent
     /// Interface A commands on the same BrickInterface keep flowing.
-    fn send_single_pwm(&self, channel: u8, output_b: bool, step: u8) -> Result<(), String> {
+    fn send_pf(
+        &self,
+        send: impl Fn(&mut rust_brickinterface::BrickInterface) -> Result<(), String>,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_millis(PF_WAIT_TOTAL_MS);
         loop {
             let mut dev = self.device_lock()?;
             if dev.pf_wait_idle(PF_WAIT_SLICE_MS)? {
                 // Transmitter idle — pf_send's own wait is a no-op now, so
                 // the lock is only held for the accept round-trip (~ms).
-                return dev.pf_send_single_pwm(channel, output_b, step);
+                return send(&mut dev);
             }
             drop(dev); // let Interface A (and other) callers in
             if Instant::now() >= deadline {
@@ -94,6 +97,54 @@ impl PowerFunctionsAdapter {
             // immediately and starve the threads we just unblocked.
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    fn send_single_pwm(&self, channel: u8, output_b: bool, step: u8) -> Result<(), String> {
+        self.send_pf(|dev| dev.pf_send_single_pwm(channel, output_b, step))
+    }
+
+    fn send_combo_pwm(&self, channel: u8, step_a: u8, step_b: u8) -> Result<(), String> {
+        self.send_pf(|dev| dev.pf_send_combo_pwm(channel, step_a, step_b))
+    }
+
+    /// Apply new steps to a set of outputs. When both outputs of a channel
+    /// are targeted, they get the hybrid sequence: one Combo PWM (both
+    /// outputs change in the same IR message — motors start/stop together),
+    /// then a latching Single PWM per *running* output, because combo state
+    /// stops on the receiver's lost-IR timeout while single state survives
+    /// going out of range. Stopped outputs need no latch — the timeout's
+    /// effect (float) is the state they're already in — so a pair-off is a
+    /// single combo burst. A lost latch degrades to staggered starts; lone
+    /// outputs get a plain single. Channels are served in first-appearance
+    /// order — authors who care about cross-channel ordering can order
+    /// their port lists.
+    fn apply_steps(&mut self, targets: &[(u8, bool, u8)]) -> Result<(), String> {
+        let mut order: Vec<u8> = Vec::new();
+        let mut wanted: [[Option<u8>; 2]; 4] = [[None; 2]; 4];
+        for &(ch, is_blue, step) in targets {
+            if !order.contains(&ch) {
+                order.push(ch);
+            }
+            wanted[ch as usize][is_blue as usize] = Some(step);
+            self.steps[port_index(ch, is_blue)] = step;
+        }
+        for ch in order {
+            match wanted[ch as usize] {
+                [Some(step_a), Some(step_b)] => {
+                    self.send_combo_pwm(ch, step_a, step_b)?;
+                    if step_a != 0 {
+                        self.send_single_pwm(ch, false, step_a)?;
+                    }
+                    if step_b != 0 {
+                        self.send_single_pwm(ch, true, step_b)?;
+                    }
+                }
+                [Some(step_a), None] => self.send_single_pwm(ch, false, step_a)?,
+                [None, Some(step_b)] => self.send_single_pwm(ch, true, step_b)?,
+                [None, None] => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -136,14 +187,12 @@ impl HardwareAdapter for PowerFunctionsAdapter {
     fn start_port(&mut self, port: &str, direction: PortDirection, power: u8) -> Result<(), String> {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
         let step = to_step(direction, power);
-        self.steps[port_index(ch, is_blue)] = step;
-        self.send_single_pwm(ch, is_blue, step)
+        self.apply_steps(&[(ch, is_blue, step)])
     }
 
     fn stop_port(&mut self, port: &str) -> Result<(), String> {
         let (ch, is_blue) = parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
-        self.steps[port_index(ch, is_blue)] = 0;
-        self.send_single_pwm(ch, is_blue, 0)
+        self.apply_steps(&[(ch, is_blue, 0)])
     }
 
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
@@ -173,17 +222,23 @@ impl HardwareAdapter for PowerFunctionsAdapter {
     }
 
     fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        let mut targets = Vec::with_capacity(commands.len());
         for cmd in commands {
-            self.start_port(cmd.port, cmd.direction, cmd.power)?;
+            let (ch, is_blue) =
+                parse_port(cmd.port).ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
+            targets.push((ch, is_blue, to_step(cmd.direction, cmd.power)));
         }
-        Ok(())
+        self.apply_steps(&targets)
     }
 
     fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        let mut targets = Vec::with_capacity(ports.len());
         for port in ports {
-            self.stop_port(port)?;
+            let (ch, is_blue) =
+                parse_port(port).ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+            targets.push((ch, is_blue, 0));
         }
-        Ok(())
+        self.apply_steps(&targets)
     }
 }
 

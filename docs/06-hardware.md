@@ -207,6 +207,7 @@ Ports are named by channel number and output color, matching the labelling on LE
 ### Notes
 
 - Multiple receivers on the same channel respond to the same commands. Use different channels for independent control of separate models.
+- `talkto` with both outputs of one channel (e.g. `["pf.red1 "pf.blue1]`) starts and stops them simultaneously: one Combo PWM message changes the pair together, then latching Single PWM follow-ups preserve run-out-of-range behaviour. Outputs on different channels still take turns on the transmitter, in the order their channels first appear in the port list.
 - A BrickInterface adapter and a hardware Power Functions remote can coexist as long as they use different channels.
 - For multiple BrickInterface adapters, list all serial ports in the `"brickinterface"` array. A second `connectto "powerfunctions` that cannot share an existing adapter opens the next port in the array.
 

@@ -316,6 +316,91 @@ impl PortManager {
         Ok(())
     }
 
+    /// Batched `sync_port`: push current state for the given ports to their
+    /// adapters, grouped per device so adapters with grouped sends (Power
+    /// Functions pairs both outputs of a channel into one Combo message)
+    /// can act on related ports together. Same per-port semantics as
+    /// `sync_port`: unchanged state is skipped, running ports are
+    /// (re)started, newly-stopped ports are stopped.
+    fn sync_ports(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
+        // Plan with an immutable pass: device -> (starts, stops, records).
+        let mut order: Vec<String> = Vec::new();
+        let mut starts: HashMap<String, Vec<(String, PortDirection, u8)>> = HashMap::new();
+        let mut stops: HashMap<String, Vec<String>> = HashMap::new();
+        let mut records: HashMap<String, Vec<(String, SentState)>> = HashMap::new();
+        for qp in ports {
+            let default_power = self.default_power_for(&qp.device_name);
+            let entry = match self.devices.get(&qp.device_name) {
+                Some(e) => e,
+                None => continue,
+            };
+            let state = entry
+                .port_states
+                .get(&qp.port)
+                .cloned()
+                .unwrap_or(OutputPortState {
+                    direction: PortDirection::Even,
+                    power: default_power,
+                    is_running: false,
+                });
+            let desired = SentState {
+                direction: state.direction,
+                power: state.power,
+                is_running: state.is_running,
+            };
+            if let Some(last) = entry.last_sent.get(&qp.port) {
+                if last.is_running == desired.is_running
+                    && last.direction == desired.direction
+                    && last.power == desired.power
+                {
+                    continue;
+                }
+            }
+            if !order.contains(&qp.device_name) {
+                order.push(qp.device_name.clone());
+            }
+            if desired.is_running {
+                starts.entry(qp.device_name.clone()).or_default().push((
+                    qp.port.clone(),
+                    desired.direction,
+                    desired.power,
+                ));
+            } else if entry
+                .last_sent
+                .get(&qp.port)
+                .map(|l| l.is_running)
+                .unwrap_or(false)
+            {
+                stops.entry(qp.device_name.clone()).or_default().push(qp.port.clone());
+            }
+            records
+                .entry(qp.device_name.clone())
+                .or_default()
+                .push((qp.port.clone(), desired));
+        }
+
+        for name in order {
+            let entry = self.devices.get_mut(&name).unwrap();
+            if let Some(list) = starts.get(&name) {
+                let cmds: Vec<PortCommand> = list
+                    .iter()
+                    .map(|(p, d, pw)| PortCommand { port: p.as_str(), direction: *d, power: *pw })
+                    .collect();
+                entry.adapter.start_ports(&cmds)?;
+            }
+            if let Some(list) = stops.get(&name) {
+                let port_strs: Vec<&str> = list.iter().map(|p| p.as_str()).collect();
+                entry.adapter.stop_ports(&port_strs)?;
+            }
+            if let Some(list) = records.remove(&name) {
+                for (port, sent) in list {
+                    entry.last_sent.insert(port, sent);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Group ports by device name, collecting their current state.
     fn group_by_device(
         &self,
@@ -508,8 +593,8 @@ impl PortManager {
             for qp in &ports {
                 let state = self.get_state(qp);
                 state.direction = state.direction.toggle();
-                let _ = self.sync_port(qp);
             }
+            let _ = self.sync_ports(&ports);
         }
     }
 
@@ -546,8 +631,8 @@ impl PortManager {
             let state = self.get_state(qp);
             state.power = level;
             if level == 0 { state.is_running = false; }
-            let _ = self.sync_port(qp);
         }
+        let _ = self.sync_ports(&ports);
         Ok(())
     }
 
