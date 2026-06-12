@@ -890,18 +890,25 @@ impl PortManager {
         }
         let ports = self.resolve_ports(port_strs)?;
 
+        for qp in &ports {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            if !entry.adapter.connected() {
+                return Err(format!("Device \"{}\" is not connected", qp.device_name));
+            }
+            entry.adapter.validate_sensor_port(&qp.port, None)?;
+        }
+
         if ports.len() == 1 {
             let qp = &ports[0];
-            let entry = self.devices.get_mut(&qp.device_name)
-                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
             let val = entry.adapter.read_counter(&qp.port)?;
             return Ok(Some(LogoValue::Number(val as f64)));
         }
 
         let mut results = Vec::new();
         for qp in &ports {
-            let entry = self.devices.get_mut(&qp.device_name)
-                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            let entry = self.devices.get_mut(&qp.device_name).unwrap();
             let val = entry.adapter.read_counter(&qp.port)?;
             results.push(LogoValue::Number(val as f64));
         }

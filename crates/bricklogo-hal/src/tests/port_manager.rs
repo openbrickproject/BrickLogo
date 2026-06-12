@@ -51,6 +51,7 @@ impl HardwareAdapter for MockAdapter {
 struct CounterAdapter {
     ports: Vec<String>,
     counts: std::collections::HashMap<String, u32>,
+    connected: bool,
 }
 
 impl CounterAdapter {
@@ -58,7 +59,13 @@ impl CounterAdapter {
         CounterAdapter {
             ports: counts.iter().map(|(p, _)| p.to_string()).collect(),
             counts: counts.iter().map(|(p, c)| (p.to_string(), *c)).collect(),
+            connected: true,
         }
+    }
+
+    fn disconnected(mut self) -> Self {
+        self.connected = false;
+        self
     }
 }
 
@@ -66,11 +73,17 @@ impl HardwareAdapter for CounterAdapter {
     fn display_name(&self) -> &str { "Counter" }
     fn output_ports(&self) -> &[String] { &[] }
     fn input_ports(&self) -> &[String] { &self.ports }
-    fn connected(&self) -> bool { true }
+    fn connected(&self) -> bool { self.connected }
     fn connect(&mut self) -> Result<(), String> { Ok(()) }
-    fn disconnect(&mut self) {}
+    fn disconnect(&mut self) { self.connected = false; }
     fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
-    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, port: &str, _mode: Option<&str>) -> Result<(), String> {
+        if self.ports.iter().any(|p| p == port) {
+            Ok(())
+        } else {
+            Err(format!("\"{port}\" is not a valid sensor port"))
+        }
+    }
     fn max_power(&self) -> u8 { 255 }
     fn start_port(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
     fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
@@ -319,11 +332,19 @@ fn test_read_counter_multi_port_preserves_selection_order() {
 }
 
 #[test]
-fn test_read_counter_propagates_adapter_error() {
+fn test_read_counter_invalid_port_errors() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42)])), "counter");
-    // Port "9" has no counter — the adapter error should surface, not be swallowed.
+    // Port "9" isn't a valid sensor port — validation must reject the whole read,
+    // like read_sensor, rather than reading the good ports and dropping the bad.
     assert!(pm.read_counter(&["6".to_string(), "9".to_string()]).is_err());
+}
+
+#[test]
+fn test_read_counter_disconnected_device_errors() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42)]).disconnected()), "counter");
+    assert!(pm.read_counter(&["6".to_string()]).is_err());
 }
 
 #[test]
