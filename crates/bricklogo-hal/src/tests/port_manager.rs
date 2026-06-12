@@ -45,6 +45,47 @@ impl HardwareAdapter for MockAdapter {
     fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
 }
 
+/// Mock adapter that reports a fixed pulse count per input port, so multi-port
+/// `read_counter` can be exercised. Mirrors Interface A, the only real adapter
+/// that implements counters.
+struct CounterAdapter {
+    ports: Vec<String>,
+    counts: std::collections::HashMap<String, u32>,
+}
+
+impl CounterAdapter {
+    fn new(counts: &[(&str, u32)]) -> Self {
+        CounterAdapter {
+            ports: counts.iter().map(|(p, _)| p.to_string()).collect(),
+            counts: counts.iter().map(|(p, c)| (p.to_string(), *c)).collect(),
+        }
+    }
+}
+
+impl HardwareAdapter for CounterAdapter {
+    fn display_name(&self) -> &str { "Counter" }
+    fn output_ports(&self) -> &[String] { &[] }
+    fn input_ports(&self) -> &[String] { &self.ports }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 255 }
+    fn start_port(&mut self, _port: &str, _dir: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _port: &str, _dir: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _dir: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _dir: PortDirection, _power: u8, _pos: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _dir: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    fn read_counter(&mut self, port: &str) -> Result<u32, String> {
+        self.counts.get(port).copied()
+            .ok_or_else(|| format!("no counter for port {port}"))
+    }
+}
+
 /// Mock adapter whose batch methods sleep for the requested duration (or a
 /// fixed 200ms for the degree/position methods). Used to verify that
 /// PortManager fans out work across devices in parallel, not sequentially.
@@ -230,6 +271,59 @@ fn test_read_sensor_no_port() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "mock");
     assert!(pm.read_sensor(&[], None).is_err());
+}
+
+#[test]
+fn test_read_counter_no_port() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 0)])), "counter");
+    assert!(pm.read_counter(&[]).is_err());
+}
+
+#[test]
+fn test_read_counter_single_port_returns_number() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42), ("7", 7)])), "counter");
+    let val = pm.read_counter(&["6".to_string()]).unwrap();
+    assert_eq!(val, Some(LogoValue::Number(42.0)));
+}
+
+#[test]
+fn test_read_counter_multi_port_returns_list_in_order() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42), ("7", 7)])), "counter");
+    let val = pm.read_counter(&["6".to_string(), "7".to_string()]).unwrap();
+    assert_eq!(
+        val,
+        Some(LogoValue::List(vec![
+            LogoValue::Number(42.0),
+            LogoValue::Number(7.0),
+        ]))
+    );
+}
+
+#[test]
+fn test_read_counter_multi_port_preserves_selection_order() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42), ("7", 7)])), "counter");
+    // Reversed selection should reverse the list, proving it tracks selection
+    // order rather than port declaration order.
+    let val = pm.read_counter(&["7".to_string(), "6".to_string()]).unwrap();
+    assert_eq!(
+        val,
+        Some(LogoValue::List(vec![
+            LogoValue::Number(7.0),
+            LogoValue::Number(42.0),
+        ]))
+    );
+}
+
+#[test]
+fn test_read_counter_propagates_adapter_error() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(CounterAdapter::new(&[("6", 42)])), "counter");
+    // Port "9" has no counter — the adapter error should surface, not be swallowed.
+    assert!(pm.read_counter(&["6".to_string(), "9".to_string()]).is_err());
 }
 
 #[test]

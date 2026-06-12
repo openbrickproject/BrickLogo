@@ -880,15 +880,32 @@ impl PortManager {
         Ok(Some(LogoValue::List(results)))
     }
 
-    pub fn read_counter(&mut self, port_strs: &[String]) -> Result<u32, String> {
+    /// Read the pulse counter on each selected input. Mirrors `read_sensor`'s
+    /// shape: one port returns a bare `Number`, several return a `List` of
+    /// numbers (one per port, in selection order). Only Interface A implements
+    /// counters; every other adapter inherits the "not supported" default.
+    pub fn read_counter(&mut self, port_strs: &[String]) -> Result<Option<LogoValue>, String> {
         if port_strs.is_empty() {
             return Err("No sensor port selected (use listento)".to_string());
         }
         let ports = self.resolve_ports(port_strs)?;
-        let qp = &ports[0];
-        let entry = self.devices.get_mut(&qp.device_name)
-            .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
-        entry.adapter.read_counter(&qp.port)
+
+        if ports.len() == 1 {
+            let qp = &ports[0];
+            let entry = self.devices.get_mut(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            let val = entry.adapter.read_counter(&qp.port)?;
+            return Ok(Some(LogoValue::Number(val as f64)));
+        }
+
+        let mut results = Vec::new();
+        for qp in &ports {
+            let entry = self.devices.get_mut(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            let val = entry.adapter.read_counter(&qp.port)?;
+            results.push(LogoValue::Number(val as f64));
+        }
+        Ok(Some(LogoValue::List(results)))
     }
 
     pub fn reset_counter(&mut self, port_strs: &[String]) -> Result<(), String> {

@@ -744,7 +744,10 @@ pub fn register_hardware_primitives(
             let ports = eval.selected_inputs().to_vec();
             let val = pm_ref.lock().unwrap().read_counter(&ports)
                 .map_err(LogoError::Runtime)?;
-            Ok(Some(LogoValue::Number(val as f64)))
+            match val {
+                Some(v) => Ok(Some(v)),
+                None => Err(LogoError::Runtime("No counter reading available".to_string())),
+            }
         }),
     });
 
