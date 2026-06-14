@@ -719,18 +719,29 @@ pub fn register_hardware_primitives(
     eval.register_primitive("sensor?", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_inputs().to_vec();
-            match pm_ref.lock().unwrap().read_sensor(&ports, None) {
-                Ok(Some(val)) => {
-                    let truthy = match &val {
-                        LogoValue::Word(s) if s == "false" => false,
-                        LogoValue::Number(n) if *n == 0.0 => false,
-                        LogoValue::Word(s) if s.is_empty() => false,
-                        _ => true,
-                    };
-                    Ok(Some(LogoValue::Word(if truthy { "true" } else { "false" }.to_string())))
+            // A reading counts as "true" unless it is literally false, zero, or empty.
+            fn truthy(val: &LogoValue) -> bool {
+                match val {
+                    LogoValue::Word(s) if s == "false" => false,
+                    LogoValue::Number(n) if *n == 0.0 => false,
+                    LogoValue::Word(s) if s.is_empty() => false,
+                    _ => true,
                 }
-                _ => Ok(Some(LogoValue::Word("false".to_string()))),
+            }
+            let bool_word = |b: bool| LogoValue::Word(if b { "true" } else { "false" }.to_string());
+
+            let ports = eval.selected_inputs().to_vec();
+            let multi = ports.len() > 1;
+            match pm_ref.lock().unwrap().read_sensor(&ports, None) {
+                // Mirror `sensor`'s shape: many ports come back as one element per
+                // port, so project the truthy test over each and return a list of
+                // booleans. A single port keeps its raw reading (which may itself
+                // be a list, e.g. an RGB or tilt value) and yields one boolean.
+                Ok(Some(LogoValue::List(vals))) if multi => Ok(Some(LogoValue::List(
+                    vals.iter().map(|v| bool_word(truthy(v))).collect(),
+                ))),
+                Ok(Some(val)) => Ok(Some(bool_word(truthy(&val)))),
+                _ => Ok(Some(bool_word(false))),
             }
         }),
     });

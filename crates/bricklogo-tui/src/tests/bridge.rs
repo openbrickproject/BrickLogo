@@ -101,6 +101,44 @@ impl HardwareAdapter for MockAdapter {
     }
 }
 
+/// Sensor mock with named input ports, each returning a fixed reading, so
+/// `sensor?` can be exercised across single- and multi-port selections.
+struct SensorMock {
+    inputs: Vec<String>,
+    readings: std::collections::HashMap<String, LogoValue>,
+}
+
+impl SensorMock {
+    fn new(readings: &[(&str, LogoValue)]) -> Self {
+        Self {
+            inputs: readings.iter().map(|(p, _)| p.to_string()).collect(),
+            readings: readings.iter().map(|(p, v)| (p.to_string(), v.clone())).collect(),
+        }
+    }
+}
+
+impl HardwareAdapter for SensorMock {
+    fn display_name(&self) -> &str { "SensorMock" }
+    fn output_ports(&self) -> &[String] { &[] }
+    fn input_ports(&self) -> &[String] { &self.inputs }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _port: &str, _mode: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 100 }
+    fn start_port(&mut self, _port: &str, _direction: PortDirection, _power: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _port: &str, _direction: PortDirection, _power: u8, _tenths: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _port: &str, _direction: PortDirection, _power: u8, _degrees: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _port: &str, _direction: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _port: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _port: &str, _direction: PortDirection, _power: u8, _position: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, port: &str, _mode: Option<&str>) -> Result<Option<LogoValue>, String> {
+        Ok(self.readings.get(port).cloned())
+    }
+}
+
 fn setup_eval() -> (Evaluator, Arc<Mutex<PortManager>>) {
     let mut eval = Evaluator::new(Arc::new(|_| {}));
     register_core_primitives(&mut eval);
@@ -460,4 +498,107 @@ fn test_config_unreadable_file_warns_and_defaults() {
     let warnings = warnings.into_inner().unwrap();
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("could not read"), "got: {}", warnings[0]);
+}
+
+// ── sensor? ─────────────────────────────────
+
+#[test]
+fn test_sensor_query_single_port_truthy() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("s", Box::new(SensorMock::new(&[("a", LogoValue::Number(1.0))])), "pup");
+    }
+    eval.evaluate("listento [a]").unwrap();
+    let result = eval.evaluate("sensor?").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("true".to_string())));
+}
+
+#[test]
+fn test_sensor_query_single_port_falsey() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device("s", Box::new(SensorMock::new(&[("a", LogoValue::Number(0.0))])), "pup");
+    }
+    eval.evaluate("listento [a]").unwrap();
+    let result = eval.evaluate("sensor?").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("false".to_string())));
+}
+
+#[test]
+fn test_sensor_query_multi_port_returns_list_of_booleans() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device(
+            "s",
+            Box::new(SensorMock::new(&[
+                ("a", LogoValue::Number(1.0)),
+                ("b", LogoValue::Number(0.0)),
+            ])),
+            "pup",
+        );
+    }
+    eval.evaluate("listento [a b]").unwrap();
+    let result = eval.evaluate("sensor?").unwrap();
+    // One boolean per port, aligned to selection order — mirroring `sensor`.
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![
+            LogoValue::Word("true".to_string()),
+            LogoValue::Word("false".to_string()),
+        ]))
+    );
+}
+
+#[test]
+fn test_sensor_query_multi_port_preserves_selection_order() {
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device(
+            "s",
+            Box::new(SensorMock::new(&[
+                ("a", LogoValue::Number(1.0)),
+                ("b", LogoValue::Number(0.0)),
+            ])),
+            "pup",
+        );
+    }
+    // Reversed selection reverses the result list.
+    eval.evaluate("listento [b a]").unwrap();
+    let result = eval.evaluate("sensor?").unwrap();
+    assert_eq!(
+        result,
+        Some(LogoValue::List(vec![
+            LogoValue::Word("false".to_string()),
+            LogoValue::Word("true".to_string()),
+        ]))
+    );
+}
+
+#[test]
+fn test_sensor_query_single_port_list_reading_is_one_boolean() {
+    // A single multi-component reading (e.g. RGB) must collapse to ONE boolean,
+    // not be mapped element-wise — that's why sensor? branches on port count.
+    let (mut eval, pm) = setup_eval();
+    {
+        let mut manager = pm.lock().unwrap();
+        manager.add_device(
+            "s",
+            Box::new(SensorMock::new(&[(
+                "a",
+                LogoValue::List(vec![
+                    LogoValue::Number(255.0),
+                    LogoValue::Number(0.0),
+                    LogoValue::Number(0.0),
+                ]),
+            )])),
+            "pup",
+        );
+    }
+    eval.evaluate("listento [a]").unwrap();
+    let result = eval.evaluate("sensor?").unwrap();
+    assert_eq!(result, Some(LogoValue::Word("true".to_string())));
 }
