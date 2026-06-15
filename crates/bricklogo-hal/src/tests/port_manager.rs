@@ -673,20 +673,101 @@ fn test_set_power_after_one_port_off_transmits_only_the_running_port() {
     pm.add_device("bot", Box::new(adapter), "mock");
     let both = vec!["a".to_string(), "b".to_string()];
 
-    pm.on(&both).unwrap();                       // batch 1: a+b
+    pm.on(&both).unwrap();                       // batch 1: a+b (default power)
     pm.off(&["b".to_string()]).unwrap();         // stop (not recorded by mock)
-    pm.set_power(&both, 3).unwrap();             // batch 2: must be a alone
+    pm.set_power(&both, 5).unwrap();             // batch 2: must be a alone
 
     let b = batches.lock().unwrap();
     assert_eq!(b.len(), 2, "batches: {:?}", b);
-    assert_eq!(b[1], vec![("a".to_string(), 3)]);
+    assert_eq!(b[1], vec![("a".to_string(), 5)]);
     drop(b);
 
-    // The stopped port's power latched: turning both back on starts the
-    // pair together at the new level.
+    // The stopped port's power latched. Turning both back on only (re)starts
+    // the port that was actually off — `a` never stopped and is already at
+    // level 5, so the de-dup leaves it untouched and only `b` is sent.
     pm.on(&both).unwrap();
     let b = batches.lock().unwrap();
-    assert_eq!(b[2], vec![("a".to_string(), 3), ("b".to_string(), 3)]);
+    assert_eq!(b[2], vec![("b".to_string(), 5)]);
+}
+
+#[test]
+fn test_repeated_on_sends_once() {
+    // `on` on a motor already running at the same direction/power is a no-op —
+    // nothing reaches the adapter, so IR/serial isn't flooded.
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let a = vec!["a".to_string()];
+
+    pm.on(&a).unwrap();
+    pm.on(&a).unwrap();
+    pm.on(&a).unwrap();
+    assert_eq!(batches.lock().unwrap().len(), 1, "repeated on should send once");
+}
+
+#[test]
+fn test_on_resends_after_state_change() {
+    // A change to direction (or power) while running must still reach the
+    // adapter; only an unchanged repeat is suppressed. This also checks that
+    // on (batch_start) and setodd (sync_port) share the same last_sent state.
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let a = vec!["a".to_string()];
+
+    pm.on(&a).unwrap();        // send 1
+    pm.on(&a).unwrap();        // deduped
+    pm.set_odd(&a);            // direction changed while running → send 2
+    pm.on(&a).unwrap();        // deduped (same state again)
+    assert_eq!(batches.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_on_after_rotate_restarts() {
+    // rotate leaves the motor stopped; a following identical `on` must restart
+    // it, not be de-duped against the pre-rotate "running" state.
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let a = vec!["a".to_string()];
+
+    pm.on(&a).unwrap();         // send 1
+    pm.rotate(&a, 90).unwrap(); // rotates then stops (no start_ports batch)
+    pm.on(&a).unwrap();         // must restart → send 2
+    assert_eq!(batches.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_on_after_flash_cancel_restarts() {
+    // A port left in a flash, then `on`: cancel_flash stops it and clears
+    // last_sent, so `on` re-sends rather than de-duping against a stale state.
+    let batches = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let adapter = BatchRecordingAdapter {
+        ports: vec!["a".to_string()],
+        batches: batches.clone(),
+    };
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(adapter), "mock");
+    let a = vec!["a".to_string()];
+
+    pm.on(&a).unwrap(); // send 1, last_sent = running
+    // Simulate an active flash on the port (as flash() registers).
+    pm.flash_timers
+        .insert("bot:a".to_string(), Arc::new(AtomicBool::new(false)));
+    pm.on(&a).unwrap(); // cancel_flash clears last_sent → re-send (send 2)
+    assert_eq!(batches.lock().unwrap().len(), 2);
 }
 
 /// Adapter recording batch color calls, to verify PortManager fan-out groups
@@ -763,4 +844,55 @@ fn test_set_color_not_supported_propagates() {
     let mut pm = PortManager::new();
     pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
     assert!(pm.set_color(&["a".to_string()], 9).is_err());
+}
+
+/// Adapter that reports which read path was taken: `read_sensor` (single)
+/// returns "single"; the batched `read_sensors` returns "batched".
+struct BatchReadAdapter {
+    ports: Vec<String>,
+}
+
+impl HardwareAdapter for BatchReadAdapter {
+    fn display_name(&self) -> &str { "BatchRead" }
+    fn output_ports(&self) -> &[String] { &[] }
+    fn input_ports(&self) -> &[String] { &self.ports }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, _: &str) -> Result<(), String> { Ok(()) }
+    fn validate_sensor_port(&self, _: &str, _: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 255 }
+    fn start_port(&mut self, _: &str, _: PortDirection, _: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _: &str, _: PortDirection, _: u8, _: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _: &str, _: Option<&str>) -> Result<Option<LogoValue>, String> {
+        Ok(Some(LogoValue::Word("single".to_string())))
+    }
+    fn read_sensors(&mut self, ports: &[&str], _: Option<&str>) -> Result<Vec<Option<LogoValue>>, String> {
+        Ok(ports.iter().map(|_| Some(LogoValue::Word("batched".to_string()))).collect())
+    }
+}
+
+#[test]
+fn test_multi_port_read_uses_batched_path() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(BatchReadAdapter { ports: vec!["6".into(), "7".into()] }), "ifa");
+
+    // Single port goes through read_sensor.
+    let one = pm.read_sensor(&["6".to_string()], None).unwrap().unwrap();
+    assert_eq!(one, LogoValue::Word("single".to_string()));
+
+    // Multiple ports go through the batched read_sensors (one call per device).
+    let many = pm.read_sensor(&["6".to_string(), "7".to_string()], None).unwrap().unwrap();
+    assert_eq!(
+        many,
+        LogoValue::List(vec![
+            LogoValue::Word("batched".to_string()),
+            LogoValue::Word("batched".to_string()),
+        ])
+    );
 }

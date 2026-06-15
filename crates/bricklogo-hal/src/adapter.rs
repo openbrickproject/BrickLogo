@@ -121,6 +121,18 @@ pub trait HardwareAdapter: Send {
 
     fn read_sensor(&mut self, port: &str, mode: Option<&str>) -> Result<Option<LogoValue>, String>;
 
+    /// Read several sensor ports at once, one value per port in the same order.
+    /// Default loops `read_sensor`; adapters whose protocol returns all inputs
+    /// in one transaction (Interface A's `get_inputs`) override this to do a
+    /// single round-trip.
+    fn read_sensors(&mut self, ports: &[&str], mode: Option<&str>) -> Result<Vec<Option<LogoValue>>, String> {
+        let mut out = Vec::with_capacity(ports.len());
+        for port in ports {
+            out.push(self.read_sensor(port, mode)?);
+        }
+        Ok(out)
+    }
+
     fn read_counter(&mut self, _port: &str) -> Result<u32, String> {
         Err("This device does not support counters".to_string())
     }

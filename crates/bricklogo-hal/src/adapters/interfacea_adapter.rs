@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use bricklogo_lang::value::LogoValue;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::shared_brick_interface::SharedBrickInterface;
 
 const OUTPUT_PORTS: &[&str] = &["0", "1", "2", "3", "4", "5", "a", "b", "c"];
@@ -106,6 +106,55 @@ impl HardwareAdapter for InterfaceAAdapter {
         }
     }
 
+    // Coalesce every selected output into a single masked frame, so e.g.
+    // `talkto [0 1] on` drives both motors in one set_outputs write rather than
+    // two. set_outputs_masked carries a per-output duty array, so ports at
+    // different powers still fit in one frame (no per-power grouping needed,
+    // unlike Control Lab).
+    fn start_ports(&mut self, commands: &[PortCommand]) -> Result<(), String> {
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let mut mask = 0u8;
+        let mut duty = [0u8; 6];
+        for cmd in commands {
+            if let Some((even_idx, odd_idx)) = pair_indices(cmd.port) {
+                let (d_even, d_odd) = match cmd.direction {
+                    PortDirection::Even => (cmd.power, 0),
+                    PortDirection::Odd => (0, cmd.power),
+                };
+                mask |= (1u8 << even_idx) | (1u8 << odd_idx);
+                duty[even_idx] = d_even;
+                duty[odd_idx] = d_odd;
+            } else {
+                let idx = output_index(cmd.port)
+                    .ok_or_else(|| format!("Unknown port \"{}\"", cmd.port))?;
+                mask |= 1u8 << idx;
+                duty[idx] = cmd.power;
+            }
+        }
+        let values: Vec<u8> = (0u8..6).filter(|&i| mask & (1u8 << i) != 0).map(|i| duty[i as usize]).collect();
+        self.device_lock()?.set_outputs_masked(mask, &values)
+    }
+
+    fn stop_ports(&mut self, ports: &[&str]) -> Result<(), String> {
+        if ports.is_empty() {
+            return Ok(());
+        }
+        let mut mask = 0u8;
+        for port in ports {
+            if let Some((even_idx, odd_idx)) = pair_indices(port) {
+                mask |= (1u8 << even_idx) | (1u8 << odd_idx);
+            } else {
+                let idx = output_index(port)
+                    .ok_or_else(|| format!("Unknown port \"{}\"", port))?;
+                mask |= 1u8 << idx;
+            }
+        }
+        let values = vec![0u8; mask.count_ones() as usize];
+        self.device_lock()?.set_outputs_masked(mask, &values)
+    }
+
     fn run_port_for_time(&mut self, port: &str, direction: PortDirection, power: u8, tenths: u32) -> Result<(), String> {
         self.start_port(port, direction, power)?;
         std::thread::sleep(Duration::from_millis(tenths as u64 * 100));
@@ -135,9 +184,28 @@ impl HardwareAdapter for InterfaceAAdapter {
             _ => return Err(format!("Unknown sensor port \"{}\"", port)),
         };
         let state = self.device_lock()?.get_inputs()?;
-        // Firmware: bit=1 means open/pulled-up (Logo "false"), bit=0 means closed (Logo "true").
-        let pressed = (state & (1 << bit)) == 0;
+        // Firmware: bit=1 means the switch is closed (pressed), bit=0 means open.
+        // So a pressed sensor reads "true", matching Control Lab / RCX / Coral.
+        let pressed = (state & (1 << bit)) != 0;
         Ok(Some(LogoValue::Word(if pressed { "true" } else { "false" }.to_string())))
+    }
+
+    // One `get_inputs` round-trip serves every selected port, so
+    // `listento [6 7]; sensor "touch` reads both at once.
+    fn read_sensors(&mut self, ports: &[&str], _mode: Option<&str>) -> Result<Vec<Option<LogoValue>>, String> {
+        let state = self.device_lock()?.get_inputs()?;
+        ports
+            .iter()
+            .map(|port| {
+                let bit: u8 = match *port {
+                    "6" => 0,
+                    "7" => 1,
+                    _ => return Err(format!("Unknown sensor port \"{}\"", port)),
+                };
+                let pressed = (state & (1 << bit)) != 0;
+                Ok(Some(LogoValue::Word(if pressed { "true" } else { "false" }.to_string())))
+            })
+            .collect()
     }
 
     fn read_counter(&mut self, port: &str) -> Result<u32, String> {

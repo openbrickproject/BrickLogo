@@ -487,12 +487,68 @@ impl PortManager {
         results.into_iter().find(|r| r.is_err()).unwrap_or(Ok(()))
     }
 
-    /// Batch start ports, grouped by device.
+    /// Desired output state for a port (from the cache, or the device default).
+    fn desired_output_state(&self, qp: &QualifiedPort) -> OutputPortState {
+        let default_power = self.default_power_for(&qp.device_name);
+        self.devices
+            .get(&qp.device_name)
+            .and_then(|e| e.port_states.get(&qp.port).cloned())
+            .unwrap_or(OutputPortState {
+                direction: PortDirection::Even,
+                power: default_power,
+                is_running: false,
+            })
+    }
+
+    /// Whether a port's desired state differs from what was last sent to its
+    /// adapter. This is what makes a redundant `on` (a motor already running at
+    /// the same direction and power) a no-op — no command reaches the adapter,
+    /// so no adapter re-transmits. Mirrors the `sync_port` de-dup used by
+    /// `set_power`/`flash`.
+    fn output_needs_send(&self, qp: &QualifiedPort) -> bool {
+        let desired = self.desired_output_state(qp);
+        match self
+            .devices
+            .get(&qp.device_name)
+            .and_then(|e| e.last_sent.get(&qp.port))
+        {
+            Some(last) => {
+                last.is_running != desired.is_running
+                    || last.direction != desired.direction
+                    || last.power != desired.power
+            }
+            None => true,
+        }
+    }
+
+    /// Record the state just pushed to a port's adapter.
+    fn record_output_sent(&mut self, qp: &QualifiedPort) {
+        let desired = self.desired_output_state(qp);
+        if let Some(entry) = self.devices.get_mut(&qp.device_name) {
+            entry.last_sent.insert(
+                qp.port.clone(),
+                SentState {
+                    direction: desired.direction,
+                    power: desired.power,
+                    is_running: desired.is_running,
+                },
+            );
+        }
+    }
+
+    /// Batch start ports, grouped by device. Ports already running at the
+    /// desired direction/power are skipped (no command is sent), so repeated
+    /// `on` does nothing.
     /// Parallel-safe adapters (Interface A) fire concurrently across devices;
     /// IR-based adapters (Power Functions) run sequentially to avoid carrier
     /// collisions between simultaneous transmissions.
     fn batch_start(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
-        let groups = self.group_by_device(ports);
+        let changed: Vec<QualifiedPort> =
+            ports.iter().filter(|qp| self.output_needs_send(qp)).cloned().collect();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let groups = self.group_by_device(&changed);
         let (par, seq): (Vec<_>, Vec<_>) = groups.into_iter().partition(|(name, _)| {
             self.devices.get(name).map(|e| e.adapter.parallel_safe()).unwrap_or(true)
         });
@@ -506,26 +562,47 @@ impl PortManager {
                 .collect();
             entry.adapter.start_ports(&cmds)?;
         }
+        for qp in &changed {
+            self.record_output_sent(qp);
+        }
         Ok(())
     }
 
-    /// Batch stop ports, grouped by device.
+    /// Batch stop ports, grouped by device. Only ports last sent as running are
+    /// actually stopped on the wire, so repeated `off` does nothing.
     /// Same parallel/sequential split as batch_start.
     fn batch_stop(&mut self, ports: &[QualifiedPort]) -> Result<(), String> {
-        let groups = self.group_by_device(ports);
-        let (par, seq): (Vec<_>, Vec<_>) = groups.into_iter().partition(|(name, _)| {
-            self.devices.get(name).map(|e| e.adapter.parallel_safe()).unwrap_or(true)
-        });
-        if !par.is_empty() {
-            self.run_parallel_by_device(par, |adapter, cmds| {
-                let port_strs: Vec<&str> = cmds.iter().map(|c| c.port).collect();
-                adapter.stop_ports(&port_strs)
-            })?;
+        let to_stop: Vec<QualifiedPort> = ports
+            .iter()
+            .filter(|qp| {
+                self.devices
+                    .get(&qp.device_name)
+                    .and_then(|e| e.last_sent.get(&qp.port))
+                    .map(|l| l.is_running)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if !to_stop.is_empty() {
+            let groups = self.group_by_device(&to_stop);
+            let (par, seq): (Vec<_>, Vec<_>) = groups.into_iter().partition(|(name, _)| {
+                self.devices.get(name).map(|e| e.adapter.parallel_safe()).unwrap_or(true)
+            });
+            if !par.is_empty() {
+                self.run_parallel_by_device(par, |adapter, cmds| {
+                    let port_strs: Vec<&str> = cmds.iter().map(|c| c.port).collect();
+                    adapter.stop_ports(&port_strs)
+                })?;
+            }
+            for (name, port_cmds) in seq {
+                let entry = self.devices.get_mut(&name).unwrap();
+                let port_strs: Vec<&str> = port_cmds.iter().map(|(p, _, _)| p.as_str()).collect();
+                entry.adapter.stop_ports(&port_strs)?;
+            }
         }
-        for (name, port_cmds) in seq {
-            let entry = self.devices.get_mut(&name).unwrap();
-            let port_strs: Vec<&str> = port_cmds.iter().map(|(p, _, _)| p.as_str()).collect();
-            entry.adapter.stop_ports(&port_strs)?;
+        // Reconcile last_sent for the whole selection (now stopped).
+        for qp in ports {
+            self.record_output_sent(qp);
         }
         Ok(())
     }
@@ -538,6 +615,10 @@ impl PortManager {
                 if entry.adapter.connected() {
                     let _ = entry.adapter.stop_port(&qp.port);
                 }
+                // Flash toggled the hardware outside last_sent's knowledge and we
+                // just stopped it; drop the record so the next on/off/setpower
+                // sends fresh rather than de-duping against a stale state.
+                entry.last_sent.remove(&qp.port);
             }
         }
     }
@@ -756,7 +837,13 @@ impl PortManager {
             adapter.run_ports_for_time(commands, tenths)
         });
 
-        for qp in &ports { self.get_state(qp).is_running = false; }
+        // These ops drive the motor then leave it stopped — reconcile last_sent
+        // so a following identical `on` isn't wrongly de-duped (the motor must
+        // restart).
+        for qp in &ports {
+            self.get_state(qp).is_running = false;
+            self.record_output_sent(qp);
+        }
         result
     }
 
@@ -774,7 +861,13 @@ impl PortManager {
             adapter.rotate_ports_by_degrees(commands, degrees)
         });
 
-        for qp in &ports { self.get_state(qp).is_running = false; }
+        // These ops drive the motor then leave it stopped — reconcile last_sent
+        // so a following identical `on` isn't wrongly de-duped (the motor must
+        // restart).
+        for qp in &ports {
+            self.get_state(qp).is_running = false;
+            self.record_output_sent(qp);
+        }
         result
     }
 
@@ -792,7 +885,13 @@ impl PortManager {
             adapter.rotate_ports_to_position(commands, position)
         });
 
-        for qp in &ports { self.get_state(qp).is_running = false; }
+        // These ops drive the motor then leave it stopped — reconcile last_sent
+        // so a following identical `on` isn't wrongly de-duped (the motor must
+        // restart).
+        for qp in &ports {
+            self.get_state(qp).is_running = false;
+            self.record_output_sent(qp);
+        }
         result
     }
 
@@ -824,7 +923,13 @@ impl PortManager {
             adapter.rotate_ports_to_abs(commands, position)
         });
 
-        for qp in &ports { self.get_state(qp).is_running = false; }
+        // These ops drive the motor then leave it stopped — reconcile last_sent
+        // so a following identical `on` isn't wrongly de-duped (the motor must
+        // restart).
+        for qp in &ports {
+            self.get_state(qp).is_running = false;
+            self.record_output_sent(qp);
+        }
         result
     }
 
@@ -947,12 +1052,31 @@ impl PortManager {
             return entry.adapter.read_sensor(&qp.port, mode);
         }
 
-        let mut results = Vec::new();
-        for qp in &ports {
-            let entry = self.devices.get_mut(&qp.device_name).unwrap();
-            let val = entry.adapter.read_sensor(&qp.port, mode)?;
-            results.push(val.unwrap_or(LogoValue::Word("false".to_string())));
+        // Multiple ports: batch the read per device (one round-trip per device
+        // for adapters that support it — e.g. Interface A's get_inputs), then
+        // reassemble in the original selection order.
+        let mut order: Vec<String> = Vec::new();
+        let mut by_device: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, qp) in ports.iter().enumerate() {
+            if !by_device.contains_key(&qp.device_name) {
+                order.push(qp.device_name.clone());
+            }
+            by_device.entry(qp.device_name.clone()).or_default().push(i);
         }
+        let mut scattered: Vec<Option<LogoValue>> = vec![None; ports.len()];
+        for name in order {
+            let idxs = by_device.remove(&name).unwrap();
+            let port_refs: Vec<&str> = idxs.iter().map(|&i| ports[i].port.as_str()).collect();
+            let entry = self.devices.get_mut(&name).unwrap();
+            let vals = entry.adapter.read_sensors(&port_refs, mode)?;
+            for (k, i) in idxs.into_iter().enumerate() {
+                scattered[i] = vals.get(k).cloned().flatten();
+            }
+        }
+        let results: Vec<LogoValue> = scattered
+            .into_iter()
+            .map(|v| v.unwrap_or(LogoValue::Word("false".to_string())))
+            .collect();
         Ok(Some(LogoValue::List(results)))
     }
 

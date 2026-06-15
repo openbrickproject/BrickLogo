@@ -1,5 +1,5 @@
 use super::*;
-use crate::adapter::{HardwareAdapter, PortDirection};
+use crate::adapter::{HardwareAdapter, PortCommand, PortDirection};
 use crate::shared_brick_interface::SharedBrickInterface;
 use rust_brickinterface::{BrickInterface, BrickInterfaceTransport};
 use rust_brickinterface::protocol::build_frame;
@@ -82,6 +82,34 @@ fn test_start_port_sends_masked_set_outputs() {
 }
 
 #[test]
+fn test_start_ports_batches_into_one_frame() {
+    // talkto [0 1] on → both outputs in a single set_outputs frame.
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses); // only ONE reply — proves a single write
+    let cmds = vec![
+        PortCommand { port: "0", direction: PortDirection::Even, power: 100 },
+        PortCommand { port: "1", direction: PortDirection::Even, power: 200 },
+    ];
+    adapter.start_ports(&cmds).unwrap();
+
+    let w = written.lock().unwrap();
+    assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
+    // mask 0x03 (ports 0+1), then a duty per set bit in ascending order.
+    assert_eq!(written_payload(&w), &[0x03, 100, 200]);
+}
+
+#[test]
+fn test_stop_ports_batches_into_one_frame() {
+    let (mut adapter, written, responses) = make_adapter();
+    enqueue_ok(&responses);
+    adapter.stop_ports(&["0", "1"]).unwrap();
+
+    let w = written.lock().unwrap();
+    assert_eq!(written_cmd(&w), CMD_IFACE_SET_OUTPUTS);
+    assert_eq!(written_payload(&w), &[0x03, 0, 0]);
+}
+
+#[test]
 fn test_start_port_direction_is_ignored() {
     let (mut a1, w1, r1) = make_adapter();
     let (mut a2, w2, r2) = make_adapter();
@@ -150,7 +178,7 @@ fn test_disconnect_zeroes_all_outputs() {
 #[test]
 fn test_read_sensor_input6_closed_returns_true() {
     let (mut adapter, _, responses) = make_adapter();
-    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x00]);
+    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x01]); // bit 0 set = closed (pressed)
     let val = adapter.read_sensor("6", None).unwrap().unwrap();
     assert_eq!(val.as_string(), "true");
 }
@@ -158,7 +186,7 @@ fn test_read_sensor_input6_closed_returns_true() {
 #[test]
 fn test_read_sensor_input6_open_returns_false() {
     let (mut adapter, _, responses) = make_adapter();
-    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x01]); // bit 0 set = open
+    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x00]); // bit 0 clear = open
     let val = adapter.read_sensor("6", None).unwrap().unwrap();
     assert_eq!(val.as_string(), "false");
 }
@@ -166,7 +194,7 @@ fn test_read_sensor_input6_open_returns_false() {
 #[test]
 fn test_read_sensor_input7_closed_returns_true() {
     let (mut adapter, _, responses) = make_adapter();
-    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x00]);
+    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x02]); // bit 1 set = closed (pressed)
     let val = adapter.read_sensor("7", None).unwrap().unwrap();
     assert_eq!(val.as_string(), "true");
 }
@@ -174,21 +202,36 @@ fn test_read_sensor_input7_closed_returns_true() {
 #[test]
 fn test_read_sensor_input7_open_returns_false() {
     let (mut adapter, _, responses) = make_adapter();
-    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x02]); // bit 1 set = open
+    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x00]); // bit 1 clear = open
     let val = adapter.read_sensor("7", None).unwrap().unwrap();
     assert_eq!(val.as_string(), "false");
 }
 
 #[test]
 fn test_read_sensor_inputs_are_independent() {
-    // 0x01: bit0 set (input 6 open), bit1 clear (input 7 closed)
+    // 0x01: bit0 set (input 6 pressed), bit1 clear (input 7 released)
     let (mut adapter, _, responses) = make_adapter();
     enqueue(&responses, REPLY_IFACE_INPUTS, &[0x01]);
     enqueue(&responses, REPLY_IFACE_INPUTS, &[0x01]);
     let v6 = adapter.read_sensor("6", None).unwrap().unwrap();
     let v7 = adapter.read_sensor("7", None).unwrap().unwrap();
-    assert_eq!(v6.as_string(), "false");
-    assert_eq!(v7.as_string(), "true");
+    assert_eq!(v6.as_string(), "true");
+    assert_eq!(v7.as_string(), "false");
+}
+
+#[test]
+fn test_read_sensors_one_round_trip() {
+    // listento [6 7]; sensor "touch reads both from a single get_inputs.
+    let (mut adapter, _written, responses) = make_adapter();
+    enqueue(&responses, REPLY_IFACE_INPUTS, &[0x01]); // ONE reply: bit0 pressed, bit1 released
+    let vals = adapter.read_sensors(&["6", "7"], None).unwrap();
+    assert_eq!(
+        vals,
+        vec![
+            Some(LogoValue::Word("true".to_string())),
+            Some(LogoValue::Word("false".to_string())),
+        ]
+    );
 }
 
 // ── Counter behaviour ─────────────────────────────────────────────────────────
