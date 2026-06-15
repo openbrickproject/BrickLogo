@@ -138,6 +138,17 @@ impl PoweredUpAdapter {
             Ok(())
         }
     }
+
+    /// Resolve a port that must be the hub LED, for color output.
+    fn require_hub_led(&self, port: &str) -> Result<u8, String> {
+        let port_id = self.resolve_port_id(port)?;
+        let hub = self.ble.hub().lock().unwrap();
+        match hub.get_device(port_id) {
+            Some(device) if device.device_type == DeviceType::HubLed => Ok(port_id),
+            Some(_) => Err(format!("Port \"{}\" is not an RGB light", port)),
+            None => Err(format!("No device on port \"{}\"", port)),
+        }
+    }
 }
 
 /// Map internal device types to port names for sensors built into the hub.
@@ -221,6 +232,9 @@ impl HardwareAdapter for PoweredUpAdapter {
         let hub = self.ble.hub().lock().unwrap();
         match hub.get_device(port_id) {
             Some(device) if device.device_type.is_power_output() => Ok(()),
+            // The hub LED is an output (color), just not a power output, so it
+            // must be accepted here for setcolor/setrgb to reach it.
+            Some(device) if device.device_type == DeviceType::HubLed => Ok(()),
             Some(_) => Err(format!("Port \"{}\" is not a motor or light", port)),
             None => Err(format!("No device on port \"{}\"", port)),
         }
@@ -265,6 +279,23 @@ impl HardwareAdapter for PoweredUpAdapter {
             protocol::cmd_motor_stop(port_id, true)
         };
         self.ble.send(&cmd)
+    }
+
+    fn set_color(&mut self, port: &str, id: u8) -> Result<(), String> {
+        self.reject_if_wedo2("hub LED color")?;
+        let port_id = self.require_hub_led(port)?;
+        // Select the color-index mode, then write the color (mirrors
+        // node-poweredup's HubLED.setColor).
+        self.ble.subscribe(port_id, 0x00)?;
+        self.ble.send(&protocol::cmd_set_led_color(port_id, id))
+    }
+
+    fn set_rgb(&mut self, port: &str, rgb: (u8, u8, u8)) -> Result<(), String> {
+        self.reject_if_wedo2("hub LED color")?;
+        let port_id = self.require_hub_led(port)?;
+        // Select the RGB mode, then write the color.
+        self.ble.subscribe(port_id, 0x01)?;
+        self.ble.send(&protocol::cmd_set_led_rgb(port_id, rgb.0, rgb.1, rgb.2))
     }
 
     fn run_port_for_time(

@@ -271,6 +271,33 @@ pub fn cmd_motor_brake(port_id: u8, interrupt: bool) -> Vec<u8> {
     ])
 }
 
+/// Encode a hub-LED discrete color (RGB Light device, mode 0 = color index).
+/// The color is one of the LWP3 palette ids (0..10); see the `Color` enum.
+pub fn cmd_set_led_color(port_id: u8, color: u8) -> Vec<u8> {
+    frame_message(&[
+        MessageType::PortOutputCommand as u8,
+        port_id,
+        0x11,
+        SUBCMD_WRITE_DIRECT_MODE,
+        0x00, // mode 0 = color index
+        color,
+    ])
+}
+
+/// Encode a hub-LED absolute RGB color (RGB Light device, mode 1 = RGB).
+pub fn cmd_set_led_rgb(port_id: u8, r: u8, g: u8, b: u8) -> Vec<u8> {
+    frame_message(&[
+        MessageType::PortOutputCommand as u8,
+        port_id,
+        0x11,
+        SUBCMD_WRITE_DIRECT_MODE,
+        0x01, // mode 1 = absolute RGB
+        r,
+        g,
+        b,
+    ])
+}
+
 /// Encode setSpeed (run indefinitely at speed).
 pub fn cmd_start_speed(port_id: u8, speed: i8, max_power: u8, interrupt: bool) -> Vec<u8> {
     let sc = if interrupt { 0x11 } else { 0x01 };

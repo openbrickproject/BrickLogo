@@ -136,6 +136,7 @@ dependencies = [
  "rust-poweredup",
  "rust-rcx",
  "rust-spike",
+ "rust-toypad",
  "rust-wedo",
  "serde_json",
  "serialport",
@@ -1218,6 +1219,13 @@ dependencies = [
  "crc32fast",
  "flate2",
  "rusb",
+]
+
+[[package]]
+name = "rust-toypad"
+version = "0.1.0"
+dependencies = [
+ "hidapi",
 ]
 
 [[package]]

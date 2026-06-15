@@ -636,6 +636,63 @@ impl PortManager {
         Ok(())
     }
 
+    /// Group selected ports by device, preserving first-seen order. Used by the
+    /// color fan-out so several ports on one device become one batch command.
+    fn group_ports_by_device(&self, ports: &[QualifiedPort]) -> Vec<(String, Vec<String>)> {
+        let mut order: Vec<String> = Vec::new();
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for qp in ports {
+            if !map.contains_key(&qp.device_name) {
+                order.push(qp.device_name.clone());
+            }
+            map.entry(qp.device_name.clone()).or_default().push(qp.port.clone());
+        }
+        order
+            .into_iter()
+            .map(|name| {
+                let ports = map.remove(&name).unwrap();
+                (name, ports)
+            })
+            .collect()
+    }
+
+    /// Set a discrete color id on the selected outputs. Color is sent directly
+    /// (no `last_sent` de-dup — it's user-driven and infrequent). Multiple ports
+    /// on one device go out as a single batch command. The adapter's
+    /// "not supported" error (e.g. ToyPad's setrgb hint) propagates verbatim.
+    pub fn set_color(&mut self, port_strs: &[String], id: u8) -> Result<(), String> {
+        let ports = self.resolve_ports(port_strs)?;
+        for qp in &ports {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        for (name, port_names) in self.group_ports_by_device(&ports) {
+            let entry = self.devices.get_mut(&name).unwrap();
+            let cmds: Vec<(&str, u8)> = port_names.iter().map(|p| (p.as_str(), id)).collect();
+            entry.adapter.set_color_ports(&cmds)?;
+        }
+        Ok(())
+    }
+
+    /// Set an absolute RGB color on the selected outputs. See [`set_color`] for
+    /// the de-dup and batching notes.
+    pub fn set_rgb(&mut self, port_strs: &[String], rgb: (u8, u8, u8)) -> Result<(), String> {
+        let ports = self.resolve_ports(port_strs)?;
+        for qp in &ports {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        for (name, port_names) in self.group_ports_by_device(&ports) {
+            let entry = self.devices.get_mut(&name).unwrap();
+            let cmds: Vec<(&str, (u8, u8, u8))> =
+                port_names.iter().map(|p| (p.as_str(), rgb)).collect();
+            entry.adapter.set_rgb_ports(&cmds)?;
+        }
+        Ok(())
+    }
+
     pub fn on(&mut self, port_strs: &[String]) -> Result<(), String> {
         let ports = self.resolve_ports(port_strs)?;
         for qp in &ports {

@@ -9,6 +9,7 @@ pub mod poweredup_adapter;
 pub mod rcx_adapter;
 pub mod spike_adapter;
 pub mod spike_ble_transport;
+pub mod toypad_adapter;
 pub mod wedo_adapter;
 
 /// Retry a BLE connect operation that may panic due to bluez-async D-Bus race conditions.

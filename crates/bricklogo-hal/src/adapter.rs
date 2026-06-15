@@ -129,6 +129,38 @@ pub trait HardwareAdapter: Send {
         Err("This device does not support counters".to_string())
     }
 
+    // ── Color output (default: not supported) ────
+
+    /// Set a discrete color id (e.g. the LWP3 named palette) on a port.
+    /// Overridden by color-id-capable adapters (Powered UP hub LED).
+    fn set_color(&mut self, _port: &str, _id: u8) -> Result<(), String> {
+        Err("This device does not support setcolor".to_string())
+    }
+
+    /// Set an absolute RGB color on a port. Overridden by RGB-capable adapters
+    /// (ToyPad pads, Powered UP hub LED).
+    fn set_rgb(&mut self, _port: &str, _rgb: (u8, u8, u8)) -> Result<(), String> {
+        Err("This device does not support setrgb".to_string())
+    }
+
+    /// Set a discrete color on multiple ports. Default loops the single-port
+    /// version; adapters with an all-ports opcode (ToyPad) override this.
+    fn set_color_ports(&mut self, commands: &[(&str, u8)]) -> Result<(), String> {
+        for (port, id) in commands {
+            self.set_color(port, *id)?;
+        }
+        Ok(())
+    }
+
+    /// Set RGB on multiple ports. Default loops the single-port version;
+    /// the ToyPad overrides this to use one `SetColorAll` command.
+    fn set_rgb_ports(&mut self, commands: &[(&str, (u8, u8, u8))]) -> Result<(), String> {
+        for (port, rgb) in commands {
+            self.set_rgb(port, *rgb)?;
+        }
+        Ok(())
+    }
+
     /// Whether this adapter can safely fire in parallel with other adapters.
     /// Adapters that use IR transmissions (Power Functions, Legacy, RCX) return
     /// false — simultaneous IR bursts from different BrickInterface devices

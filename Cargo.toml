@@ -15,6 +15,7 @@ members = [
     "crates/rust-spike",
     "crates/rust-brickinterface",
     "crates/rust-stm32dfu",
+    "crates/rust-toypad",
     "crates/bricklogo-net",
 ]
 resolver = "2"

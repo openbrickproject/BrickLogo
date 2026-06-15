@@ -193,7 +193,7 @@ fn test_bridge_connect_rejects_unknown_type() {
     let err = eval.evaluate("connectto \"nope \"bot").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
+        "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
     );
 }
 
@@ -601,4 +601,128 @@ fn test_sensor_query_single_port_list_reading_is_one_boolean() {
     eval.evaluate("listento [a]").unwrap();
     let result = eval.evaluate("sensor?").unwrap();
     assert_eq!(result, Some(LogoValue::Word("true".to_string())));
+}
+
+#[test]
+fn test_sensor_query_propagates_read_error() {
+    // A read error (here: a port on a device that doesn't exist) must surface,
+    // not be swallowed into a bare `false`.
+    let (mut eval, pm) = setup_eval();
+    pm.lock().unwrap().add_device(
+        "s",
+        Box::new(SensorMock::new(&[("a", LogoValue::Number(1.0))])),
+        "pup",
+    );
+    eval.evaluate("listento \"ghost.x").unwrap();
+    assert!(eval.evaluate("sensor?").is_err());
+}
+
+// ── setcolor / setrgb ───────────────────────
+
+/// Adapter that records color-output calls so the bridge primitives can be
+/// tested end to end.
+struct ColorMock {
+    ports: Vec<String>,
+    rgb: Arc<Mutex<Vec<(String, (u8, u8, u8))>>>,
+    color: Arc<Mutex<Vec<(String, u8)>>>,
+}
+
+type RgbLog = Arc<Mutex<Vec<(String, (u8, u8, u8))>>>;
+type ColorLog = Arc<Mutex<Vec<(String, u8)>>>;
+
+impl ColorMock {
+    fn new(ports: &[&str]) -> (Self, RgbLog, ColorLog) {
+        let rgb: RgbLog = Arc::new(Mutex::new(Vec::new()));
+        let color: ColorLog = Arc::new(Mutex::new(Vec::new()));
+        let mock = ColorMock {
+            ports: ports.iter().map(|s| s.to_string()).collect(),
+            rgb: rgb.clone(),
+            color: color.clone(),
+        };
+        (mock, rgb, color)
+    }
+}
+
+impl HardwareAdapter for ColorMock {
+    fn display_name(&self) -> &str { "ColorMock" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, port: &str) -> Result<(), String> {
+        if self.ports.iter().any(|p| p == port) { Ok(()) } else { Err(format!("bad port {port}")) }
+    }
+    fn validate_sensor_port(&self, _: &str, _: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 100 }
+    fn start_port(&mut self, _: &str, _: PortDirection, _: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _: &str, _: PortDirection, _: u8, _: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _: &str, _: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    fn set_color(&mut self, port: &str, id: u8) -> Result<(), String> {
+        self.color.lock().unwrap().push((port.to_string(), id));
+        Ok(())
+    }
+    fn set_rgb(&mut self, port: &str, rgb: (u8, u8, u8)) -> Result<(), String> {
+        self.rgb.lock().unwrap().push((port.to_string(), rgb));
+        Ok(())
+    }
+}
+
+#[test]
+fn test_setrgb_calls_adapter() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, rgb, _color) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    eval.evaluate("setrgb [255 0 128]").unwrap();
+    assert_eq!(*rgb.lock().unwrap(), vec![("a".to_string(), (255, 0, 128))]);
+}
+
+#[test]
+fn test_setcolor_accepts_name_and_id() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, _rgb, color) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    eval.evaluate("setcolor \"red").unwrap(); // name → id 9
+    eval.evaluate("setcolor 3").unwrap();      // raw id
+    assert_eq!(
+        *color.lock().unwrap(),
+        vec![("a".to_string(), 9), ("a".to_string(), 3)]
+    );
+}
+
+#[test]
+fn test_setcolor_unknown_name_errors() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, _, _) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    let err = eval.evaluate("setcolor \"chartreuse").unwrap_err();
+    assert!(err.to_string().contains("unknown color"), "got: {}", err);
+}
+
+#[test]
+fn test_setrgb_rejects_bad_args() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, _, _) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    assert!(eval.evaluate("setrgb [255 0]").is_err()); // wrong length
+    assert!(eval.evaluate("setrgb [300 0 0]").is_err()); // out of range
+    assert!(eval.evaluate("setrgb 5").is_err()); // not a list
+}
+
+#[test]
+fn test_setrgb_not_supported_propagates() {
+    let (mut eval, pm) = setup_eval();
+    pm.lock().unwrap().add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    let err = eval.evaluate("setrgb [1 2 3]").unwrap_err();
+    assert!(err.to_string().contains("does not support"), "got: {}", err);
 }

@@ -253,3 +253,17 @@ fn test_feedback_flags() {
     assert!(fb.is_buffer_empty());
     assert!(!fb.is_discarded());
 }
+
+#[test]
+fn test_cmd_set_led_color() {
+    // mode 0 (color index) write to the hub LED on port 50.
+    let msg = cmd_set_led_color(50, 9);
+    assert_eq!(msg, vec![0x08, 0x00, 0x81, 50, 0x11, 0x51, 0x00, 9]);
+}
+
+#[test]
+fn test_cmd_set_led_rgb() {
+    // mode 1 (absolute RGB) write to the hub LED on port 50.
+    let msg = cmd_set_led_rgb(50, 0xff, 0x80, 0x00);
+    assert_eq!(msg, vec![0x0a, 0x00, 0x81, 50, 0x11, 0x51, 0x01, 0xff, 0x80, 0x00]);
+}

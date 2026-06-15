@@ -9,6 +9,7 @@ use bricklogo_hal::adapters::nxt_adapter::NxtAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::spike_adapter::SpikeAdapter;
+use bricklogo_hal::adapters::toypad_adapter::ToyPadAdapter;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
 use bricklogo_hal::port_manager::PortManager;
 use bricklogo_hal::shared_brick_interface::SharedBrickInterface;
@@ -29,6 +30,8 @@ pub struct BrickLogoConfig {
     pub brickinterface: Vec<String>,
     #[serde(default)]
     pub wedo: Vec<String>,
+    #[serde(default)]
+    pub toypad: Vec<String>,
     #[serde(default)]
     pub pup: Vec<String>,
     #[serde(default)]
@@ -85,6 +88,26 @@ impl BrickLogoConfig {
             }
         }
     }
+}
+
+/// Resolve a color name to a discrete color id. The names and ids are the LWP3
+/// palette (shared with the Powered UP hub LED); `off`/`none` map to black (0),
+/// which turns the LED off.
+fn color_name_to_id(name: &str) -> Option<u8> {
+    Some(match name {
+        "black" | "off" | "none" => 0,
+        "pink" => 1,
+        "purple" => 2,
+        "blue" => 3,
+        "lightblue" => 4,
+        "cyan" => 5,
+        "green" => 6,
+        "yellow" => 7,
+        "orange" => 8,
+        "red" => 9,
+        "white" => 10,
+        _ => return None,
+    })
 }
 
 /// Register all hardware and system primitives into the evaluator.
@@ -255,6 +278,15 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "toypad" => {
+                        let identifier = next_config_entry(&config.toypad, &mut indices, "toypad");
+                        let mut adapter = ToyPadAdapter::new(identifier.as_deref());
+                        system_fn_ref("Scanning for LEGO Dimensions ToyPad...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     "controllab" => {
                         let serial_path =
                             next_config_entry(&config.controllab, &mut indices, "controllab")
@@ -357,7 +389,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
+                            "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
                                 .to_string(),
                         ));
                     }
@@ -686,6 +718,72 @@ pub fn register_hardware_primitives(
         }),
     });
 
+    // ── Color output ────────────────────────────
+
+    let pm_ref = pm.clone();
+    eval.register_primitive("setcolor", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            // Overloaded: a color name (resolved to an id) or a raw id number.
+            let id = if let Ok(n) = args[0].as_number() {
+                if !n.is_finite() || n < 0.0 || n > 255.0 {
+                    return Err(LogoError::Runtime(format!(
+                        "setcolor: color id must be 0-255, got {}",
+                        n
+                    )));
+                }
+                n as u8
+            } else {
+                let name = args[0].as_string().to_lowercase();
+                color_name_to_id(&name).ok_or_else(|| {
+                    LogoError::Runtime(format!(
+                        "setcolor: unknown color \"{}\" (try \"red\", \"green\", \"blue\", \"yellow\", \"white\", \"off\", ...)",
+                        name
+                    ))
+                })?
+            };
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_color(&ports, id).map_err(LogoError::Runtime)?;
+            Ok(None)
+        }),
+    });
+
+    let pm_ref = pm.clone();
+    eval.register_primitive("setrgb", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let list = match &args[0] {
+                LogoValue::List(items) => items,
+                _ => return Err(LogoError::Runtime(
+                    "setrgb: expected a list [r g b] with values 0-255".to_string(),
+                )),
+            };
+            if list.len() != 3 {
+                return Err(LogoError::Runtime(format!(
+                    "setrgb: expected [r g b] with 3 values, got {}",
+                    list.len()
+                )));
+            }
+            let mut rgb = [0u8; 3];
+            for (i, item) in list.iter().enumerate() {
+                let n = item.as_number().map_err(|_| {
+                    LogoError::Runtime("setrgb: r, g, b must be numbers 0-255".to_string())
+                })?;
+                if !n.is_finite() || n < 0.0 || n > 255.0 {
+                    return Err(LogoError::Runtime(format!(
+                        "setrgb: each value must be 0-255, got {}",
+                        n
+                    )));
+                }
+                rgb[i] = n as u8;
+            }
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().set_rgb(&ports, (rgb[0], rgb[1], rgb[2]))
+                .map_err(LogoError::Runtime)?;
+            Ok(None)
+        }),
+    });
+
     // ── Sensor primitives ───────────────────────
 
     eval.register_primitive("listento", PrimitiveSpec {
@@ -741,7 +839,10 @@ pub fn register_hardware_primitives(
                     vals.iter().map(|v| bool_word(truthy(v))).collect(),
                 ))),
                 Ok(Some(val)) => Ok(Some(bool_word(truthy(&val)))),
-                _ => Ok(Some(bool_word(false))),
+                // No reading available → false; but a real error (invalid port,
+                // disconnected device) must surface, like `sensor` does.
+                Ok(None) => Ok(Some(bool_word(false))),
+                Err(e) => Err(LogoError::Runtime(e)),
             }
         }),
     });

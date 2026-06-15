@@ -17,6 +17,7 @@ rust-ev3 = { path = "../rust-ev3" }
 rust-nxt = { path = "../rust-nxt" }
 rust-brickinterface = { path = "../rust-brickinterface" }
 rust-spike = { path = "../rust-spike" }
+rust-toypad = { path = "../rust-toypad" }
 lazy_static = "1"
 hidapi = "2.6"
 serialport = "4"

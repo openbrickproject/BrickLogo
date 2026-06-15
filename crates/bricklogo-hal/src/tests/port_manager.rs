@@ -688,3 +688,79 @@ fn test_set_power_after_one_port_off_transmits_only_the_running_port() {
     let b = batches.lock().unwrap();
     assert_eq!(b[2], vec![("a".to_string(), 3), ("b".to_string(), 3)]);
 }
+
+/// Adapter recording batch color calls, to verify PortManager fan-out groups
+/// multiple ports on one device into a single batch command.
+struct ColorBatchAdapter {
+    ports: Vec<String>,
+    rgb_batches: std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, (u8, u8, u8))>>>>,
+}
+
+impl ColorBatchAdapter {
+    fn new(ports: &[&str]) -> (Self, std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, (u8, u8, u8))>>>>) {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let me = ColorBatchAdapter {
+            ports: ports.iter().map(|s| s.to_string()).collect(),
+            rgb_batches: log.clone(),
+        };
+        (me, log)
+    }
+}
+
+impl HardwareAdapter for ColorBatchAdapter {
+    fn display_name(&self) -> &str { "ColorBatch" }
+    fn output_ports(&self) -> &[String] { &self.ports }
+    fn input_ports(&self) -> &[String] { &[] }
+    fn connected(&self) -> bool { true }
+    fn connect(&mut self) -> Result<(), String> { Ok(()) }
+    fn disconnect(&mut self) {}
+    fn validate_output_port(&self, port: &str) -> Result<(), String> {
+        if self.ports.iter().any(|p| p == port) { Ok(()) } else { Err(format!("bad port {port}")) }
+    }
+    fn validate_sensor_port(&self, _: &str, _: Option<&str>) -> Result<(), String> { Ok(()) }
+    fn max_power(&self) -> u8 { 100 }
+    fn start_port(&mut self, _: &str, _: PortDirection, _: u8) -> Result<(), String> { Ok(()) }
+    fn stop_port(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn run_port_for_time(&mut self, _: &str, _: PortDirection, _: u8, _: u32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_by_degrees(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn rotate_port_to_position(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn reset_port_zero(&mut self, _: &str) -> Result<(), String> { Ok(()) }
+    fn rotate_to_abs(&mut self, _: &str, _: PortDirection, _: u8, _: i32) -> Result<(), String> { Ok(()) }
+    fn read_sensor(&mut self, _: &str, _: Option<&str>) -> Result<Option<LogoValue>, String> { Ok(None) }
+    fn set_rgb_ports(&mut self, commands: &[(&str, (u8, u8, u8))]) -> Result<(), String> {
+        self.rgb_batches
+            .lock()
+            .unwrap()
+            .push(commands.iter().map(|(p, c)| (p.to_string(), *c)).collect());
+        Ok(())
+    }
+}
+
+#[test]
+fn test_set_rgb_groups_ports_into_one_batch() {
+    let mut pm = PortManager::new();
+    let (adapter, log) = ColorBatchAdapter::new(&["left", "right"]);
+    pm.add_device("pad", Box::new(adapter), "toypad");
+    pm.set_rgb(&["left".to_string(), "right".to_string()], (255, 0, 0)).unwrap();
+
+    let batches = log.lock().unwrap();
+    assert_eq!(batches.len(), 1, "two pads on one device → one batch call");
+    assert_eq!(
+        batches[0],
+        vec![("left".to_string(), (255, 0, 0)), ("right".to_string(), (255, 0, 0))]
+    );
+}
+
+#[test]
+fn test_set_rgb_not_supported_propagates() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    assert!(pm.set_rgb(&["a".to_string()], (1, 2, 3)).is_err());
+}
+
+#[test]
+fn test_set_color_not_supported_propagates() {
+    let mut pm = PortManager::new();
+    pm.add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    assert!(pm.set_color(&["a".to_string()], 9).is_err());
+}
