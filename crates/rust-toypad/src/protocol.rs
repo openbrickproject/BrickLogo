@@ -6,8 +6,8 @@
 //! (first byte `0x56`).
 
 use crate::constants::{
-    Action, Panel, CMD_ACTION, MSG_EVENT, MSG_RESPONSE, PACKET_LENGTH, REQ_LIST_TAGS,
-    REQ_READ_TAG, REQ_SET_COLOR, REQ_SET_COLOR_ALL,
+    Action, Panel, CMD_ACTION, MSG_EVENT, MSG_RESPONSE, PACKET_LENGTH, REQ_FADE, REQ_FADE_ALL,
+    REQ_LIST_TAGS, REQ_READ_TAG, REQ_SET_COLOR, REQ_SET_COLOR_ALL,
 };
 
 /// An outgoing command: a request id byte plus parameter bytes.
@@ -147,6 +147,46 @@ pub fn create_set_color_all(
     }
     Command {
         id: REQ_SET_COLOR_ALL,
+        params,
+    }
+}
+
+/// Per-pad fade parameters: ramp to `rgb` at `speed`, repeated `cycles` times.
+/// `speed` and `cycles` are passed to the ToyPad verbatim (their units are not
+/// yet calibrated — see `dev/SOURCES.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FadeSpec {
+    pub speed: u8,
+    pub cycles: u8,
+    pub rgb: (u8, u8, u8),
+}
+
+/// Fade a single pad toward an RGB color.
+pub fn create_fade(panel: Panel, spec: FadeSpec) -> Command {
+    Command {
+        id: REQ_FADE,
+        params: vec![panel as u8, spec.speed, spec.cycles, spec.rgb.0, spec.rgb.1, spec.rgb.2],
+    }
+}
+
+/// Fade all three pads in one command. `None` leaves a pad unchanged.
+/// Order on the wire is center, left, right; each pad is 6 bytes:
+/// `[enabled, speed, cycles, r, g, b]`. (The leading enable byte is required —
+/// node-toypad's `FadeAll` omits it, which shifts every field by one.)
+pub fn create_fade_all(
+    center: Option<FadeSpec>,
+    left: Option<FadeSpec>,
+    right: Option<FadeSpec>,
+) -> Command {
+    let mut params = Vec::with_capacity(18);
+    for pad in [center, left, right] {
+        match pad {
+            Some(s) => params.extend_from_slice(&[1, s.speed, s.cycles, s.rgb.0, s.rgb.1, s.rgb.2]),
+            None => params.extend_from_slice(&[0, 0, 0, 0, 0, 0]),
+        }
+    }
+    Command {
+        id: REQ_FADE_ALL,
         params,
     }
 }

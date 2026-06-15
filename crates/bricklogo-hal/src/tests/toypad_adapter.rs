@@ -295,6 +295,35 @@ fn set_rgb_writes_set_color() {
 }
 
 #[test]
+fn fade_writes_fade_command() {
+    let (mut adapter, mock) = make_scheduled();
+    adapter.fade_rgb("left", (0x12, 0x34, 0x56)).unwrap();
+    adapter.disconnect();
+    let writes = mock.lock().unwrap().writes.clone();
+    let frame = writes.iter().find(|f| f[2] == 0xc2).expect("a Fade write");
+    // params at byte 4: [panel, speed, cycles, r, g, b] — speed/cycles are the
+    // fixed constants (the firmware ignores them).
+    assert_eq!(&frame[4..10], &[2, 10, 1, 0x12, 0x34, 0x56]);
+}
+
+#[test]
+fn fade_ports_multi_uses_fade_all() {
+    let (mut adapter, mock) = make_scheduled();
+    adapter
+        .fade_rgb_ports(&[("left", (0xff, 0, 0)), ("right", (0, 0, 0xff))])
+        .unwrap();
+    adapter.disconnect();
+    let writes = mock.lock().unwrap().writes.clone();
+    let frame = writes.iter().find(|f| f[2] == 0xc6).expect("a FadeAll write");
+    // center disabled; left (red) and right (blue), each pad
+    // [enabled, speed, cycles, r, g, b] with the fixed speed/cycles.
+    assert_eq!(
+        &frame[4..22],
+        &[0, 0, 0, 0, 0, 0, 1, 10, 1, 0xff, 0, 0, 1, 10, 1, 0, 0, 0xff]
+    );
+}
+
+#[test]
 fn set_rgb_ports_multi_uses_set_color_all() {
     let (mut adapter, mock) = make_scheduled();
     adapter

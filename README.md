@@ -55,6 +55,7 @@ Connected to Boost Move Hub as "mybot"
 | LEGO® Education Science | `connectto "science "name` | Double Motor, Single Motor, Color Sensor, Controller |
 | LEGO Powered UP | `connectto "pup "name` | Boost Move Hub, Powered UP Hub, WeDo 2.0, Technic Hub, Remote, Duplo Train |
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
+| LEGO Dimensions ToyPad | `connectto "toypad "name` | NFC tag reader with RGB-lit pads via USB |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
 | LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |

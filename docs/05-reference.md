@@ -40,6 +40,7 @@ Scans for and connects to a LEGO device. The *type* tells BrickLogo what kind of
 | `"science` | LEGO Education Science (Coral) — Single Motor, Double Motor, Color Sensor, Controller |
 | `"pup` | LEGO Powered UP — Move Hub, Powered UP Hub, Technic hubs, Remote Control, Duplo Train Base |
 | `"wedo` | LEGO Education WeDo 1.0 — USB Hub |
+| `"toypad` | LEGO Dimensions ToyPad — NFC tag reader with RGB-lit pads, via USB |
 | `"controllab` | LEGO DACTA Control Lab — Interface B over serial |
 | `"rcx` | LEGO Mindstorms RCX — via serial or USB IR tower |
 | `"nxt` | LEGO Mindstorms NXT 1.0 / 2.0 — via USB or Bluetooth |
@@ -349,6 +350,51 @@ Flashes half a second on, half a second off.
 ```
 
 Brief flash every second.
+
+### `setcolor`
+
+```
+setcolor color
+```
+
+Sets the color of the selected RGB lights, where *color* is a color name or a color ID number. Works on devices with a discrete color palette, such as the Powered UP hub's built-in light. Color names: `red`, `orange`, `yellow`, `green`, `cyan`, `blue`, `lightblue`, `purple`, `pink`, `white`, and `off`.
+
+```
+? talkto "led
+? setcolor "green
+```
+
+The ToyPad has no fixed palette and does not accept `setcolor` — use `setrgb` for it instead.
+
+### `setrgb`
+
+```
+setrgb [red green blue]
+```
+
+Sets the selected lights to an exact color from a list of three numbers, each 0–255. Works on full-color devices such as the LEGO Dimensions ToyPad pads and the Powered UP hub light. Selecting several lights and setting them in one `setrgb` changes them together.
+
+```
+? talkto ["left "right]
+? setrgb [255 0 0]
+```
+
+Lights the left and right ToyPad pads red. Set a light to `[0 0 0]` to turn it off.
+
+### `fadergb`
+
+```
+fadergb [red green blue]
+```
+
+Smoothly transitions the selected lights to a color over about a second, instead of changing instantly like `setrgb`. This is a LEGO Dimensions ToyPad hardware effect and is not available on other lights.
+
+```
+? talkto "left
+? fadergb [0 0 255]
+```
+
+Fades the left pad to blue.
 
 ### `alloff`
 

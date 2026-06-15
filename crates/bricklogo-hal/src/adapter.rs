@@ -161,6 +161,21 @@ pub trait HardwareAdapter: Send {
         Ok(())
     }
 
+    /// Smoothly transition a port to an RGB color (a hardware effect only the
+    /// ToyPad supports). Default: not supported.
+    fn fade_rgb(&mut self, _port: &str, _rgb: (u8, u8, u8)) -> Result<(), String> {
+        Err("This device does not support fadergb".to_string())
+    }
+
+    /// Fade multiple ports to the same color. Default loops the single-port
+    /// version; the ToyPad overrides this to use one `FadeAll`.
+    fn fade_rgb_ports(&mut self, commands: &[(&str, (u8, u8, u8))]) -> Result<(), String> {
+        for (port, rgb) in commands {
+            self.fade_rgb(port, *rgb)?;
+        }
+        Ok(())
+    }
+
     /// Whether this adapter can safely fire in parallel with other adapters.
     /// Adapters that use IR transmissions (Power Functions, Legacy, RCX) return
     /// false — simultaneous IR bursts from different BrickInterface devices

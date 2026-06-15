@@ -693,6 +693,25 @@ impl PortManager {
         Ok(())
     }
 
+    /// Smoothly transition the selected outputs to an RGB color. Same fan-out
+    /// and direct-send behavior as [`set_rgb`]; multiple ports on one device go
+    /// out as a single batch (the ToyPad `FadeAll`).
+    pub fn fade_rgb(&mut self, port_strs: &[String], rgb: (u8, u8, u8)) -> Result<(), String> {
+        let ports = self.resolve_ports(port_strs)?;
+        for qp in &ports {
+            let entry = self.devices.get(&qp.device_name)
+                .ok_or_else(|| format!("No device named \"{}\"", qp.device_name))?;
+            entry.adapter.validate_output_port(&qp.port)?;
+        }
+        for (name, port_names) in self.group_ports_by_device(&ports) {
+            let entry = self.devices.get_mut(&name).unwrap();
+            let cmds: Vec<(&str, (u8, u8, u8))> =
+                port_names.iter().map(|p| (p.as_str(), rgb)).collect();
+            entry.adapter.fade_rgb_ports(&cmds)?;
+        }
+        Ok(())
+    }
+
     pub fn on(&mut self, port_strs: &[String]) -> Result<(), String> {
         let ports = self.resolve_ports(port_strs)?;
         for qp in &ports {

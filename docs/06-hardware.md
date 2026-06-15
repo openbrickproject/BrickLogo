@@ -9,6 +9,7 @@ For the Logo primitives — `connectto`, `listento`, `sensor`, `rotate`, and the
 - [LEGO Education Science (Coral)](#lego-education-science-coral)
 - [LEGO Powered UP](#lego-powered-up)
 - [LEGO Education WeDo 1.0](#lego-education-wedo-10)
+- [LEGO Dimensions ToyPad](#lego-dimensions-toypad)
 - [LEGO DACTA Control Lab](#lego-dacta-control-lab)
 - [LEGO Interface A](#lego-interface-a)
 - [LEGO Power Functions](#lego-power-functions)
@@ -74,7 +75,7 @@ Connects via Bluetooth Low Energy. `connectto "pup` scans for any hub in the LEG
 | Duplo Train Base | a |
 | WeDo 2.0 Smart Hub | a, b |
 
-Powered UP hubs also expose internal sensors (tilt, voltage, temperature, etc.) as named sensor ports. The LED Light accessory is supported on any output port — `setpower` sets brightness 0–100.
+Powered UP hubs also expose internal sensors (tilt, voltage, temperature, etc.) as named sensor ports. The detachable LED Light accessory is supported on any output port — `setpower` sets its brightness 0–100. The hub's built-in RGB status light is the `led` port: `setcolor` sets a named color (`setcolor "red`) and `setrgb` sets an exact `[red green blue]` value.
 
 ### Sensor modes
 
@@ -114,6 +115,56 @@ Connects via USB. `connectto "wedo` finds the first unclaimed hub.
 | `"raw` | Raw sensor value |
 
 Distance and tilt sensors are auto-detected and can be plugged into either port.
+
+---
+
+## LEGO Dimensions ToyPad
+
+Connects via USB. `connectto "toypad` finds the first unclaimed ToyPad. No configuration is needed.
+
+The ToyPad has three pads — `left`, `center`, and `right` — that read the NFC tags in LEGO Dimensions minifigures and vehicles, and light up in any color. Each pad is both an input port (for reading tags) and an output port (for its light), so the same names work with `listento` and `talkto`.
+
+| Output Ports (lights) | Input Ports (tags) |
+| --- | --- |
+| left, center, right | left, center, right |
+
+### Reading tags
+
+Select the pads you want to read with `listento`, then:
+
+| Reader | Returns |
+| --- | --- |
+| `sensor?` | `"true` if any tag is on the pad |
+| `sensor "tags` | A list of the tag UIDs on the pad |
+| `sensor "characters` | A list of the character IDs on the pad |
+| `sensor "vehicles` | A list of the vehicle IDs on the pad |
+
+With one pad selected, each reader returns that pad's value; with several selected, it returns a list with one entry per pad. The UID shows up the instant a figure is placed; its character or vehicle ID follows a moment later, once the tag is identified. A tag that isn't a recognized Dimensions figure still appears in `tags`, but not in `characters` or `vehicles`. To count what's on a pad, use `count`:
+
+```
+listento "left
+show count sensor "tags
+```
+
+### Lighting the pads
+
+Select the pads you want to light with `talkto`, then `setrgb` sets a color from a `[red green blue]` list, each value 0–255:
+
+```
+talkto ["left "right]
+setrgb [255 0 0]
+```
+
+Lighting several pads in one `setrgb` changes them together. To turn a pad off, set it to black with `setrgb [0 0 0]`.
+
+`fadergb` smoothly transitions the selected pads to a color over about a second, instead of snapping to it like `setrgb`:
+
+```
+talkto "left
+fadergb [0 0 255]
+```
+
+The ToyPad has no fixed color palette, so `setcolor` does not work on it — use `setrgb`.
 
 ---
 

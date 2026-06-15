@@ -141,6 +141,28 @@ fn skips_list_tags_entries_with_invalid_panels() {
 }
 
 #[test]
+fn builds_fade_command() {
+    let cmd = create_fade(Panel::Left, FadeSpec { speed: 10, cycles: 1, rgb: (0x12, 0x34, 0x56) });
+    assert_eq!(cmd.id, 0xc2);
+    assert_eq!(cmd.params, vec![Panel::Left as u8, 10, 1, 0x12, 0x34, 0x56]);
+}
+
+#[test]
+fn builds_fade_all_command() {
+    let cmd = create_fade_all(
+        None,
+        Some(FadeSpec { speed: 5, cycles: 2, rgb: (0xff, 0x00, 0x00) }),
+        Some(FadeSpec { speed: 5, cycles: 2, rgb: (0x00, 0x00, 0xff) }),
+    );
+    assert_eq!(cmd.id, 0xc6);
+    // Each pad is [enabled, speed, cycles, r, g, b]; center disabled.
+    assert_eq!(
+        cmd.params,
+        vec![0, 0, 0, 0, 0, 0, 1, 5, 2, 0xff, 0, 0, 1, 5, 2, 0, 0, 0xff]
+    );
+}
+
+#[test]
 fn builds_read_tag_command() {
     let cmd = create_read_tag(1, 0x24);
     assert_eq!(cmd.id, 0xd2);

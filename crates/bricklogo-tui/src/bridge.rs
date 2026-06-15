@@ -110,6 +110,44 @@ fn color_name_to_id(name: &str) -> Option<u8> {
     })
 }
 
+/// Parse a `[r g b]` color-list argument (each channel 0-255). `cmd` names the
+/// calling primitive for error messages.
+fn parse_rgb(value: &LogoValue, cmd: &str) -> Result<(u8, u8, u8), LogoError> {
+    let list = match value {
+        LogoValue::List(items) => items,
+        _ => return Err(LogoError::Runtime(format!(
+            "{}: expected a list [r g b] with values 0-255",
+            cmd
+        ))),
+    };
+    if list.len() != 3 {
+        return Err(LogoError::Runtime(format!(
+            "{}: expected [r g b] with 3 values, got {}",
+            cmd,
+            list.len()
+        )));
+    }
+    let mut rgb = [0u8; 3];
+    for (i, item) in list.iter().enumerate() {
+        rgb[i] = parse_byte(item, cmd, "r, g, b")?;
+    }
+    Ok((rgb[0], rgb[1], rgb[2]))
+}
+
+/// Parse a single 0-255 byte argument. `what` names the value for errors.
+fn parse_byte(value: &LogoValue, cmd: &str, what: &str) -> Result<u8, LogoError> {
+    let n = value.as_number().map_err(|_| {
+        LogoError::Runtime(format!("{}: {} must be a number 0-255", cmd, what))
+    })?;
+    if !n.is_finite() || n < 0.0 || n > 255.0 {
+        return Err(LogoError::Runtime(format!(
+            "{}: {} must be 0-255, got {}",
+            cmd, what, n
+        )));
+    }
+    Ok(n as u8)
+}
+
 /// Register all hardware and system primitives into the evaluator.
 pub fn register_hardware_primitives(
     eval: &mut Evaluator,
@@ -752,34 +790,22 @@ pub fn register_hardware_primitives(
     eval.register_primitive("setrgb", PrimitiveSpec {
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
-            let list = match &args[0] {
-                LogoValue::List(items) => items,
-                _ => return Err(LogoError::Runtime(
-                    "setrgb: expected a list [r g b] with values 0-255".to_string(),
-                )),
-            };
-            if list.len() != 3 {
-                return Err(LogoError::Runtime(format!(
-                    "setrgb: expected [r g b] with 3 values, got {}",
-                    list.len()
-                )));
-            }
-            let mut rgb = [0u8; 3];
-            for (i, item) in list.iter().enumerate() {
-                let n = item.as_number().map_err(|_| {
-                    LogoError::Runtime("setrgb: r, g, b must be numbers 0-255".to_string())
-                })?;
-                if !n.is_finite() || n < 0.0 || n > 255.0 {
-                    return Err(LogoError::Runtime(format!(
-                        "setrgb: each value must be 0-255, got {}",
-                        n
-                    )));
-                }
-                rgb[i] = n as u8;
-            }
+            let rgb = parse_rgb(&args[0], "setrgb")?;
             let ports = eval.selected_outputs().to_vec();
-            pm_ref.lock().unwrap().set_rgb(&ports, (rgb[0], rgb[1], rgb[2]))
-                .map_err(LogoError::Runtime)?;
+            pm_ref.lock().unwrap().set_rgb(&ports, rgb).map_err(LogoError::Runtime)?;
+            Ok(None)
+        }),
+    });
+
+    // Smoothly transition to a color (the animated twin of setrgb). A ToyPad
+    // hardware effect; not available on other lights.
+    let pm_ref = pm.clone();
+    eval.register_primitive("fadergb", PrimitiveSpec {
+        min_args: 1, max_args: 1,
+        func: Arc::new(move |args, _, eval| {
+            let rgb = parse_rgb(&args[0], "fadergb")?;
+            let ports = eval.selected_outputs().to_vec();
+            pm_ref.lock().unwrap().fade_rgb(&ports, rgb).map_err(LogoError::Runtime)?;
             Ok(None)
         }),
     });

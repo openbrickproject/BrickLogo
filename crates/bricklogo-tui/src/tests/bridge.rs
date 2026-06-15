@@ -625,21 +625,25 @@ struct ColorMock {
     ports: Vec<String>,
     rgb: Arc<Mutex<Vec<(String, (u8, u8, u8))>>>,
     color: Arc<Mutex<Vec<(String, u8)>>>,
+    fade: Arc<Mutex<Vec<(String, (u8, u8, u8))>>>,
 }
 
 type RgbLog = Arc<Mutex<Vec<(String, (u8, u8, u8))>>>;
 type ColorLog = Arc<Mutex<Vec<(String, u8)>>>;
+type FadeLog = Arc<Mutex<Vec<(String, (u8, u8, u8))>>>;
 
 impl ColorMock {
-    fn new(ports: &[&str]) -> (Self, RgbLog, ColorLog) {
+    fn new(ports: &[&str]) -> (Self, RgbLog, ColorLog, FadeLog) {
         let rgb: RgbLog = Arc::new(Mutex::new(Vec::new()));
         let color: ColorLog = Arc::new(Mutex::new(Vec::new()));
+        let fade: FadeLog = Arc::new(Mutex::new(Vec::new()));
         let mock = ColorMock {
             ports: ports.iter().map(|s| s.to_string()).collect(),
             rgb: rgb.clone(),
             color: color.clone(),
+            fade: fade.clone(),
         };
-        (mock, rgb, color)
+        (mock, rgb, color, fade)
     }
 }
 
@@ -671,12 +675,16 @@ impl HardwareAdapter for ColorMock {
         self.rgb.lock().unwrap().push((port.to_string(), rgb));
         Ok(())
     }
+    fn fade_rgb(&mut self, port: &str, rgb: (u8, u8, u8)) -> Result<(), String> {
+        self.fade.lock().unwrap().push((port.to_string(), rgb));
+        Ok(())
+    }
 }
 
 #[test]
 fn test_setrgb_calls_adapter() {
     let (mut eval, pm) = setup_eval();
-    let (mock, rgb, _color) = ColorMock::new(&["a"]);
+    let (mock, rgb, _color, _fade) = ColorMock::new(&["a"]);
     pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
     eval.evaluate("talkto \"a").unwrap();
     eval.evaluate("setrgb [255 0 128]").unwrap();
@@ -686,7 +694,7 @@ fn test_setrgb_calls_adapter() {
 #[test]
 fn test_setcolor_accepts_name_and_id() {
     let (mut eval, pm) = setup_eval();
-    let (mock, _rgb, color) = ColorMock::new(&["a"]);
+    let (mock, _rgb, color, _fade) = ColorMock::new(&["a"]);
     pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
     eval.evaluate("talkto \"a").unwrap();
     eval.evaluate("setcolor \"red").unwrap(); // name → id 9
@@ -700,7 +708,7 @@ fn test_setcolor_accepts_name_and_id() {
 #[test]
 fn test_setcolor_unknown_name_errors() {
     let (mut eval, pm) = setup_eval();
-    let (mock, _, _) = ColorMock::new(&["a"]);
+    let (mock, _, _, _) = ColorMock::new(&["a"]);
     pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
     eval.evaluate("talkto \"a").unwrap();
     let err = eval.evaluate("setcolor \"chartreuse").unwrap_err();
@@ -710,7 +718,7 @@ fn test_setcolor_unknown_name_errors() {
 #[test]
 fn test_setrgb_rejects_bad_args() {
     let (mut eval, pm) = setup_eval();
-    let (mock, _, _) = ColorMock::new(&["a"]);
+    let (mock, _, _, _) = ColorMock::new(&["a"]);
     pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
     eval.evaluate("talkto \"a").unwrap();
     assert!(eval.evaluate("setrgb [255 0]").is_err()); // wrong length
@@ -724,5 +732,35 @@ fn test_setrgb_not_supported_propagates() {
     pm.lock().unwrap().add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
     eval.evaluate("talkto \"a").unwrap();
     let err = eval.evaluate("setrgb [1 2 3]").unwrap_err();
+    assert!(err.to_string().contains("does not support"), "got: {}", err);
+}
+
+#[test]
+fn test_fadergb_calls_adapter() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, _rgb, _color, fade) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    eval.evaluate("fadergb [255 0 128]").unwrap();
+    assert_eq!(*fade.lock().unwrap(), vec![("a".to_string(), (255, 0, 128))]);
+}
+
+#[test]
+fn test_fadergb_rejects_bad_args() {
+    let (mut eval, pm) = setup_eval();
+    let (mock, _, _, _) = ColorMock::new(&["a"]);
+    pm.lock().unwrap().add_device("bot", Box::new(mock), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    assert!(eval.evaluate("fadergb [255 0]").is_err()); // wrong length
+    assert!(eval.evaluate("fadergb [300 0 0]").is_err()); // out of range
+    assert!(eval.evaluate("fadergb 5").is_err()); // not a list
+}
+
+#[test]
+fn test_fadergb_not_supported_propagates() {
+    let (mut eval, pm) = setup_eval();
+    pm.lock().unwrap().add_device("bot", Box::new(MockAdapter::new(&["a"])), "pup");
+    eval.evaluate("talkto \"a").unwrap();
+    let err = eval.evaluate("fadergb [1 2 3]").unwrap_err();
     assert!(err.to_string().contains("does not support"), "got: {}", err);
 }

@@ -17,8 +17,9 @@ use bricklogo_lang::value::LogoValue;
 use hidapi::{HidApi, HidDevice};
 use rust_toypad::constants::{Action, Panel, PACKET_LENGTH, PAGE_IDENTITY, PRODUCT_ID, VENDOR_ID};
 use rust_toypad::protocol::{
-    create_list_tags, create_read_tag, create_set_color, create_set_color_all, decode_list_tags,
-    decode_message, encode_command, format_uid, Command, Incoming,
+    create_fade, create_fade_all, create_list_tags, create_read_tag, create_set_color,
+    create_set_color_all, decode_list_tags, decode_message, encode_command, format_uid, Command,
+    FadeSpec, Incoming,
 };
 use rust_toypad::tag::{identify, Identity};
 use std::collections::HashMap;
@@ -259,6 +260,14 @@ fn read_tag_page(payload: &[u8]) -> Option<[u8; 16]> {
     Some(page)
 }
 
+/// Build the fade wire spec. The `speed`/`cycles` bytes are required by the
+/// command but the tested ToyPad firmware ignores them — it always performs a
+/// fixed ~1s transition and never breathes — so we send constant values. (See
+/// `dev/SOURCES.md`; speed must be non-zero, as 0 means an instant change.)
+fn fade_spec(rgb: (u8, u8, u8)) -> FadeSpec {
+    FadeSpec { speed: 10, cycles: 1, rgb }
+}
+
 fn panel_for_port(port: &str) -> Result<Panel, String> {
     match port.to_lowercase().as_str() {
         "center" => Ok(Panel::Center),
@@ -450,6 +459,32 @@ impl HardwareAdapter for ToyPadAdapter {
             }
         }
         self.send_color_command(create_set_color_all(center, left, right))
+    }
+
+    fn fade_rgb(&mut self, port: &str, rgb: (u8, u8, u8)) -> Result<(), String> {
+        let panel = panel_for_port(port)?;
+        self.send_color_command(create_fade(panel, fade_spec(rgb)))
+    }
+
+    fn fade_rgb_ports(&mut self, commands: &[(&str, (u8, u8, u8))]) -> Result<(), String> {
+        if commands.is_empty() {
+            return Ok(());
+        }
+        if commands.len() == 1 {
+            let (port, rgb) = commands[0];
+            return self.fade_rgb(port, rgb);
+        }
+        let (mut center, mut left, mut right) = (None, None, None);
+        for (port, rgb) in commands {
+            let spec = fade_spec(*rgb);
+            match panel_for_port(port)? {
+                Panel::Center => center = Some(spec),
+                Panel::Left => left = Some(spec),
+                Panel::Right => right = Some(spec),
+                Panel::All => {}
+            }
+        }
+        self.send_color_command(create_fade_all(center, left, right))
     }
 
     // ── Motor methods: not applicable ───────────
