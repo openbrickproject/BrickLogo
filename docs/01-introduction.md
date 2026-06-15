@@ -12,17 +12,21 @@ If you have used either TC Logo or Control Lab, the commands will be familiar. I
 
 ## Hardware
 
-BrickLogo works with eight families of LEGO hardware:
+BrickLogo works with twelve families of LEGO hardware:
 
 | Hardware | Connection | Devices |
 | --- | --- | --- |
 | LEGO Education Science | Bluetooth | Double Motor, Single Motor, Color Sensor, Controller |
 | LEGO Powered UP | Bluetooth | Move Hub, Powered UP Hub, Technic Hub, Remote Control |
 | LEGO Education WeDo 1.0 | USB | WeDo Hub with motors and sensors |
+| LEGO Dimensions ToyPad | USB | NFC tag reader with RGB-lit pads |
 | LEGO DACTA Control Lab | Serial | Interface B (8 outputs, 8 sensor inputs) |
-| LEGO Interface A | USB (via BrickInterface) | Interface A board (6 outputs, 2 sensor inputs) |
-| LEGO Power Functions | IR (via BrickInterface) | IR receivers with Output A and B, channels 1–4 |
+| LEGO Interface A | USB (via [BrickInterface](https://github.com/openbrickproject/BrickInterface)) | Interface A board (6 outputs, 2 sensor inputs) |
+| LEGO Power Functions | IR (via [BrickInterface](https://github.com/openbrickproject/BrickInterface)) | IR receivers with Output A and B, channels 1–4 |
 | LEGO Mindstorms RCX | IR Tower (serial or USB) | RCX programmable brick |
+| LEGO Mindstorms EV3 | USB or Bluetooth | EV3 programmable brick |
+| LEGO Mindstorms NXT | USB or Bluetooth | NXT programmable brick (1.0 / 2.0) |
+| LEGO SPIKE Prime | USB or Bluetooth Low Energy | SPIKE Prime / Robot Inventor hub |
 | Raspberry Pi Build HAT | Serial (Pi GPIO) | Powered UP and SPIKE motors and sensors |
 
 You can connect devices from different families at the same time.

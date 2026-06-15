@@ -42,6 +42,8 @@ Scans for and connects to a LEGO device. The *type* tells BrickLogo what kind of
 | `"wedo` | LEGO Education WeDo 1.0 — USB Hub |
 | `"toypad` | LEGO Dimensions ToyPad — NFC tag reader with RGB-lit pads, via USB |
 | `"controllab` | LEGO DACTA Control Lab — Interface B over serial |
+| `"interfacea` | LEGO Interface A — motors and sensors, via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB) |
+| `"powerfunctions` | LEGO Power Functions — IR motor control, via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB) |
 | `"rcx` | LEGO Mindstorms RCX — via serial or USB IR tower |
 | `"nxt` | LEGO Mindstorms NXT 1.0 / 2.0 — via USB or Bluetooth |
 | `"ev3` | LEGO Mindstorms EV3 — via USB or Bluetooth |

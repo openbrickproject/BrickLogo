@@ -57,6 +57,8 @@ Connected to Boost Move Hub as "mybot"
 | LEGO Education WeDo 1.0 | `connectto "wedo "name` | WeDo USB Hub |
 | LEGO Dimensions ToyPad | `connectto "toypad "name` | NFC tag reader with RGB-lit pads via USB |
 | LEGO DACTA Control Lab | `connectto "controllab "name` | Interface B over serial |
+| LEGO Interface A | `connectto "interfacea "name` | Motors and sensors via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB) |
+| LEGO Power Functions | `connectto "powerfunctions "name` | IR motor control via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB) |
 | LEGO Mindstorms RCX | `connectto "rcx "name` | RCX via serial or USB IR tower |
 | LEGO Mindstorms EV3 | `connectto "ev3 "name` | EV3 via USB or Bluetooth |
 | LEGO Mindstorms NXT | `connectto "nxt "name` | NXT 1.0 / 2.0 via USB or Bluetooth |

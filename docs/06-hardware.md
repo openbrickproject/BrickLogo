@@ -200,7 +200,7 @@ Each `connectto "controllab` call consumes the next path in the array. Typical p
 
 ## LEGO Interface A
 
-Connects via BrickInterface (USB). `connectto "interfacea` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`:
+Connects via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB). `connectto "interfacea` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`:
 
 ```json
 { "brickinterface": ["/dev/cu.usbmodem1234"] }
@@ -228,13 +228,13 @@ The input ports also support edge counting. Use `counter` to read the accumulate
 
 ### Notes
 
-- Interface A and Power Functions share a single BrickInterface adapter. One adapter can run both at the same time without a second serial port entry. See [LEGO Power Functions](#lego-power-functions) below.
+- Interface A and Power Functions share a single [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapter. One adapter can run both at the same time without a second serial port entry. See [LEGO Power Functions](#lego-power-functions) below.
 
 ---
 
 ## LEGO Power Functions
 
-Connects via BrickInterface (USB). `connectto "powerfunctions` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`. Interface A and Power Functions share the same adapter and the same config entry — a single BrickInterface can run both at once:
+Connects via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB). `connectto "powerfunctions` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`. Interface A and Power Functions share the same adapter and the same config entry — a single [BrickInterface](https://github.com/openbrickproject/BrickInterface) can run both at once:
 
 ```json
 { "brickinterface": ["/dev/cu.usbmodem1234"] }
@@ -259,8 +259,8 @@ Ports are named by channel number and output color, matching the labelling on LE
 
 - Multiple receivers on the same channel respond to the same commands. Use different channels for independent control of separate models.
 - `talkto` with both outputs of one channel (e.g. `["pf.red1 "pf.blue1]`) starts and stops them simultaneously: one Combo PWM message changes the pair together, then latching Single PWM follow-ups preserve run-out-of-range behaviour. Outputs on different channels still take turns on the transmitter, in the order their channels first appear in the port list.
-- A BrickInterface adapter and a hardware Power Functions remote can coexist as long as they use different channels.
-- For multiple BrickInterface adapters, list all serial ports in the `"brickinterface"` array. A second `connectto "powerfunctions` that cannot share an existing adapter opens the next port in the array.
+- A [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapter and a hardware Power Functions remote can coexist as long as they use different channels.
+- For multiple [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapters, list all serial ports in the `"brickinterface"` array. A second `connectto "powerfunctions` that cannot share an existing adapter opens the next port in the array.
 
 ---
 

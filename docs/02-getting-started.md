@@ -52,7 +52,7 @@ sudo ./bricklogo
 
 ### BrickInterface (Interface A and Power Functions)
 
-Interface A and Power Functions both connect through the BrickInterface USB adapter. Create a file called `bricklogo.config.json` in the same directory as the binary and add the adapter's serial port under `"brickinterface"`:
+Interface A and Power Functions both connect through the [BrickInterface](https://github.com/openbrickproject/BrickInterface) USB adapter. Create a file called `bricklogo.config.json` in the same directory as the binary and add the adapter's serial port under `"brickinterface"`:
 
 ```json
 {
@@ -60,14 +60,14 @@ Interface A and Power Functions both connect through the BrickInterface USB adap
 }
 ```
 
-A single BrickInterface adapter can run Interface A and Power Functions at the same time — you only need one entry for both:
+A single [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapter can run Interface A and Power Functions at the same time — you only need one entry for both:
 
 ```
 ? connectto "interfacea "ia
 ? connectto "powerfunctions "pf
 ```
 
-For multiple BrickInterface adapters, list all ports. The first `connectto` that does not fit on an existing adapter connection opens the next port in the array:
+For multiple [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapters, list all ports. The first `connectto` that does not fit on an existing adapter connection opens the next port in the array:
 
 ```json
 {
