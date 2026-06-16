@@ -1222,22 +1222,33 @@ Logic operations work with the words `"true` and `"false`. Predicates are comman
 
 ```
 and a b
+(and a b c ...)
 ```
 
-Returns `"true` if both *a* and *b* are `"true`.
+Returns `"true` if all of its inputs are `"true`. As a bareword it takes exactly two inputs; wrap the call in parentheses to test more.
 
 ```
 ? print and "true "false
 false
+? print (and "true "true "true)
+true
 ```
 
 ### `or`
 
 ```
 or a b
+(or a b c ...)
 ```
 
-Returns `"true` if either *a* or *b* is `"true`.
+Returns `"true` if any of its inputs is `"true`. As a bareword it takes exactly two inputs; wrap the call in parentheses to test more.
+
+```
+? print or "true "false
+true
+? print (or "false "false "true)
+true
+```
 
 ### `not`
 
