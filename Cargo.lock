@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "bricklogo"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "bricklogo-hal",
  "bricklogo-lang",
