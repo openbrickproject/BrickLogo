@@ -204,13 +204,17 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
     );
 
     // ── Logic ───────────────────────────────
+    // `and`/`or` are binary as barewords (`and a b`) but variadic in the
+    // parenthesized form (`(or a b c)`): the parens delimit the args, so the
+    // func folds over all of them. min_args stays 2 so a bareword consumes
+    // exactly two; max_args is documentary (never enforced).
     eval.register_primitive(
         "and",
         PrimitiveSpec {
             min_args: 2,
-            max_args: 2,
+            max_args: usize::MAX,
             func: Arc::new(|args, _, _| {
-                let r = args[0].as_string() == "true" && args[1].as_string() == "true";
+                let r = args.iter().all(|a| a.as_string() == "true");
                 Ok(Some(LogoValue::Word(
                     if r { "true" } else { "false" }.to_string(),
                 )))
@@ -221,9 +225,9 @@ pub fn register_core_primitives(eval: &mut Evaluator) {
         "or",
         PrimitiveSpec {
             min_args: 2,
-            max_args: 2,
+            max_args: usize::MAX,
             func: Arc::new(|args, _, _| {
-                let r = args[0].as_string() == "true" || args[1].as_string() == "true";
+                let r = args.iter().any(|a| a.as_string() == "true");
                 Ok(Some(LogoValue::Word(
                     if r { "true" } else { "false" }.to_string(),
                 )))

@@ -177,6 +177,23 @@ fn test_or_short_circuits() {
 }
 
 #[test]
+fn test_or_variadic_in_parens() {
+    let (mut e, _) = eval();
+    // Bareword form stays binary.
+    assert_eq!(word(&mut e, "or \"false \"false"), "false");
+    // Parenthesized form folds over every argument.
+    assert_eq!(word(&mut e, "(or \"false \"false \"true)"), "true");
+    assert_eq!(word(&mut e, "(or \"false \"false \"false)"), "false");
+}
+
+#[test]
+fn test_and_variadic_in_parens() {
+    let (mut e, _) = eval();
+    assert_eq!(word(&mut e, "(and \"true \"true \"true)"), "true");
+    assert_eq!(word(&mut e, "(and \"true \"true \"false)"), "false");
+}
+
+#[test]
 fn test_not_negates() {
     let (mut e, _) = eval();
     assert_eq!(word(&mut e, "not \"true"), "false");
