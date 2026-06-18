@@ -278,3 +278,41 @@ fn test_tick_syncs_device_and_selection_context() {
     );
     assert_eq!(app.selected_inputs, vec!["bot2.b".to_string()]);
 }
+
+/// Regression: when an evaluation is running on the worker thread
+/// (e.g. `forever [talkto ...]`), `App::execute` moves the `Evaluator`
+/// out of `self.evaluator` (leaving it `None` and `busy = true`) for
+/// the duration. Before the fix, `tick()` only synced selections from
+/// `eval.selected_outputs()` when `self.evaluator` was `Some(...)`,
+/// so a `talkto` issued inside `forever` never reached the status bar
+/// until the loop exited. The selections now live behind shared
+/// `Arc<Mutex<...>>` handles that `tick()` always reads, so the App
+/// sees changes the instant a primitive writes them — even with the
+/// evaluator on the worker thread.
+#[test]
+fn test_tick_reflects_selection_change_while_evaluator_on_worker() {
+    let mut app = App::new(None, "0.0.0", None).unwrap();
+    {
+        let mut pm = app.port_manager.lock().unwrap();
+        pm.add_device("bot1", Box::new(MockAdapter::new(&["a", "b"])), "pup");
+    }
+    // First tick picks up the device + empty selections.
+    app.tick();
+    assert_eq!(app.active_device.as_deref(), Some("bot1"));
+    assert!(app.selected_outputs.is_empty());
+
+    // Simulate `forever`/eval on the worker thread: the App has moved
+    // the evaluator out (`self.evaluator = None`, `busy = true`), and a
+    // `talkto` running on that thread mutates the shared selection
+    // handle directly. This is exactly the state during `forever`.
+    let handle = app.selected_outputs_handle.clone();
+    *handle.lock().unwrap() = vec!["b".to_string()];
+    let in_handle = app.selected_inputs_handle.clone();
+    *in_handle.lock().unwrap() = vec!["a".to_string()];
+    app.evaluator = None;
+    app.busy = true;
+
+    assert!(app.tick());
+    assert_eq!(app.selected_outputs, vec!["b".to_string()]);
+    assert_eq!(app.selected_inputs, vec!["a".to_string()]);
+}

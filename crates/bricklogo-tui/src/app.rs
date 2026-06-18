@@ -83,6 +83,15 @@ pub struct App {
     pub active_device: Option<String>,
     pub selected_outputs: Vec<String>,
     pub selected_inputs: Vec<String>,
+    /// Shared handles to the evaluator's live `talkto`/`listento`
+    /// selections. The evaluator mutates these through the same Arc
+    /// (so a `talkto` inside `forever` on the eval worker thread is
+    /// visible here the instant it happens), while `launch`ed tasks
+    /// get their own private Arcs and don't disturb this one. Held
+    /// even while `evaluator` is `None` (eval running on the worker
+    /// thread) so `tick()` can keep the status bar in sync.
+    selected_outputs_handle: Arc<Mutex<Vec<String>>>,
+    selected_inputs_handle: Arc<Mutex<Vec<String>>>,
     pub should_quit: bool,
     pub help_mode: bool,
     pub help_scroll: usize,
@@ -120,6 +129,8 @@ impl App {
 
         let (mut evaluator, port_manager) = build_evaluator(output_fn, system_fn.clone());
         let stop_flag = evaluator.stop_flag();
+        let selected_outputs_handle = evaluator.selected_outputs_handle();
+        let selected_inputs_handle = evaluator.selected_inputs_handle();
 
         // Set up networking if requested
         let mut net_status_arc: Option<Arc<Mutex<String>>> = None;
@@ -154,6 +165,8 @@ impl App {
             active_device: None,
             selected_outputs: Vec::new(),
             selected_inputs: Vec::new(),
+            selected_outputs_handle,
+            selected_inputs_handle,
             should_quit: false,
             help_mode: false,
             help_scroll: 0,
@@ -207,14 +220,19 @@ impl App {
             let pm = self.port_manager.lock().unwrap();
             (pm.get_connected_device_names(), pm.get_active_device_name_owned())
         };
-        let (selected_outputs, selected_inputs) = if let Some(ref eval) = self.evaluator {
+        // Always read from the shared selection handles — these stay
+        // valid even while `self.evaluator` is `None` (the worker
+        // thread owns the Evaluator during evaluation). The Evaluator
+        // writes to the same Arcs from primitives like `talkto`, so a
+        // selection change inside `forever` is visible here on the
+        // next tick. Launched tasks have their own private Arcs and
+        // don't touch this one.
+        let (selected_outputs, selected_inputs) = {
             let pm = self.port_manager.lock().unwrap();
             (
-                pm.format_port_names(eval.selected_outputs()),
-                pm.format_port_names(eval.selected_inputs()),
+                pm.format_port_names(&self.selected_outputs_handle.lock().unwrap()),
+                pm.format_port_names(&self.selected_inputs_handle.lock().unwrap()),
             )
-        } else {
-            (self.selected_outputs.clone(), self.selected_inputs.clone())
         };
 
         if devices != self.connected_devices {

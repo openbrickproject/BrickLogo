@@ -157,8 +157,12 @@ pub struct Evaluator {
     /// evaluator; set by `eval_launch` on the child before it's moved
     /// into the spawned thread.
     current_task_id: u64,
-    selected_outputs: Vec<String>,
-    selected_inputs: Vec<String>,
+    /// Shared so the UI thread can observe live `talkto`/`listento`
+    /// selections even while the evaluator is owned by a worker thread
+    /// (e.g. inside `forever`). Mutated through the Arc<Mutex>; the
+    /// App holds a clone of these handles to drive the status bar.
+    selected_outputs: Arc<Mutex<Vec<String>>>,
+    selected_inputs: Arc<Mutex<Vec<String>>>,
     var_broadcast: Option<std::sync::mpsc::Sender<(String, LogoValue)>>,
 }
 
@@ -177,8 +181,8 @@ impl Evaluator {
             launched_tasks: Arc::new(Mutex::new(Vec::new())),
             next_task_id: Arc::new(AtomicU64::new(1)),
             current_task_id: 0,
-            selected_outputs: Vec::new(),
-            selected_inputs: Vec::new(),
+            selected_outputs: Arc::new(Mutex::new(Vec::new())),
+            selected_inputs: Arc::new(Mutex::new(Vec::new())),
             var_broadcast: None,
         }
     }
@@ -286,19 +290,34 @@ impl Evaluator {
     }
 
     pub fn set_selected_outputs(&mut self, ports: Vec<String>) {
-        self.selected_outputs = ports;
+        *self.selected_outputs.lock().unwrap() = ports;
     }
 
     pub fn set_selected_inputs(&mut self, ports: Vec<String>) {
-        self.selected_inputs = ports;
+        *self.selected_inputs.lock().unwrap() = ports;
     }
 
-    pub fn selected_outputs(&self) -> &[String] {
-        &self.selected_outputs
+    /// Current output selection (cloned under lock). Prefer
+    /// `selected_outputs_handle` when the caller needs to observe
+    /// mutations live across threads.
+    pub fn selected_outputs(&self) -> Vec<String> {
+        self.selected_outputs.lock().unwrap().clone()
     }
 
-    pub fn selected_inputs(&self) -> &[String] {
-        &self.selected_inputs
+    pub fn selected_inputs(&self) -> Vec<String> {
+        self.selected_inputs.lock().unwrap().clone()
+    }
+
+    /// Shared handle to the output selection. The data behind this
+    /// Arc is the same one mutated by `set_selected_outputs`, so a
+    /// holder sees updates the instant a primitive (e.g. `talkto`)
+    /// writes them — even from a worker thread running `forever`.
+    pub fn selected_outputs_handle(&self) -> Arc<Mutex<Vec<String>>> {
+        self.selected_outputs.clone()
+    }
+
+    pub fn selected_inputs_handle(&self) -> Arc<Mutex<Vec<String>>> {
+        self.selected_inputs.clone()
     }
 
     /// Signal every currently-launched background task to stop (the
@@ -358,8 +377,19 @@ impl Evaluator {
             launched_tasks: self.launched_tasks.clone(),
             next_task_id: self.next_task_id.clone(),
             current_task_id: 0,
-            selected_outputs: self.selected_outputs.clone(),
-            selected_inputs: self.selected_inputs.clone(),
+            // Each launched task gets its OWN selection state (not shared
+            // with the parent): concurrent `launch`es doing `talkto` to
+            // different ports must not clobber each other. The App
+            // observes the *main* evaluator's handle, which is correct
+            // because `forever` typed at the REPL runs inline on the
+            // main evaluator — exactly the case where live status updates
+            // are wanted.
+            selected_outputs: Arc::new(Mutex::new(
+                self.selected_outputs.lock().unwrap().clone(),
+            )),
+            selected_inputs: Arc::new(Mutex::new(
+                self.selected_inputs.lock().unwrap().clone(),
+            )),
             var_broadcast: self.var_broadcast.clone(),
         };
         (child, stop)

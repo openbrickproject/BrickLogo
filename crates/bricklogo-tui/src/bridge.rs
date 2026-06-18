@@ -595,7 +595,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("on", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().on(&ports).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -605,7 +605,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("off", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().off(&ports).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -616,7 +616,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let tenths = args[0].as_number()? as u32;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().on_for(&ports, tenths).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -633,7 +633,7 @@ pub fn register_hardware_primitives(
                 ));
             }
             let level = raw as u8;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_power(&ports, level)
                 .map_err(LogoError::Runtime)?;
             Ok(None)
@@ -645,7 +645,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("seteven", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_even(&ports);
             Ok(None)
         }),
@@ -655,7 +655,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("setodd", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_odd(&ports);
             Ok(None)
         }),
@@ -665,7 +665,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("setleft", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_even(&ports);
             Ok(None)
         }),
@@ -675,7 +675,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("setright", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_odd(&ports);
             Ok(None)
         }),
@@ -685,7 +685,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("rd", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().reverse_direction(&ports);
             Ok(None)
         }),
@@ -706,7 +706,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let degrees = args[0].as_number()? as i32;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().rotate(&ports, degrees).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -717,7 +717,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let position = args[0].as_number()? as i32;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().rotate_to(&ports, position).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -727,7 +727,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("resetzero", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().reset_zero(&ports).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -738,7 +738,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let position = args[0].as_number()? as i32;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().rotate_to_abs(&ports, position).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -750,7 +750,7 @@ pub fn register_hardware_primitives(
         func: Arc::new(move |args, _, eval| {
             let on_time = args[0].as_number()? as u32;
             let off_time = args[1].as_number()? as u32;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().flash(&ports, on_time, off_time, pm_ref.clone()).map_err(|e| LogoError::Runtime(e))?;
             Ok(None)
         }),
@@ -780,7 +780,7 @@ pub fn register_hardware_primitives(
                     ))
                 })?
             };
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_color(&ports, id).map_err(LogoError::Runtime)?;
             Ok(None)
         }),
@@ -791,7 +791,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let rgb = parse_rgb(&args[0], "setrgb")?;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().set_rgb(&ports, rgb).map_err(LogoError::Runtime)?;
             Ok(None)
         }),
@@ -804,7 +804,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let rgb = parse_rgb(&args[0], "fadergb")?;
-            let ports = eval.selected_outputs().to_vec();
+            let ports = eval.selected_outputs();
             pm_ref.lock().unwrap().fade_rgb(&ports, rgb).map_err(LogoError::Runtime)?;
             Ok(None)
         }),
@@ -830,7 +830,7 @@ pub fn register_hardware_primitives(
         min_args: 1, max_args: 1,
         func: Arc::new(move |args, _, eval| {
             let mode = args[0].as_string().to_lowercase();
-            let ports = eval.selected_inputs().to_vec();
+            let ports = eval.selected_inputs();
             let val = pm_ref.lock().unwrap().read_sensor(&ports, Some(&mode)).map_err(|e| LogoError::Runtime(e))?;
             match val {
                 Some(v) => Ok(Some(v)),
@@ -854,7 +854,7 @@ pub fn register_hardware_primitives(
             }
             let bool_word = |b: bool| LogoValue::Word(if b { "true" } else { "false" }.to_string());
 
-            let ports = eval.selected_inputs().to_vec();
+            let ports = eval.selected_inputs();
             let multi = ports.len() > 1;
             match pm_ref.lock().unwrap().read_sensor(&ports, None) {
                 // Mirror `sensor`'s shape: many ports come back as one element per
@@ -879,7 +879,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("counter", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_inputs().to_vec();
+            let ports = eval.selected_inputs();
             let val = pm_ref.lock().unwrap().read_counter(&ports)
                 .map_err(LogoError::Runtime)?;
             match val {
@@ -893,7 +893,7 @@ pub fn register_hardware_primitives(
     eval.register_primitive("resetcount", PrimitiveSpec {
         min_args: 0, max_args: 0,
         func: Arc::new(move |_, _, eval| {
-            let ports = eval.selected_inputs().to_vec();
+            let ports = eval.selected_inputs();
             pm_ref.lock().unwrap().reset_counter(&ports)
                 .map_err(LogoError::Runtime)?;
             Ok(None)
@@ -916,7 +916,7 @@ pub fn register_hardware_primitives(
         eval.register_primitive(name, PrimitiveSpec {
             min_args: 0, max_args: 0,
             func: Arc::new(move |_, _, eval| {
-                let ports = eval.selected_inputs().to_vec();
+                let ports = eval.selected_inputs();
                 let val = pm_ref.lock().unwrap().read_sensor(&ports, Some(&mode)).map_err(|e| LogoError::Runtime(e))?;
                 match val {
                     Some(v) => Ok(Some(v)),
