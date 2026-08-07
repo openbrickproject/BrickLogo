@@ -131,6 +131,7 @@ dependencies = [
  "rust-buildhat",
  "rust-controllab",
  "rust-coral",
+ "rust-cybermaster",
  "rust-ev3",
  "rust-nxt",
  "rust-poweredup",
@@ -1165,6 +1166,13 @@ dependencies = [
  "futures",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "rust-cybermaster"
+version = "0.1.0"
+dependencies = [
+ "serialport",
 ]
 
 [[package]]
