@@ -2,6 +2,7 @@ use bricklogo_hal::adapter::HardwareAdapter;
 use bricklogo_hal::adapters::buildhat_adapter::BuildHATAdapter;
 use bricklogo_hal::adapters::controllab_adapter::ControlLabAdapter;
 use bricklogo_hal::adapters::coral_adapter::CoralAdapter;
+use bricklogo_hal::adapters::cybermaster_adapter::CyberMasterAdapter;
 use bricklogo_hal::adapters::ev3_adapter::EV3Adapter;
 use bricklogo_hal::adapters::interfacea_adapter::InterfaceAAdapter;
 use bricklogo_hal::adapters::powerfunctions_adapter::PowerFunctionsAdapter;
@@ -38,6 +39,8 @@ pub struct BrickLogoConfig {
     pub science: Vec<String>,
     #[serde(default)]
     pub rcx: Vec<String>,
+    #[serde(default)]
+    pub cybermaster: Vec<String>,
     #[serde(default)]
     pub ev3: Vec<String>,
     #[serde(default)]
@@ -390,6 +393,22 @@ pub fn register_hardware_primitives(
                             .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
                         Box::new(adapter)
                     }
+                    "cybermaster" => {
+                        let serial_path =
+                            next_config_entry(&config.cybermaster, &mut indices, "cybermaster")
+                                .ok_or_else(|| {
+                                    LogoError::Runtime(
+                                "No CyberMaster serial port configured in bricklogo.config.json"
+                                    .to_string(),
+                            )
+                                })?;
+                        let mut adapter = CyberMasterAdapter::new(&serial_path);
+                        system_fn_ref("Scanning for LEGO Technic CyberMaster...");
+                        adapter
+                            .connect()
+                            .map_err(|e| LogoError::Runtime(format!("Could not connect: {}", e)))?;
+                        Box::new(adapter)
+                    }
                     "buildhat" => {
                         let mut adapter = BuildHATAdapter::new();
                         system_fn_ref("Connecting to Raspberry Pi Build HAT (this may take up to 30 seconds)...");
@@ -427,7 +446,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
+                            "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"cybermaster\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
                                 .to_string(),
                         ));
                     }

@@ -9,6 +9,7 @@ members = [
     "crates/rust-wedo",
     "crates/rust-controllab",
     "crates/rust-rcx",
+    "crates/rust-cybermaster",
     "crates/rust-buildhat",
     "crates/rust-ev3",
     "crates/rust-nxt",

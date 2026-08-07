@@ -2,6 +2,7 @@ pub mod buildhat_adapter;
 pub mod powerfunctions_adapter;
 pub mod controllab_adapter;
 pub mod coral_adapter;
+pub mod cybermaster_adapter;
 pub mod ev3_adapter;
 pub mod interfacea_adapter;
 pub mod nxt_adapter;

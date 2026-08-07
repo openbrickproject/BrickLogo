@@ -1,0 +1,9 @@
+[package]
+name = "rust-cybermaster"
+version = "0.1.0"
+edition = "2024"
+description = "LEGO Technic CyberMaster (set 8482) RF protocol library"
+license = "Apache-2.0"
+
+[dependencies]
+serialport = "4"
