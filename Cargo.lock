@@ -137,6 +137,7 @@ dependencies = [
  "rust-poweredup",
  "rust-rcx",
  "rust-spike",
+ "rust-tclogoconnect",
  "rust-toypad",
  "rust-wedo",
  "serde_json",
@@ -1227,6 +1228,13 @@ dependencies = [
  "crc32fast",
  "flate2",
  "rusb",
+]
+
+[[package]]
+name = "rust-tclogoconnect"
+version = "0.1.0"
+dependencies = [
+ "serialport",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ rust-coral = { path = "../rust-coral" }
 rust-poweredup = { path = "../rust-poweredup" }
 rust-rcx = { path = "../rust-rcx" }
 rust-cybermaster = { path = "../rust-cybermaster" }
+rust-tclogoconnect = { path = "../rust-tclogoconnect" }
 rust-buildhat = { path = "../rust-buildhat" }
 rust-ev3 = { path = "../rust-ev3" }
 rust-nxt = { path = "../rust-nxt" }

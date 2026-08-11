@@ -1,0 +1,9 @@
+[package]
+name = "rust-tclogoconnect"
+version = "0.1.0"
+edition = "2024"
+description = "TC Logo Connect (Seeed XIAO RP2040 USB-CDC bridge to a LEGO Interface A 9750) protocol library"
+license = "Apache-2.0"
+
+[dependencies]
+serialport = "4"

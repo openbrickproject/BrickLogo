@@ -200,23 +200,30 @@ Each `connectto "controllab` call consumes the next path in the array. Typical p
 
 ## LEGO Interface A
 
-Connects via [BrickInterface](https://github.com/openbrickproject/BrickInterface) (USB). `connectto "interfacea` requires the adapter's serial port listed in `bricklogo.config.json` under `"brickinterface"`:
+Connects via [BrickInterface](https://github.com/openbrickproject/BrickInterface) or [TC Logo Connect](https://www.tc-logo.com/) (USB). Both bridges drive the same LEGO Interface A (9750), and both work the same way in BrickLogo. `connectto "interfacea` finds whichever one is plugged in. If both are plugged in, the BrickInterface is found first.
+
+Neither bridge needs any configuration. To pin a bridge to a particular serial port, list the port in `bricklogo.config.json` under `"brickinterface"` or `"tclogoconnect"`:
 
 ```json
-{ "brickinterface": ["/dev/cu.usbmodem1234"] }
+{
+  "brickinterface": ["/dev/cu.usbmodem1234"],
+  "tclogoconnect": ["/dev/cu.usbmodem5678"]
+}
 ```
 
-Each `connectto "interfacea` call consumes one Interface A slot on the next available adapter. Typical paths:
+Typical paths:
 
 - macOS: `/dev/cu.usbmodem*`
 - Linux: `/dev/ttyACM0` or similar
 - Windows: `COM3` (or similar)
 
+To use more than one Interface A at the same time, repeat `connectto "interfacea` with a different name. Each call connects the next free bridge. Any mix works: two BrickInterfaces, two TC Logo Connects, or one of each.
+
 | Output Ports | Input Ports |
 | --- | --- |
 | 0, 1, 2, 3, 4, 5 | 6, 7 |
 
-Ports 0–5 are output ports. `setpower` accepts values 0–255. Direction commands (`seteven`, `setodd`, `rd`) are accepted but have no effect.
+Ports 0–5 are output ports. `setpower` accepts values 0–255. A single output port has no direction, so `seteven`, `setodd`, and `rd` do nothing there. To reverse a motor, use the paired ports `a` (ports 0 and 1), `b` (2 and 3), or `c` (4 and 5). On a pair, the direction commands switch which of the two ports is driven. On a TC Logo Connect, power levels between off and full are made by pulsing the output, and change in eight steps rather than smoothly.
 
 ### Sensor modes
 
@@ -224,11 +231,11 @@ Ports 0–5 are output ports. `setpower` accepts values 0–255. Direction comma
 | --- | --- | --- |
 | 6, 7 | `"touch` | `"true` if closed, `"false` if open |
 
-The input ports also support edge counting. Use `counter` to read the accumulated count since the last reset, and `resetcounter` to clear it.
+The input ports also support edge counting, on either bridge. Use `counter` to read the accumulated count since the last reset, and `resetcount` to clear it.
 
 ### Notes
 
-- Interface A and Power Functions share a single [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapter. One adapter can run both at the same time without a second serial port entry. See [LEGO Power Functions](#lego-power-functions) below.
+- Interface A and Power Functions share a single [BrickInterface](https://github.com/openbrickproject/BrickInterface) adapter. One adapter can run both at the same time without a second serial port entry. See [LEGO Power Functions](#lego-power-functions) below. A TC Logo Connect carries Interface A only; `connectto "powerfunctions` always uses a BrickInterface.
 
 ---
 

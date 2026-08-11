@@ -10,6 +10,7 @@ use bricklogo_hal::adapters::nxt_adapter::NxtAdapter;
 use bricklogo_hal::adapters::poweredup_adapter::PoweredUpAdapter;
 use bricklogo_hal::adapters::rcx_adapter::RcxAdapter;
 use bricklogo_hal::adapters::spike_adapter::SpikeAdapter;
+use bricklogo_hal::adapters::tclogoconnect_adapter::TcLogoConnectAdapter;
 use bricklogo_hal::adapters::toypad_adapter::ToyPadAdapter;
 use bricklogo_hal::adapters::wedo_adapter::WeDoAdapter;
 use bricklogo_hal::port_manager::PortManager;
@@ -47,6 +48,8 @@ pub struct BrickLogoConfig {
     pub nxt: Vec<String>,
     #[serde(default)]
     pub spike: Vec<String>,
+    #[serde(default)]
+    pub tclogoconnect: Vec<String>,
 }
 
 impl BrickLogoConfig {
@@ -308,6 +311,72 @@ pub fn register_hardware_primitives(
                     }
                 }
 
+                // TC Logo Connect has no custom VID/PID (stock RP2040 USB-CDC
+                // identity), so discovery can't allowlist by VID/PID the way
+                // BrickInterface does. Instead it excludes only ports
+                // positively identified as something else — PCI, Bluetooth,
+                // BrickInterface's own VID/PID, and any path a BrickInterface
+                // is already pooled on (a config'd BrickInterface may sit on
+                // a serial adapter whose VID/PID isn't 0x1209:0xC550) — and
+                // probes every remaining candidate with the same `R` -> `CF`
+                // handshake `connect()` uses, keeping the first one that
+                // answers. Windows may report a genuine RP2040 CDC port as
+                // Unknown when its VID/PID isn't in the registry, so Unknown
+                // ports are tried too (same rationale as the BrickInterface
+                // case above).
+                //
+                // Serial ports are opened with exclusive access on macOS,
+                // Linux, and Windows (the `serialport` crate), so a port
+                // already held open by a *previously connected* TC Logo
+                // Connect adapter simply fails to open here — treated as
+                // "skip, not this one" rather than a hard error — which is
+                // what lets a second `connectto "interfacea` find a
+                // different device instead of re-claiming the first one, with
+                // no extra bookkeeping needed beyond that OS-level exclusivity.
+                fn discover_tclogoconnect(exclude_paths: &[&str]) -> Result<TcLogoConnectAdapter, String> {
+                    let ports = serialport::available_ports()
+                        .map_err(|e| format!("Could not enumerate serial ports: {}", e))?;
+                    for info in ports {
+                        if exclude_paths.contains(&info.port_name.as_str()) {
+                            continue;
+                        }
+                        match &info.port_type {
+                            serialport::SerialPortType::PciPort
+                            | serialport::SerialPortType::BluetoothPort => continue,
+                            serialport::SerialPortType::UsbPort(usb)
+                                if usb.vid == 0x1209 && usb.pid == 0xC550 => continue,
+                            _ => {}
+                        }
+                        let mut adapter = TcLogoConnectAdapter::new(&info.port_name);
+                        if adapter.connect().is_ok() {
+                            return Ok(adapter);
+                        }
+                        // Open (or probe) failed — not a TC Logo Connect, or
+                        // one already claimed by another connected adapter.
+                        // Skip and keep looking rather than erroring out.
+                    }
+                    Err("No TC Logo Connect found".to_string())
+                }
+
+                // TC Logo Connect fallback for `connectto "interfacea`: try
+                // the configured path list first (mirrors `brickinterface`'s
+                // config-first pattern), then fall back to probe-based
+                // discovery.
+                fn connect_tclogoconnect(
+                    config_paths: &[String],
+                    indices: &mut std::collections::HashMap<String, usize>,
+                    exclude_paths: &[&str],
+                ) -> Result<TcLogoConnectAdapter, String> {
+                    match next_config_entry(config_paths, indices, "tclogoconnect") {
+                        Some(path) => {
+                            let mut adapter = TcLogoConnectAdapter::new(&path);
+                            adapter.connect()?;
+                            Ok(adapter)
+                        }
+                        None => discover_tclogoconnect(exclude_paths),
+                    }
+                }
+
                 // Connect outside the port manager lock so the UI can redraw
                 let adapter: Box<dyn HardwareAdapter> = match device_type.as_str() {
                     "wedo" => {
@@ -345,15 +414,47 @@ pub fn register_hardware_primitives(
                         Box::new(adapter)
                     }
                     "interfacea" => {
+                        // Two bridges reach the same LEGO Interface A (9750)
+                        // hardware: BrickInterface (framed protocol, fixed
+                        // VID/PID) and TC Logo Connect (ASCII line protocol,
+                        // no fixed identity). BrickInterface goes first
+                        // deliberately — its VID/PID gives a cheap, positive
+                        // identification, while each TC Logo Connect
+                        // candidate costs up to ~500ms to probe. Only fall
+                        // back to TC Logo Connect once BrickInterface (pool,
+                        // config, and USB discovery) comes up empty.
                         let cap = required_cap_for("interfacea").unwrap();
-                        let shared = {
+                        let bi_result = {
                             let mut pool = bi_pool_ref.lock().unwrap();
                             allocate_brickinterface(&mut pool, &config.brickinterface, "interfacea", cap)
-                                .map_err(LogoError::Runtime)?
                         };
-                        shared.interfacea_active.store(true, Ordering::SeqCst);
-                        system_fn_ref("Connecting to LEGO Interface A (BrickInterface)...");
-                        Box::new(InterfaceAAdapter::new_with_shared(shared))
+                        match bi_result {
+                            Ok(shared) => {
+                                shared.interfacea_active.store(true, Ordering::SeqCst);
+                                system_fn_ref("Connecting to LEGO Interface A (BrickInterface)...");
+                                Box::new(InterfaceAAdapter::new_with_shared(shared))
+                            }
+                            Err(bi_err) => {
+                                system_fn_ref("Scanning for LEGO Interface A (TC Logo Connect)...");
+                                let pooled_paths: Vec<String> = bi_pool_ref
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .map(|e| e.path.clone())
+                                    .collect();
+                                let pooled_refs: Vec<&str> =
+                                    pooled_paths.iter().map(|s| s.as_str()).collect();
+                                match connect_tclogoconnect(&config.tclogoconnect, &mut indices, &pooled_refs) {
+                                    Ok(adapter) => Box::new(adapter),
+                                    Err(tc_err) => {
+                                        return Err(LogoError::Runtime(format!(
+                                            "No LEGO Interface A found via BrickInterface ({}) or TC Logo Connect ({})",
+                                            bi_err, tc_err
+                                        )));
+                                    }
+                                }
+                            }
+                        }
                     }
                     "powerfunctions" => {
                         let cap = required_cap_for("powerfunctions").unwrap();
@@ -446,7 +547,7 @@ pub fn register_hardware_primitives(
                     }
                     _ => {
                         return Err(LogoError::Runtime(
-                            "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"cybermaster\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry)"
+                            "Type must be \"science\", \"pup\", \"wedo\", \"toypad\", \"controllab\", \"interfacea\", \"powerfunctions\", \"rcx\", \"cybermaster\", \"buildhat\", \"ev3\", \"nxt\", or \"spike\" (interfacea and powerfunctions both use the \"brickinterface\" config entry; interfacea also transparently tries TC Logo Connect, using the \"tclogoconnect\" config entry, if no BrickInterface is found)"
                                 .to_string(),
                         ));
                     }

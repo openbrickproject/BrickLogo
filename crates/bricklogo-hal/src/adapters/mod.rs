@@ -10,6 +10,7 @@ pub mod poweredup_adapter;
 pub mod rcx_adapter;
 pub mod spike_adapter;
 pub mod spike_ble_transport;
+pub mod tclogoconnect_adapter;
 pub mod toypad_adapter;
 pub mod wedo_adapter;
 
