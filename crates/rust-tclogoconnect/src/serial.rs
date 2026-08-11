@@ -31,7 +31,15 @@ impl SerialTransport {
             .timeout(Duration::from_millis(20))
             .open()
             .map_err(|e| format!("Failed to open serial port {}: {}", path, e))?;
-        Ok(SerialTransport { port })
+        // The RP2040 USB-CDC firmware gates its replies on DTR, like the
+        // BrickInterface's CH55x. macOS asserts DTR on open; Windows does
+        // not, and without it the probe gets silence.
+        let mut transport = SerialTransport { port };
+        transport
+            .port
+            .write_data_terminal_ready(true)
+            .map_err(|e| format!("Failed to assert DTR on {}: {}", path, e))?;
+        Ok(transport)
     }
 }
 
